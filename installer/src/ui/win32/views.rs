@@ -1,0 +1,249 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
+
+//! Control construction for each wizard view. All controls are created up front
+//! and shown/hidden per phase by [`super::apply_phase`].
+
+use super::{
+    BANNER_H, ID_ACCEPT_CHK, ID_BACK_BTN, ID_BANNER, ID_BROWSE_BTN, ID_CANCEL_BTN, ID_CLOSE_BTN,
+    ID_HEADER, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_LICENSE_EDIT, ID_NEXT_BTN, ID_PATH_EDIT,
+    ID_PATH_LABEL, ID_PROGRESS, ID_STATUS, ID_SUBHEADER, PAD, STATE, WIN_H, WIN_W, tr,
+};
+use crate::ui::helpers::{self, wide};
+use common::models::{InstallerPayload, PayloadKind};
+use std::path::PathBuf;
+use windows::Win32::Foundation::{HINSTANCE, HWND};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::PROGRESS_CLASSW;
+use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
+
+const BS_PUSHBUTTON: u32 = 0x0;
+const BS_DEFPUSHBUTTON: u32 = 0x1;
+const BS_AUTOCHECKBOX: u32 = 0x3;
+const ES_READONLY: u32 = 0x0800;
+const ES_MULTILINE: u32 = 0x0004;
+const ES_LEFT: u32 = 0x0000;
+const WS_VSCROLL: WINDOW_STYLE = WINDOW_STYLE(0x0020_0000);
+
+const LOREM: &str =
+"END USER LICENSE AGREEMENT - SAMPLE\r\n\r\n\
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod \
+tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, \
+quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo \
+consequat.\r\n\r\n\
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore \
+eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, \
+sunt in culpa qui officia deserunt mollit anim id est laborum.\r\n\r\n\
+Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium \
+doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore \
+veritatis et quasi architecto beatae vitae dicta sunt explicabo.\r\n\r\n\
+Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, \
+sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.\r\n\r\n\
+At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis \
+praesentium voluptatum deleniti atque corrupti quos dolores et quas molestias \
+excepturi sint occaecati cupiditate non provident, similique sunt in culpa \
+qui officia deserunt mollitia animi, id est laborum et dolorum fuga.\r\n\r\n\
+By clicking 'I accept' you agree to be bound by the terms above.";
+
+pub(super) unsafe fn build_controls(hwnd: HWND, payload: &InstallerPayload, default_path: &PathBuf) {
+    let hinst = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() }.0);
+    unsafe {
+        build_banner_header(hwnd, hinst, payload);
+        build_license(hwnd, hinst, payload);
+        build_choose(hwnd, hinst, default_path);
+        build_progress(hwnd, hinst);
+        build_done(hwnd, hinst);
+        build_buttons(hwnd, hinst);
+        apply_fonts(hwnd);
+    }
+}
+
+/// Banner strip + product header + subheader (always visible).
+unsafe fn build_banner_header(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerPayload) {
+    let tr = tr();
+    let header = wide(&tr.fmt(
+        "install.header",
+        &[("product", &payload.product), ("version", &payload.to_version)],
+    ));
+    let sub = match payload.kind {
+        PayloadKind::Full => tr.get("install.sub_full"),
+        PayloadKind::Patch => tr.fmt(
+            "install.sub_patch",
+            &[
+                ("from", payload.from_version.as_deref().unwrap_or("")),
+                ("to", &payload.to_version),
+            ],
+        ),
+    };
+    let sub_w = wide(&sub);
+
+    unsafe {
+        // Banner background - a wide empty STATIC; WM_CTLCOLORSTATIC paints it.
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("STATIC"), w!(""),
+            WS_VISIBLE | WS_CHILD,
+            0, 0, WIN_W, BANNER_H,
+            Some(hwnd), Some(HMENU(ID_BANNER as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("STATIC"), PCWSTR(header.as_ptr()),
+            WS_VISIBLE | WS_CHILD,
+            PAD, 16, WIN_W - PAD * 2, 28,
+            Some(hwnd), Some(HMENU(ID_HEADER as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("STATIC"), PCWSTR(sub_w.as_ptr()),
+            WS_VISIBLE | WS_CHILD,
+            PAD, 46, WIN_W - PAD * 2, 20,
+            Some(hwnd), Some(HMENU(ID_SUBHEADER as *mut _)), Some(hinst), None,
+        );
+    }
+}
+
+/// License view: read-only EULA edit + "I accept" checkbox.
+///
+/// Layout (top→bottom): banner, license edit, accept checkbox, button row.
+unsafe fn build_license(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerPayload) {
+    let tr = tr();
+    let accept_w = wide(&tr.get("install.license_accept"));
+    let checkbox_y = WIN_H - 124;
+    let license_top = BANNER_H + PAD;
+    let license_h = checkbox_y - license_top - 24;
+    let license_w = wide(payload.license_text.as_deref().unwrap_or(LOREM));
+    unsafe {
+        let _ = CreateWindowExW(
+            WS_EX_CLIENTEDGE, w!("EDIT"), PCWSTR(license_w.as_ptr()),
+            WS_CHILD | WS_CLIPSIBLINGS | WS_BORDER | WS_VSCROLL
+                | WINDOW_STYLE((ES_MULTILINE | ES_READONLY | ES_LEFT) as u32),
+            PAD, license_top, WIN_W - PAD * 2, license_h,
+            Some(hwnd), Some(HMENU(ID_LICENSE_EDIT as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(accept_w.as_ptr()),
+            WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX),
+            PAD, checkbox_y, WIN_W - PAD * 2, 22,
+            Some(hwnd), Some(HMENU(ID_ACCEPT_CHK as *mut _)), Some(hinst), None,
+        );
+    }
+}
+
+/// Choose view: destination label + path edit + Browse button.
+unsafe fn build_choose(hwnd: HWND, hinst: HINSTANCE, default_path: &PathBuf) {
+    let tr = tr();
+    let choose_label_w = wide(&tr.get("install.choose_label"));
+    let browse_w = wide(&tr.get("install.browse"));
+    let path_str = wide(&default_path.to_string_lossy());
+    unsafe {
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("STATIC"), PCWSTR(choose_label_w.as_ptr()),
+            WS_CHILD,
+            PAD, BANNER_H + PAD + 8, WIN_W - PAD * 2, 20,
+            Some(hwnd), Some(HMENU(ID_PATH_LABEL as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WS_EX_CLIENTEDGE, w!("EDIT"), PCWSTR(path_str.as_ptr()),
+            WS_CHILD | WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
+            PAD, BANNER_H + PAD + 32, WIN_W - PAD * 2 - 120, 28,
+            Some(hwnd), Some(HMENU(ID_PATH_EDIT as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(browse_w.as_ptr()),
+            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON),
+            WIN_W - PAD - 110, BANNER_H + PAD + 32, 110, 28,
+            Some(hwnd), Some(HMENU(ID_BROWSE_BTN as *mut _)), Some(hinst), None,
+        );
+    }
+}
+
+/// Progress view: progress bar + status label.
+unsafe fn build_progress(hwnd: HWND, hinst: HINSTANCE) {
+    unsafe {
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), PROGRESS_CLASSW, PCWSTR::null(),
+            WS_CHILD,
+            PAD, BANNER_H + PAD + 16, WIN_W - PAD * 2, 22,
+            Some(hwnd), Some(HMENU(ID_PROGRESS as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("STATIC"), w!(""),
+            WS_CHILD,
+            PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 48,
+            Some(hwnd), Some(HMENU(ID_STATUS as *mut _)), Some(hinst), None,
+        );
+    }
+}
+
+/// Done view extras: the "Run now" checkbox.
+unsafe fn build_done(hwnd: HWND, hinst: HINSTANCE) {
+    let run_now_w = wide(&tr().get("install.run_now"));
+    unsafe {
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(run_now_w.as_ptr()),
+            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX),
+            PAD, WIN_H - 124, WIN_W - PAD * 2, 22,
+            Some(hwnd), Some(HMENU(ID_LAUNCH_CHK as *mut _)), Some(hinst), None,
+        );
+    }
+}
+
+/// Shared bottom button row: Back, Next, Install, Cancel, Finish (shown per phase).
+unsafe fn build_buttons(hwnd: HWND, hinst: HINSTANCE) {
+    let tr = tr();
+    let back_w = wide(&tr.get("install.back"));
+    let next_w = wide(&tr.get("install.next"));
+    let install_w = wide(&tr.get("install.install"));
+    let cancel_w = wide(&tr.get("install.cancel"));
+    let finish_w = wide(&tr.get("install.finish"));
+    let btn_y = WIN_H - 84;
+    unsafe {
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(back_w.as_ptr()),
+            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON),
+            PAD, btn_y, 100, 32,
+            Some(hwnd), Some(HMENU(ID_BACK_BTN as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(next_w.as_ptr()),
+            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON),
+            WIN_W - PAD - 240, btn_y, 110, 32,
+            Some(hwnd), Some(HMENU(ID_NEXT_BTN as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(install_w.as_ptr()),
+            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON),
+            WIN_W - PAD - 240, btn_y, 110, 32,
+            Some(hwnd), Some(HMENU(ID_INSTALL_BTN as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(cancel_w.as_ptr()),
+            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON),
+            WIN_W - PAD - 120, btn_y, 120, 32,
+            Some(hwnd), Some(HMENU(ID_CANCEL_BTN as *mut _)), Some(hinst), None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(finish_w.as_ptr()),
+            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON),
+            WIN_W - PAD - 120, btn_y, 120, 32,
+            Some(hwnd), Some(HMENU(ID_CLOSE_BTN as *mut _)), Some(hinst), None,
+        );
+    }
+}
+
+unsafe fn apply_fonts(hwnd: HWND) {
+    STATE.with(|s| {
+        let Some(st) = s.borrow().as_ref().cloned() else { return; };
+        let st = st.borrow();
+        unsafe {
+            helpers::set_font(hwnd, ID_HEADER, st.font_header);
+            helpers::set_font(hwnd, ID_SUBHEADER, st.font_normal);
+            for id in [
+                ID_PATH_LABEL, ID_PATH_EDIT, ID_BROWSE_BTN, ID_INSTALL_BTN, ID_CANCEL_BTN,
+                ID_PROGRESS, ID_STATUS, ID_CLOSE_BTN, ID_LICENSE_EDIT, ID_ACCEPT_CHK,
+                ID_NEXT_BTN, ID_BACK_BTN, ID_LAUNCH_CHK,
+            ] {
+                helpers::set_font(hwnd, id, st.font_normal);
+            }
+        }
+    });
+}

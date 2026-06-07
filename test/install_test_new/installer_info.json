@@ -1,0 +1,8 @@
+{
+  "product": "testapp",
+  "version": "1.0",
+  "install_dir": "c:\\Users\\gaeta\\Work\\RustInstaller\\test\\install_test_new",
+  "installed_at_unix": 1779986962,
+  "registry_key": "testapp",
+  "exe": "bin\\myapp.exe"
+}

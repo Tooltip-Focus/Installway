@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Manifest {
+    pub version: String,
+    #[serde(default)]
+    pub exe: String,
+    pub files: HashMap<String, FileEntry>,
+    #[serde(default)]
+    pub deleted_files: Vec<String>,
+    #[serde(default)]
+    pub full_size: u64,
+    #[serde(default)]
+    pub total_patch_size: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FileEntry {
+    pub hash: String,
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patch: Option<PatchInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PatchInfo {
+    pub file: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadKind {
+    Full,
+    Patch,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InstallerPayload {
+    pub kind: PayloadKind,
+    pub product: String,
+    /// Publisher / vendor name. Used for the per-user uninstall data folder
+    /// (`%LOCALAPPDATA%\<publisher>\Uninstall\<product>`) and the Add/Remove
+    /// Programs "Publisher" field. Mandatory at build time.
+    #[serde(default)]
+    pub publisher: String,
+    pub from_version: Option<String>,
+    pub to_version: String,
+    pub min_installer_version: String,
+    pub payload_blake3: String,
+    pub created_at_unix: i64,
+    pub manifest: Manifest,
+    /// Optional EULA text shown on the License page of the installer UI.
+    /// `None` (or missing field on older payloads) falls back to a built-in placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license_text: Option<String>,
+    /// File-type associations to register under `HKCU\Software\Classes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub associations: Vec<FileAssoc>,
+    /// Dev flag: ignore the installed version and reinstall from scratch
+    /// (skip patch from-version check, rewrite all files, remove orphans).
+    #[serde(default)]
+    pub force_reinstall: bool,
+    /// Hide the License page in the interactive UI.
+    #[serde(default)]
+    pub skip_license: bool,
+    /// Hide the Choose-location page; install straight to the default path.
+    #[serde(default)]
+    pub skip_path: bool,
+    /// Default install directory the UI proposes, set per-app at build time.
+    /// May contain `%VAR%` env tokens (e.g. `%LOCALAPPDATA%\Programs\MyApp`).
+    /// `None` falls back to `%LOCALAPPDATA%\Programs\<product>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_install_dir: Option<String>,
+}
+
+/// One file-type association: extension + a human description.
+/// The shell `open` verb is wired to the product's main exe with `"%1"`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FileAssoc {
+    /// Extension including the leading dot, e.g. ".myx".
+    pub ext: String,
+    /// Friendly type description shown in Explorer, e.g. "My App Document".
+    pub description: String,
+}
+
+/// What gets embedded in the installer .exe as RCDATA id=2.
+///
+/// `payload_json` is the exact UTF-8 byte sequence the signature was computed over.
+/// The verifier verifies the signature against those bytes, *then* parses
+/// `InstallerPayload` from them. This avoids any serializer-determinism trap.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SignedPayload {
+    pub payload_json: String,
+    pub signature_hex: String,
+}
+
+/// Persisted to `<install_dir>/installer_info.json` by the installer.
+/// Read by the uninstaller (and any tooling) to locate registry entries
+/// and walk the manifest for cleanup.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InstallInfo {
+    pub product: String,
+    #[serde(default)]
+    pub publisher: String,
+    pub version: String,
+    pub install_dir: String,
+    pub installed_at_unix: i64,
+    /// HKCU subkey under `Software\Microsoft\Windows\CurrentVersion\Uninstall`.
+    pub registry_key: String,
+    /// Optional path (relative to install_dir) of the product's main exe.
+    pub exe: String,
+    /// File associations registered at install time - the uninstaller removes
+    /// exactly these.
+    #[serde(default)]
+    pub associations: Vec<FileAssoc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_parses_old_json_with_defaults() {
+        // JSON predating publisher / force_reinstall / associations / license.
+        let j = r#"{
+            "kind":"Full","product":"P","from_version":null,"to_version":"1.0",
+            "min_installer_version":"1.0.0","payload_blake3":"deadbeef",
+            "created_at_unix":0,"manifest":{"version":"1.0","files":{}}
+        }"#;
+        let p: InstallerPayload = serde_json::from_str(j).unwrap();
+        assert_eq!(p.publisher, "");
+        assert!(!p.force_reinstall);
+        assert!(p.associations.is_empty());
+        assert!(p.license_text.is_none());
+        assert_eq!(p.kind, PayloadKind::Full);
+    }
+
+    #[test]
+    fn info_parses_old_json_with_defaults() {
+        let j = r#"{
+            "product":"P","version":"1.0","install_dir":"d",
+            "installed_at_unix":0,"registry_key":"P","exe":"a.exe"
+        }"#;
+        let i: InstallInfo = serde_json::from_str(j).unwrap();
+        assert_eq!(i.publisher, "");
+        assert!(i.associations.is_empty());
+    }
+
+    #[test]
+    fn payload_roundtrips() {
+        let p = InstallerPayload {
+            kind: PayloadKind::Patch,
+            product: "P".into(),
+            publisher: "Pub".into(),
+            from_version: Some("1.0".into()),
+            to_version: "1.1".into(),
+            min_installer_version: "1.0.0".into(),
+            payload_blake3: "abc".into(),
+            created_at_unix: 123,
+            manifest: Manifest {
+                version: "1.1".into(),
+                exe: "a.exe".into(),
+                files: Default::default(),
+                deleted_files: vec![],
+                full_size: 0,
+                total_patch_size: 0,
+            },
+            license_text: None,
+            associations: vec![FileAssoc { ext: ".x".into(), description: "X".into() }],
+            force_reinstall: true,
+            skip_license: true,
+            skip_path: false,
+            default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        let back: InstallerPayload = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.publisher, "Pub");
+        assert!(back.force_reinstall);
+        assert!(back.skip_license);
+        assert!(!back.skip_path);
+        assert_eq!(back.default_install_dir.as_deref(), Some(r"%LOCALAPPDATA%\Programs\P"));
+        assert_eq!(back.associations.len(), 1);
+        assert_eq!(back.from_version.as_deref(), Some("1.0"));
+    }
+}

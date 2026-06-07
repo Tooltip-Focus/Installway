@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "exe": "bin/app.exe",
+  "files": {
+    "data/config.json": {
+      "hash": "ffa3651e28cc6045dc653ec1480c9079ad2a99992b1ad78c7928b826068bff5f",
+      "size": 9
+    },
+    "bin/app.exe": {
+      "hash": "8399b865d552c95405dcc5542bc9390c5b952dec48398d314310cbffe3793f17",
+      "size": 16
+    },
+    "data/readme.txt": {
+      "hash": "417ed1b3e8153cce4bec26576e444278a42f8b028b0d02819baf7ff7a5144659",
+      "size": 10
+    }
+  },
+  "deleted_files": [],
+  "full_size": 35,
+  "total_patch_size": 0
+}

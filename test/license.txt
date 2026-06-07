@@ -1,0 +1,9 @@
+TESTAPP END USER LICENSE AGREEMENT v1.0
+
+(c) 2026 TestCorp. All rights reserved.
+
+1. You may install and use one copy of TESTAPP on a single device.
+2. You may not redistribute, decompile, or reverse-engineer the software.
+3. THIS SOFTWARE IS PROVIDED 'AS IS' WITHOUT WARRANTY OF ANY KIND.
+
+By accepting, you agree to the terms above.

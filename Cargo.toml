@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "common",
+    "installer",
+    "installer_builder",
+    "uninstaller",
+]
+resolver = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = "z"
+panic = "abort"

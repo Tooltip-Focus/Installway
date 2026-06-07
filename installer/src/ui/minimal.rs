@@ -1,0 +1,436 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
+
+//! Compact, auto-starting update UI for app-triggered self-updates.
+//!
+//! No license page, no path picker, no Install button - it starts immediately
+//! and just shows progress. Layout:
+//!
+//! ```text
+//!  ┌────────────────────────────────────────────┐
+//!  │  ██      Applying update                    │
+//!  │  ██      MyApp 1.2                          │
+//!  │          [██████████░░░░░░░]  62%           │
+//!  │          Updating bin/app.exe               │
+//!  └────────────────────────────────────────────┘
+//! ```
+//! App icon on the left, text + progress on the right. Closes itself on
+//! success; on failure it stays with the error message.
+
+use crate::extract::{InstallCtx, install};
+use crate::payload::LoadedPayload;
+use crate::ui::helpers::{
+    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, create_font, own_icon, post, scale_progress,
+    set_dlg_text, set_progress, wide,
+};
+use anyhow::Result;
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::thread;
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT, SetBkMode,
+    SetTextColor, TRANSPARENT, WHITE_BRUSH,
+};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::PROGRESS_CLASSW;
+use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
+
+const ID_ICON: usize = 1;
+const ID_TITLE: usize = 2;
+const ID_SUB: usize = 3;
+const ID_PROGRESS: usize = 4;
+const ID_STATUS: usize = 5;
+
+const STM_SETICON: u32 = 0x0170;
+const SS_ICON: u32 = 0x0003;
+
+const WIN_W: i32 = 480; // client width
+const WIN_H: i32 = 140; // client height
+const PAD: i32 = 20;
+const ICON_SZ: i32 = 48;
+const COL_X: i32 = PAD + ICON_SZ + 20; // text column start
+
+struct Prog {
+    done: u64,
+    total: u64,
+    name: String,
+}
+
+struct State {
+    cancel: Arc<AtomicBool>,
+    prog: Arc<Mutex<Prog>>,
+    error: String,
+    font_title: HFONT,
+    font_body: HFONT,
+    bg: HBRUSH,
+    hicon: HICON,
+}
+
+thread_local! {
+    static STATE: RefCell<Option<Rc<RefCell<State>>>> = RefCell::new(None);
+    static T: RefCell<common::i18n::Translator> = RefCell::new(common::i18n::Translator::default());
+}
+
+fn tr() -> common::i18n::Translator {
+    T.with(|t| *t.borrow())
+}
+
+pub fn run(
+    loaded: LoadedPayload,
+    install_dir: PathBuf,
+    launch_flag: bool,
+    translator: common::i18n::Translator,
+) -> Result<()> {
+    T.with(|t| *t.borrow_mut() = translator);
+
+    // Build window + register state (the only part that needs FFI).
+    let win = unsafe { build_window(&loaded.payload)? };
+
+    // Worker runs in safe code; only the message posts touch FFI.
+    spawn_worker(win.hwnd_isize, install_dir, launch_flag, win.cancel, win.prog);
+
+    unsafe { helpers::pump_messages() };
+    Ok(())
+}
+
+/// Dev-only: show the minimal window with sample mid-progress, no install worker.
+#[cfg(debug_assertions)]
+pub fn preview(translator: common::i18n::Translator) -> Result<()> {
+    T.with(|t| *t.borrow_mut() = translator);
+    let payload = crate::ui::sample_payload("minimal");
+    unsafe {
+        let win = build_window(&payload)?;
+        let hwnd = HWND(win.hwnd_isize as *mut _);
+        set_progress(hwnd, ID_PROGRESS, scale_progress(62, 100));
+        set_dlg_text(hwnd, ID_STATUS, "62%  bin/app.exe");
+        helpers::pump_messages();
+    }
+    Ok(())
+}
+
+struct Window {
+    hwnd_isize: isize,
+    cancel: Arc<AtomicBool>,
+    prog: Arc<Mutex<Prog>>,
+}
+
+unsafe fn build_window(payload: &common::models::InstallerPayload) -> Result<Window> {
+    helpers::init_progress_class();
+    let hinstance = unsafe { GetModuleHandleW(PCWSTR::null()) }?;
+
+    let class_name = w!("InstallwayMiniWnd");
+    let wc = WNDCLASSEXW {
+        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+        style: WNDCLASS_STYLES(0),
+        lpfnWndProc: Some(wndproc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: HINSTANCE(hinstance.0),
+        hIcon: HICON::default(),
+        hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }?,
+        hbrBackground: HBRUSH(unsafe { GetStockObject(WHITE_BRUSH) }.0),
+        lpszMenuName: PCWSTR::null(),
+        lpszClassName: class_name,
+        hIconSm: HICON::default(),
+    };
+    unsafe { RegisterClassExW(&wc) };
+
+    let hicon = unsafe { own_icon() };
+
+    let title_w = wide(&tr().get("install.minimal_title"));
+    let state = Rc::new(RefCell::new(State {
+        cancel: Arc::new(AtomicBool::new(false)),
+        prog: Arc::new(Mutex::new(Prog { done: 0, total: 0, name: String::new() })),
+        error: String::new(),
+        font_title: create_font("Segoe UI Semibold", 20, FW_SEMIBOLD.0 as i32),
+        font_body: create_font("Segoe UI", 15, FW_NORMAL.0 as i32),
+        bg: unsafe { CreateSolidBrush(COLORREF(0x00FFFFFF)) },
+        hicon,
+    }));
+    let cancel = state.borrow().cancel.clone();
+    let prog = state.borrow().prog.clone();
+    STATE.with(|s| *s.borrow_mut() = Some(state));
+
+    // No min/max box, fixed small tool-like window (still has close).
+    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+    let (ww, wh) = helpers::window_size_for_client(WIN_W, WIN_H, style, WINDOW_EX_STYLE(0));
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            class_name,
+            PCWSTR(title_w.as_ptr()),
+            style,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            ww,
+            wh,
+            None,
+            None,
+            Some(HINSTANCE(hinstance.0)),
+            None,
+        )
+    }?;
+    if !hicon.is_invalid() {
+        unsafe {
+            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(1)), Some(LPARAM(hicon.0 as isize)));
+            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(0)), Some(LPARAM(hicon.0 as isize)));
+        }
+    }
+
+    unsafe {
+        helpers::center(hwnd);
+        build_controls(hwnd, payload);
+        let _ = ShowWindow(hwnd, SW_SHOW);
+    }
+
+    Ok(Window { hwnd_isize: hwnd.0 as isize, cancel, prog })
+}
+
+/// Auto-start the install worker (no button). Posts progress/done/error back
+/// to the window thread.
+fn spawn_worker(
+    hwnd_isize: isize,
+    install_dir: PathBuf,
+    launch_flag: bool,
+    cancel: Arc<AtomicBool>,
+    prog: Arc<Mutex<Prog>>,
+) {
+    thread::spawn(move || {
+        let loaded = match crate::payload::load_and_verify() {
+            Ok(l) => l,
+            Err(e) => return post_err(hwnd_isize, &format!("{e}")),
+        };
+        let prog_cb: Arc<dyn Fn(u64, u64, &str) + Send + Sync> = {
+            let prog = prog.clone();
+            Arc::new(move |done, total, name| {
+                if let Ok(mut p) = prog.lock() {
+                    p.done = done;
+                    p.total = total;
+                    p.name = name.to_string();
+                }
+                post(hwnd_isize, WM_APP_PROGRESS);
+            })
+        };
+        let ctx = InstallCtx {
+            install_dir: install_dir.clone(),
+            payload: &loaded.payload,
+            zip_bytes: loaded.zip(),
+            cancel,
+            on_progress: prog_cb,
+        };
+        if let Err(e) = install(ctx) {
+            return post_err(hwnd_isize, &format!("{e}"));
+        }
+        if let Err(e) =
+            crate::install::finalize(&install_dir, &loaded.payload, &loaded.uninstaller_bytes)
+        {
+            return post_err(hwnd_isize, &format!("finalize: {e}"));
+        }
+        if launch_flag && !loaded.payload.manifest.exe.is_empty() {
+            let _ = crate::install::launch_product(&install_dir, &loaded.payload.manifest.exe);
+        }
+        post(hwnd_isize, WM_APP_DONE);
+    });
+}
+
+fn post_err(hwnd_isize: isize, msg: &str) {
+    STATE.with(|s| {
+        if let Some(st) = s.borrow().as_ref() {
+            st.borrow_mut().error = msg.to_string();
+        }
+    });
+    post(hwnd_isize, WM_APP_ERROR);
+}
+
+unsafe fn build_controls(hwnd: HWND, payload: &common::models::InstallerPayload) {
+    let hinst = unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() };
+    let hinst = HINSTANCE(hinst.0);
+    let tr = tr();
+
+    let title_w = wide(&tr.get("install.minimal_title"));
+    let sub_w = wide(&tr.fmt(
+        "install.minimal_sub",
+        &[("product", &payload.product), ("version", &payload.to_version)],
+    ));
+
+    unsafe {
+        // Icon (static, owner sets via STM_SETICON)
+        let icon_ctrl = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_VISIBLE | WS_CHILD | WINDOW_STYLE(SS_ICON as u32),
+            PAD,
+            PAD,
+            ICON_SZ,
+            ICON_SZ,
+            Some(hwnd),
+            Some(HMENU(ID_ICON as *mut _)),
+            Some(hinst),
+            None,
+        )
+        .ok();
+        if let Some(ic) = icon_ctrl {
+            STATE.with(|s| {
+                if let Some(st) = s.borrow().as_ref() {
+                    let h = st.borrow().hicon;
+                    if !h.is_invalid() {
+                        SendMessageW(ic, STM_SETICON, Some(WPARAM(h.0 as usize)), Some(LPARAM(0)));
+                    }
+                }
+            });
+        }
+
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            PCWSTR(title_w.as_ptr()),
+            WS_VISIBLE | WS_CHILD,
+            COL_X,
+            PAD,
+            WIN_W - COL_X - PAD,
+            26,
+            Some(hwnd),
+            Some(HMENU(ID_TITLE as *mut _)),
+            Some(hinst),
+            None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            PCWSTR(sub_w.as_ptr()),
+            WS_VISIBLE | WS_CHILD,
+            COL_X,
+            PAD + 28,
+            WIN_W - COL_X - PAD,
+            20,
+            Some(hwnd),
+            Some(HMENU(ID_SUB as *mut _)),
+            Some(hinst),
+            None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            PROGRESS_CLASSW,
+            PCWSTR::null(),
+            WS_VISIBLE | WS_CHILD,
+            COL_X,
+            PAD + 56,
+            WIN_W - COL_X - PAD,
+            18,
+            Some(hwnd),
+            Some(HMENU(ID_PROGRESS as *mut _)),
+            Some(hinst),
+            None,
+        );
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!(""),
+            WS_VISIBLE | WS_CHILD,
+            COL_X,
+            PAD + 80,
+            WIN_W - COL_X - PAD,
+            20,
+            Some(hwnd),
+            Some(HMENU(ID_STATUS as *mut _)),
+            Some(hinst),
+            None,
+        );
+    }
+
+    STATE.with(|s| {
+        if let Some(st) = s.borrow().as_ref() {
+            let st = st.borrow();
+            unsafe {
+                helpers::set_font(hwnd, ID_TITLE, st.font_title);
+                helpers::set_font(hwnd, ID_SUB, st.font_body);
+                helpers::set_font(hwnd, ID_STATUS, st.font_body);
+            }
+        }
+    });
+}
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        WM_CTLCOLORSTATIC => unsafe {
+            let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
+            let ctrl = HWND(lparam.0 as *mut _);
+            let sub = GetDlgItem(Some(hwnd), ID_SUB as i32).unwrap_or_default();
+            let status = GetDlgItem(Some(hwnd), ID_STATUS as i32).unwrap_or_default();
+            let _ = SetBkMode(hdc, TRANSPARENT);
+            // Subtitle + status in muted gray, title in near-black.
+            if ctrl == sub || ctrl == status {
+                SetTextColor(hdc, COLORREF(0x00777777));
+            } else {
+                SetTextColor(hdc, COLORREF(0x00202020));
+            }
+            return LRESULT(STATE.with(|s| {
+                s.borrow().as_ref().map(|st| st.borrow().bg.0 as isize).unwrap_or(0)
+            }));
+        },
+        m if m == WM_APP_PROGRESS => unsafe {
+            update_progress(hwnd);
+            LRESULT(0)
+        },
+        m if m == WM_APP_DONE => unsafe {
+            set_dlg_text(hwnd, ID_STATUS, &tr().get("install.minimal_done"));
+            set_progress(hwnd, ID_PROGRESS, 10000);
+            // Brief pause so the user sees 100%, then close.
+            let _ = SetTimer(Some(hwnd), 1, 900, None);
+            LRESULT(0)
+        },
+        WM_TIMER => unsafe {
+            let _ = KillTimer(Some(hwnd), 1);
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            LRESULT(0)
+        },
+        m if m == WM_APP_ERROR => unsafe {
+            STATE.with(|s| {
+                if let Some(st) = s.borrow().as_ref() {
+                    let e = st.borrow().error.clone();
+                    set_dlg_text(hwnd, ID_STATUS, &format!("{}{}", tr().get("install.err_prefix"), e));
+                }
+            });
+            LRESULT(0)
+        },
+        WM_CLOSE => unsafe {
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        },
+        WM_DESTROY => unsafe {
+            STATE.with(|s| {
+                if let Some(st) = s.borrow().as_ref() {
+                    let st = st.borrow();
+                    let _ = DeleteObject(st.font_title.into());
+                    let _ = DeleteObject(st.font_body.into());
+                    let _ = DeleteObject(st.bg.into());
+                }
+            });
+            PostQuitMessage(0);
+            LRESULT(0)
+        },
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+unsafe fn update_progress(hwnd: HWND) {
+    STATE.with(|s| {
+        let Some(st) = s.borrow().as_ref().cloned() else { return; };
+        let st = st.borrow();
+        let (done, total, name) = match st.prog.lock() {
+            Ok(p) => (p.done, p.total, p.name.clone()),
+            Err(_) => return,
+        };
+        let scaled = scale_progress(done, total);
+        unsafe { set_progress(hwnd, ID_PROGRESS, scaled) };
+        let pct = scaled / 100;
+        unsafe { set_dlg_text(hwnd, ID_STATUS, &format!("{}%  {}", pct, name)) };
+    });
+}
