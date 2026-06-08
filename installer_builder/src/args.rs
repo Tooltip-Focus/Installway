@@ -93,6 +93,11 @@ pub struct PackCli {
     #[arg(long)]
     pub skip_path: bool,
 
+    /// Use the compact minimal UI for upgrades (a run over an already-installed
+    /// copy). The first install still uses the full wizard. Optional.
+    #[arg(long)]
+    pub upgrade_minimal_ui: bool,
+
     /// Default install dir the UI proposes (per-app). May contain `%VAR%` env
     /// tokens, e.g. `%LOCALAPPDATA%\Programs\MyApp` or `C:\Games\MyApp`.
     #[arg(long, value_name = "DIR")]
@@ -146,6 +151,8 @@ pub struct PackFile {
     pub skip_license: bool,
     #[serde(default)]
     pub skip_path: bool,
+    #[serde(default)]
+    pub upgrade_minimal_ui: bool,
     pub default_install_dir: Option<String>,
     pub priv_key: Option<PathBuf>,
     pub pub_key: Option<PathBuf>,
@@ -172,6 +179,7 @@ pub struct PackArgs {
     pub force_reinstall: bool,
     pub skip_license: bool,
     pub skip_path: bool,
+    pub upgrade_minimal_ui: bool,
     pub default_install_dir: Option<String>,
     pub priv_key: PathBuf,
     pub pub_key: Option<PathBuf>,
@@ -223,6 +231,7 @@ impl PackArgs {
             force_reinstall: cli.force_reinstall || file.force_reinstall,
             skip_license: cli.skip_license || file.skip_license,
             skip_path: cli.skip_path || file.skip_path,
+            upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
             reuse_stub: cli.reuse_stub || file.reuse_stub,
         })
     }
@@ -248,6 +257,7 @@ mod tests {
             force_reinstall: false,
             skip_license: false,
             skip_path: false,
+            upgrade_minimal_ui: false,
             default_install_dir: None,
             priv_key: None,
             pub_key: None,

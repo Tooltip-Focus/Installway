@@ -27,6 +27,9 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # skip_license = true   # hide the License page
 # skip_path    = true   # hide the Choose-location page
 
+# use the compact minimal UI for upgrades (first install still uses the wizard)
+# upgrade_minimal_ui = true
+
 # patch mode (optional)
 # from_version = "0.9"
 # from_dir     = "build/myapp-0.9"

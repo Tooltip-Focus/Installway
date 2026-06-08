@@ -76,6 +76,11 @@ pub struct InstallerPayload {
     /// `None` falls back to `%LOCALAPPDATA%\Programs\<product>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_install_dir: Option<String>,
+    /// When set, an *upgrade* (a run over an already-installed copy) uses the
+    /// compact minimal UI instead of the full wizard. The first install always
+    /// uses the full wizard. Decided by this (the new installer's) payload.
+    #[serde(default)]
+    pub upgrade_minimal_ui: bool,
 }
 
 /// One file-type association: extension + a human description.
@@ -135,6 +140,7 @@ mod tests {
         let p: InstallerPayload = serde_json::from_str(j).unwrap();
         assert_eq!(p.publisher, "");
         assert!(!p.force_reinstall);
+        assert!(!p.upgrade_minimal_ui);
         assert!(p.associations.is_empty());
         assert!(p.license_text.is_none());
         assert_eq!(p.kind, PayloadKind::Full);
@@ -176,6 +182,7 @@ mod tests {
             skip_license: true,
             skip_path: false,
             default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),
+            upgrade_minimal_ui: true,
         };
         let s = serde_json::to_string(&p).unwrap();
         let back: InstallerPayload = serde_json::from_str(&s).unwrap();
@@ -184,6 +191,7 @@ mod tests {
         assert!(back.skip_license);
         assert!(!back.skip_path);
         assert_eq!(back.default_install_dir.as_deref(), Some(r"%LOCALAPPDATA%\Programs\P"));
+        assert!(back.upgrade_minimal_ui);
         assert_eq!(back.associations.len(), 1);
         assert_eq!(back.from_version.as_deref(), Some("1.0"));
     }

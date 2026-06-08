@@ -98,6 +98,13 @@ fn run() -> Result<()> {
     let prior = previous_install_dir(&loaded.payload);
     let already_installed = prior.is_some();
     let default_path = prior.unwrap_or_else(|| default_install_path(&loaded.payload));
+
+    // Opt-in: an upgrade over an existing install uses the compact UI when the
+    // new payload asks for it. First install always uses the full wizard.
+    if already_installed && loaded.payload.upgrade_minimal_ui {
+        return ui::minimal::run(loaded, default_path, launch, translator);
+    }
+
     ui::win32::run(loaded, default_path, launch, already_installed, translator)?;
     Ok(())
 }

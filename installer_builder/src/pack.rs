@@ -107,6 +107,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         skip_license: args.skip_license,
         skip_path: args.skip_path,
         default_install_dir: args.default_install_dir.clone(),
+        upgrade_minimal_ui: args.upgrade_minimal_ui,
     };
 
     let payload_json = serde_json::to_string(&payload).context("serialize payload")?;

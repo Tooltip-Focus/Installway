@@ -38,5 +38,6 @@ pub(crate) fn sample_payload(view: &str) -> common::models::InstallerPayload {
         skip_license: false,
         skip_path: false,
         default_install_dir: None,
+        upgrade_minimal_ui: false,
     }
 }

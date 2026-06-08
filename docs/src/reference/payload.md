@@ -43,6 +43,7 @@ parses `InstallerPayload` from them — avoiding any serializer-determinism trap
 | `force_reinstall` | `bool` | dev: rewrite all, remove orphans, skip from-check |
 | `skip_license` / `skip_path` | `bool` | trim the wizard |
 | `default_install_dir` | `Option<String>` | proposed path; `%VAR%` tokens expanded |
+| `upgrade_minimal_ui` | `bool` | upgrades use the minimal UI; first install always uses the wizard |
 
 ## `Manifest` / `FileEntry` / `PatchInfo`
 
