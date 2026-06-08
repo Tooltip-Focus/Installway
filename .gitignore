@@ -15,3 +15,6 @@ log_out.txt
 
 build
 keys
+
+# mdBook build output
+/docs/book
