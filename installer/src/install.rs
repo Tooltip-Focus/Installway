@@ -82,14 +82,34 @@ pub fn finalize(
 }
 
 /// Drop a desktop and Start Menu shortcut pointing at the installed exe.
+/// Best effort: a failed shortcut must not fail the install, but failures are
+/// logged so support can tell why a shortcut is missing.
 pub fn create_shortcuts(product: &str, install_dir: &Path, target: &Path) {
     for path in common::shortcuts::paths_for(product) {
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+            if let Err(e) = fs::create_dir_all(parent) {
+                common::log::warn(format!(
+                    "shortcut: could not create folder {}: {e}",
+                    parent.display()
+                ));
+                continue;
+            }
         }
-        if let Ok(mut lnk) = mslnk::ShellLink::new(target.to_string_lossy().as_ref()) {
-            lnk.set_working_dir(Some(install_dir.to_string_lossy().into_owned()));
-            let _ = lnk.create_lnk(&path);
+        match mslnk::ShellLink::new(target.to_string_lossy().as_ref()) {
+            Ok(mut lnk) => {
+                lnk.set_working_dir(Some(install_dir.to_string_lossy().into_owned()));
+                match lnk.create_lnk(&path) {
+                    Ok(()) => common::log::info(format!("shortcut created: {}", path.display())),
+                    Err(e) => common::log::warn(format!(
+                        "shortcut: could not write {}: {e}",
+                        path.display()
+                    )),
+                }
+            }
+            Err(e) => common::log::warn(format!(
+                "shortcut: could not build link to {}: {e}",
+                target.display()
+            )),
         }
     }
 }
@@ -131,24 +151,24 @@ fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path) -> Result<()>
             anyhow::bail!("RegCreateKeyEx failed: {:?}", rc);
         }
 
-        let _ = set_sz(hkey, "DisplayName", &info.product);
-        let _ = set_sz(hkey, "DisplayVersion", &info.version);
-        let _ = set_sz(
+        set_sz_logged(hkey, "DisplayName", &info.product);
+        set_sz_logged(hkey, "DisplayVersion", &info.version);
+        set_sz_logged(
             hkey,
             "UninstallString",
             &format!("\"{}\"", uninstaller_path.display()),
         );
-        let _ = set_sz(
+        set_sz_logged(
             hkey,
             "QuietUninstallString",
             &format!("\"{}\" --silent", uninstaller_path.display()),
         );
-        let _ = set_sz(hkey, "InstallLocation", &info.install_dir);
-        let _ = set_sz(hkey, "Publisher", &info.publisher);
-        let _ = set_sz(hkey, "InstallDate", &install_date_yyyymmdd(info.installed_at_unix));
-        let _ = set_sz(hkey, "DisplayIcon", &uninstaller_path.to_string_lossy());
-        let _ = set_sz(hkey, "NoModify", "1");
-        let _ = set_sz(hkey, "NoRepair", "1");
+        set_sz_logged(hkey, "InstallLocation", &info.install_dir);
+        set_sz_logged(hkey, "Publisher", &info.publisher);
+        set_sz_logged(hkey, "InstallDate", &install_date_yyyymmdd(info.installed_at_unix));
+        set_sz_logged(hkey, "DisplayIcon", &uninstaller_path.to_string_lossy());
+        set_sz_logged(hkey, "NoModify", "1");
+        set_sz_logged(hkey, "NoRepair", "1");
 
         let _ = RegCloseKey(hkey);
     }
@@ -172,6 +192,15 @@ unsafe fn set_sz(
         anyhow::bail!("RegSetValueEx({}) failed: {:?}", name, rc);
     }
     Ok(())
+}
+
+/// `set_sz`, but logs (instead of silently dropping) a failure to write one
+/// Add/Remove Programs field. One missing field shouldn't abort registration -
+/// but a support engineer staring at a half-empty entry needs to know why.
+fn set_sz_logged(hkey: windows::Win32::System::Registry::HKEY, name: &str, value: &str) {
+    if let Err(e) = unsafe { set_sz(hkey, name, value) } {
+        common::log::warn(format!("registry: could not set {name}: {e:#}"));
+    }
 }
 
 fn install_date_yyyymmdd(unix: i64) -> String {

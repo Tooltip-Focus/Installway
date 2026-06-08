@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use zip::ZipArchive;
 
-const PATCHES_PREFIX: &str = "patches/";
 const FULL_PREFIX: &str = "full/";
 
 /// A patch was run against the wrong installed version. The install was not
@@ -426,10 +425,11 @@ fn stage_file(
     if kind == PayloadKind::Patch {
         if let Some(patch_info) = &entry.patch {
             if old.exists() {
-                let patch_rel = strip_prefix(&patch_info.file, PATCHES_PREFIX)
-                    .map(|s| format!("{}{}", PATCHES_PREFIX, s))
-                    .unwrap_or_else(|| patch_info.file.clone());
-                if let Ok(patch_bytes) = read_from_zip(archive, &patch_rel) {
+                // The builder always writes `patch_info.file` already prefixed
+                // with `patches/` (see installer_builder::pack), so it can be
+                // used as the in-zip path as-is.
+                let patch_rel = &patch_info.file;
+                if let Ok(patch_bytes) = read_from_zip(archive, patch_rel) {
                     let patch_tmp = staged_path.with_extension("patch");
                     if fs::write(&patch_tmp, &patch_bytes).is_ok() {
                         let ok = run_hdiff(old, &patch_tmp, staged_path);
@@ -634,10 +634,6 @@ fn hash_file(path: &Path) -> Result<String> {
 
 // ---- Two-phase commit primitives --------------------------------------
 
-/// Retry budget for a rename briefly locked by AV/Explorer/indexer. ~5 s.
-const MOVE_RETRIES: usize = 50;
-const MOVE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
-
 /// Flat, collision-free staged/backup file name for a relative path.
 fn staged_name(rel: &str) -> String {
     blake3::hash(rel.as_bytes()).to_hex().to_string()
@@ -649,41 +645,7 @@ fn journal_path(temp_dir: &Path) -> PathBuf {
 
 /// Move with retry, to survive transient locks (AV/Explorer/indexer).
 fn move_retry(src: &Path, dest: &Path) -> Result<()> {
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut last_err = None;
-    for attempt in 0..MOVE_RETRIES {
-        // On Windows rename fails if dest exists; remove it first (also retried).
-        if dest.exists() {
-            let _ = fs::remove_file(dest);
-        }
-        match fs::rename(src, dest) {
-            Ok(()) => {
-                if attempt > 0 {
-                    common::log::info(format!(
-                        "move succeeded on attempt {} -> {}",
-                        attempt + 1,
-                        dest.display()
-                    ));
-                }
-                return Ok(());
-            }
-            Err(e) => {
-                last_err = Some(e);
-                std::thread::sleep(MOVE_RETRY_DELAY);
-            }
-        }
-    }
-    Err(anyhow::anyhow!(
-        "could not move {} -> {} after {} attempts: {}",
-        src.display(),
-        dest.display(),
-        MOVE_RETRIES,
-        last_err
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "unknown".into())
-    ))
+    common::utils::rename_retry(src, dest)
 }
 
 /// Back up the existing file (if any) then move the staged file into place.
@@ -792,12 +754,8 @@ fn read_local_version(data_dir: &Path) -> Option<String> {
     v["version"].as_str().map(|s| s.to_string())
 }
 
-fn strip_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    s.strip_prefix(prefix)
-}
-
 fn cleanup(temp_dir: &Path) {
-    let _ = fs::remove_dir_all(temp_dir);
+    let _ = common::utils::remove_dir_retry(temp_dir);
 }
 
 /// Re-hash each committed file and return those that don't match the manifest
