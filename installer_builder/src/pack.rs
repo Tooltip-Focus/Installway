@@ -7,7 +7,10 @@ use anyhow::{Context, Result, bail};
 use common::models::{
     FileAssoc, FileEntry, InstallerPayload, Manifest, PatchInfo, PayloadKind, SignedPayload,
 };
-use common::utils::{bytes_blake3, collect_files, file_blake3, generate_patch};
+use common::utils::{
+    bytes_blake3, collect_files, copy_retry, file_blake3, generate_patch, remove_dir_retry,
+    remove_file_retry,
+};
 use ed25519_dalek::{Signer, SigningKey};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -22,16 +25,25 @@ use zip::ZipWriter;
 const PATCHES_PREFIX: &str = "patches/";
 const FULL_PREFIX: &str = "full/";
 
+/// In-zip path for a file's binary patch: `patches/<blake3(rel)>.patch`. The
+/// installer reads `PatchInfo.file` verbatim as the in-zip path, so the name
+/// recorded in the manifest and the entry name written into the zip must both
+/// come from this one function.
+fn patch_entry_name(rel: &str) -> String {
+    let safe = blake3::hash(rel.as_bytes()).to_hex();
+    format!("{PATCHES_PREFIX}{safe}.patch")
+}
+
 pub fn run(args: &PackArgs) -> Result<()> {
     let is_patch = args.from_dir.is_some() || args.from_version.is_some();
     if is_patch && (args.from_dir.is_none() || args.from_version.is_none()) {
         bail!("patch mode requires both --from-dir and --from-version");
     }
+    if args.publisher.trim().is_empty() {
+        bail!("--publisher must not be empty");
+    }
 
-    println!(
-        "Mode: {}",
-        if is_patch { "PATCH" } else { "FULL" }
-    );
+    println!("Mode: {}", if is_patch { "PATCH" } else { "FULL" });
 
     let signing = load_signing_key(&args.priv_key)?;
 
@@ -75,10 +87,6 @@ pub fn run(args: &PackArgs) -> Result<()> {
     };
 
     let associations = parse_assocs(&args.assoc, &args.product)?;
-
-    if args.publisher.trim().is_empty() {
-        bail!("--publisher must not be empty");
-    }
 
     let payload = InstallerPayload {
         kind: if is_patch { PayloadKind::Patch } else { PayloadKind::Full },
@@ -169,7 +177,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         "rustinst-uninst-{}.exe",
         std::process::id()
     ));
-    fs::copy(&uninstaller, &staged_uninstaller).with_context(|| {
+    copy_retry(&uninstaller, &staged_uninstaller).with_context(|| {
         format!("stage uninstaller {} -> {}", uninstaller.display(), staged_uninstaller.display())
     })?;
     if let Some(i) = &icons {
@@ -179,7 +187,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
     }
     let uninstaller_bytes = fs::read(&staged_uninstaller)
         .with_context(|| format!("read {}", staged_uninstaller.display()))?;
-    let _ = fs::remove_file(&staged_uninstaller);
+    let _ = remove_file_retry(&staged_uninstaller);
     println!("Uninstaller: {} bytes (icon-stamped)", uninstaller_bytes.len());
 
     if let Some(parent) = args.out.parent() {
@@ -289,7 +297,7 @@ fn build_full(input: &Path, exe: &str, version: &str) -> Result<(Vec<u8>, Manife
         .map(|(rel, entry, _)| (rel, entry))
         .collect();
 
-    let zip_bytes = write_zip(input, &files, &[], &HashMap::new())?;
+    let zip_bytes = write_zip(input, &files, &HashMap::new())?;
 
     let manifest = Manifest {
         version: version.to_string(),
@@ -308,10 +316,10 @@ fn build_patch(
     exe: &str,
     version: &str,
 ) -> Result<(Vec<u8>, Manifest)> {
-    if let Ok(exe_dir) = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .ok_or(())
+    // Warn up front if hdiffz is missing: patching still works but ships full
+    // files instead of HDiffPatch deltas.
+    if let Some(exe_dir) =
+        std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf))
     {
         let hd = exe_dir.join("hdiffz.exe");
         if !hd.exists() {
@@ -405,7 +413,7 @@ fn build_patch(
                             hash: new_hash,
                             size: new_size,
                             patch: Some(PatchInfo {
-                                file: format!("{}{}.patch", PATCHES_PREFIX, safe_name),
+                                file: patch_entry_name(rel),
                                 size: psize,
                             }),
                         },
@@ -439,9 +447,9 @@ fn build_patch(
         entries.insert(w.rel, w.entry);
     }
 
-    let zip_bytes = write_zip(new_input, &full_paths, &[], &patch_paths)?;
+    let zip_bytes = write_zip(new_input, &full_paths, &patch_paths)?;
 
-    let _ = fs::remove_dir_all(&temp_patches);
+    remove_dir_retry(&temp_patches);
 
     let manifest = Manifest {
         version: version.to_string(),
@@ -504,7 +512,6 @@ fn compress_entry(entry_name: &str, bytes: &[u8]) -> Result<Vec<u8>> {
 fn write_zip(
     input: &Path,
     full_paths: &[String],
-    _unused: &[String],
     patch_paths: &HashMap<String, PathBuf>,
 ) -> Result<Vec<u8>> {
     // (entry_name_in_zip, source_path_on_disk) for every file to pack.
@@ -513,11 +520,7 @@ fn write_zip(
         jobs.push((format!("{}{}", FULL_PREFIX, rel), input.join(rel)));
     }
     for (rel, patch_path) in patch_paths {
-        let safe_name = blake3::hash(rel.as_bytes()).to_hex().to_string();
-        jobs.push((
-            format!("{}{}.patch", PATCHES_PREFIX, safe_name),
-            patch_path.clone(),
-        ));
+        jobs.push((patch_entry_name(rel), patch_path.clone()));
     }
 
     // PHASE 1 (parallel): read + compress each file into its own mini-zip.
