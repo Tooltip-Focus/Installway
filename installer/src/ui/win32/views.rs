@@ -114,7 +114,7 @@ unsafe fn build_license(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerPayload
     unsafe {
         let _ = CreateWindowExW(
             WS_EX_CLIENTEDGE, w!("EDIT"), PCWSTR(license_w.as_ptr()),
-            WS_CHILD | WS_CLIPSIBLINGS | WS_BORDER | WS_VSCROLL
+            WS_CHILD | WS_CLIPSIBLINGS | WS_VSCROLL
                 | WINDOW_STYLE((ES_MULTILINE | ES_READONLY | ES_LEFT) as u32),
             PAD, license_top, WIN_W - PAD * 2, license_h,
             Some(hwnd), Some(HMENU(ID_LICENSE_EDIT as *mut _)), Some(hinst), None,
@@ -143,7 +143,7 @@ unsafe fn build_choose(hwnd: HWND, hinst: HINSTANCE, default_path: &PathBuf) {
         );
         let _ = CreateWindowExW(
             WS_EX_CLIENTEDGE, w!("EDIT"), PCWSTR(path_str.as_ptr()),
-            WS_CHILD | WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
+            WS_CHILD | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
             PAD, BANNER_H + PAD + 32, WIN_W - PAD * 2 - 120, 28,
             Some(hwnd), Some(HMENU(ID_PATH_EDIT as *mut _)), Some(hinst), None,
         );
