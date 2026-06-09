@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use anyhow::{Context, Result};
-use common::models::{InstallInfo, InstallerPayload};
+use common::models::{FileAssoc, InstallInfo, InstallerPayload};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,6 +23,15 @@ pub fn finalize(
         .unwrap_or_else(|| install_dir.to_path_buf());
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("create uninstall data dir {}", data_dir.display()))?;
+
+    // Associations from a prior install of this product, read BEFORE we
+    // overwrite installer_info.json. Lets us drop the ones this version no
+    // longer declares (otherwise they orphan and even survive uninstall).
+    let prior_assocs: Vec<FileAssoc> = fs::read_to_string(data_dir.join("installer_info.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<InstallInfo>(&t).ok())
+        .map(|i| i.associations)
+        .unwrap_or_default();
 
     // Atomic + retrying write: a fresh `.exe` is the prime Defender trigger
     // (it locks the new file to scan it), so a bare write could fail the
@@ -46,27 +55,19 @@ pub fn finalize(
         associations: payload.associations.clone(),
     };
 
-    // Atomic writes: a half-written file would break uninstall / version checks.
-    common::utils::write_atomic(
-        &data_dir.join("installer_info.json"),
-        serde_json::to_string_pretty(&info)?.as_bytes(),
-    )?;
-    common::utils::write_atomic(
-        &data_dir.join("installer_manifest.json"),
-        serde_json::to_string_pretty(&payload.manifest)?.as_bytes(),
-    )?;
-    common::utils::write_atomic(
-        &data_dir.join("version.json"),
-        serde_json::to_string_pretty(&serde_json::json!({ "version": payload.to_version }))?
-            .as_bytes(),
-    )?;
-    // Copy the live %TEMP% log next to the uninstaller for support.
-    if let Some(src) = common::log::current_path() {
-        let _ = fs::copy(&src, data_dir.join("install.log"));
-    }
-
+    // Register the Add/Remove Programs entry. Uses the in-memory `info`, not
+    // the json file, so the json can safely be written last.
     register_uninstall(&info, &uninstaller_path)?;
 
+    // Registry / shortcut side effects, performed BEFORE the state files are
+    // written. Reconcile associations: drop any the previous install
+    // registered that this version no longer declares (so a changed list never
+    // orphans ProgIDs / extension handlers), then (re)register the current set.
+    // Runs unconditionally (even if the new set is empty or there's no exe).
+    let stale = common::assoc::stale(&prior_assocs, &payload.associations);
+    if !stale.is_empty() {
+        common::assoc::unregister(&payload.product, &stale);
+    }
     if !payload.manifest.exe.is_empty() {
         let target = install_dir.join(&payload.manifest.exe);
         create_shortcuts(&payload.product, install_dir, &target);
@@ -76,6 +77,29 @@ pub fn finalize(
             let exe_str = target.to_string_lossy().replace('/', "\\");
             common::assoc::register(&payload.product, &exe_str, &payload.associations);
         }
+    }
+
+    // State files written LAST. `installer_info.json` is the durable completion
+    // marker: until it is (re)written it still holds the PREVIOUS association
+    // set, so a crash anywhere above leaves a re-run able to recompute the stale
+    // set correctly and self-heal. Atomic writes: a half-written file would
+    // break uninstall / version checks.
+    common::utils::write_atomic(
+        &data_dir.join("installer_manifest.json"),
+        serde_json::to_string_pretty(&payload.manifest)?.as_bytes(),
+    )?;
+    common::utils::write_atomic(
+        &data_dir.join("version.json"),
+        serde_json::to_string_pretty(&serde_json::json!({ "version": payload.to_version }))?
+            .as_bytes(),
+    )?;
+    common::utils::write_atomic(
+        &data_dir.join("installer_info.json"),
+        serde_json::to_string_pretty(&info)?.as_bytes(),
+    )?;
+    // Copy the live %TEMP% log next to the uninstaller for support.
+    if let Some(src) = common::log::current_path() {
+        let _ = fs::copy(&src, data_dir.join("install.log"));
     }
 
     Ok(())

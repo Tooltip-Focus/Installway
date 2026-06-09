@@ -50,4 +50,21 @@ removes exactly those ProgID trees and clears each `.ext` default **only if it
 still points at our ProgID** — it never stomps an association the user later
 re-pointed at another app.
 
+## Changing associations between versions
+
+When you install over an existing copy of the product, the installer
+**reconciles** associations: any extension the previous install registered but
+the new payload no longer declares is unregistered, then the current set is
+(re-)registered. So dropping `.myz` in a new version removes its handler instead
+of leaving an orphan that would otherwise survive even an uninstall. Extensions
+present in both versions are simply refreshed. This applies to full and patch
+installers and to every UI mode.
+
+The reconcile is failure-resilient. Associations are only touched after the new
+version's files are committed, so an install that fails earlier never strips the
+previous version's associations. And `installer_info.json` — the record of what
+was registered — is rewritten *last*, after the registry changes, so an
+interrupted install (crash / power loss) leaves the old record intact and the
+next run recomputes and heals the association state rather than orphaning it.
+
 Next: [Trimming the wizard](wizard.md).

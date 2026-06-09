@@ -33,6 +33,19 @@ pub fn normalize_ext(ext: &str) -> String {
     format!(".{}", e)
 }
 
+/// Associations present in `prior` but no longer in `current`, compared by
+/// normalized extension. On upgrade these should be `unregister`ed so a changed
+/// association list never leaves orphaned ProgIDs / extension handlers behind.
+pub fn stale(prior: &[FileAssoc], current: &[FileAssoc]) -> Vec<FileAssoc> {
+    use std::collections::HashSet;
+    let keep: HashSet<String> = current.iter().map(|a| normalize_ext(&a.ext)).collect();
+    prior
+        .iter()
+        .filter(|a| !keep.contains(&normalize_ext(&a.ext)))
+        .cloned()
+        .collect()
+}
+
 pub fn register(product: &str, exe_path: &str, assocs: &[FileAssoc]) {
     if assocs.is_empty() {
         return;
@@ -197,5 +210,41 @@ mod tests {
         assert_eq!(normalize_ext("MYX"), ".myx");
         assert_eq!(normalize_ext(".TxT"), ".txt");
         assert_eq!(normalize_ext("  .Dat "), ".dat");
+    }
+
+    fn assoc(ext: &str) -> FileAssoc {
+        FileAssoc { ext: ext.to_string(), description: format!("{ext} doc") }
+    }
+
+    #[test]
+    fn stale_returns_only_dropped_extensions() {
+        let prior = [assoc(".myx"), assoc(".myz"), assoc(".abc")];
+        let current = [assoc(".abc")];
+        let got: Vec<String> = stale(&prior, &current).iter().map(|a| a.ext.clone()).collect();
+        assert_eq!(got, vec![".myx".to_string(), ".myz".to_string()]);
+    }
+
+    #[test]
+    fn stale_empty_when_all_kept() {
+        let prior = [assoc(".myx"), assoc(".myz")];
+        let current = [assoc(".myz"), assoc(".myx"), assoc(".new")];
+        assert!(stale(&prior, &current).is_empty());
+    }
+
+    #[test]
+    fn stale_is_extension_normalized() {
+        // Same extension, different dot/case → kept, not stale.
+        let prior = [assoc(".MYX")];
+        let current = [assoc("myx")];
+        assert!(stale(&prior, &current).is_empty());
+    }
+
+    #[test]
+    fn stale_edges_empty_inputs() {
+        // No prior install → nothing to drop.
+        assert!(stale(&[], &[assoc(".abc")]).is_empty());
+        // New version declares none → every prior assoc is stale.
+        let prior = [assoc(".myx"), assoc(".myz")];
+        assert_eq!(stale(&prior, &[]).len(), 2);
     }
 }
