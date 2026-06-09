@@ -42,7 +42,14 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # dev (optional)
 # force_reinstall = true
 # reuse_stub      = true
+
+# free-form registry keys (HKCU) - see the Registry keys page
+# [[registry]]
+# hive = "HKCU"; key = "%APP_KEY%"; name = "InstallDir"; type = "sz"; value = "%INSTALL_DIR%"
 ```
+
+> `[[registry]]` is an array-of-tables: put all flat keys above it, then the
+> `[[registry]]` blocks at the end of the file (standard TOML ordering).
 
 Run it:
 

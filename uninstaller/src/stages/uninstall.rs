@@ -114,6 +114,9 @@ pub fn run(silent: bool) -> Result<()> {
                 &info_owned.product_id
             };
             common::assoc::unregister(assoc_id, &info_owned.associations);
+            for e in &info_owned.registry {
+                common::registry::remove_if_ours(e);
+            }
 
             // 3. App-dir state files (version.json, installer_manifest.json)
             counter.step(&tr.get("uninstall.removing_state"));
@@ -160,6 +163,9 @@ fn run_silent(
         &info.product_id
     };
     common::assoc::unregister(assoc_id, &info.associations);
+    for e in &info.registry {
+        common::registry::remove_if_ours(e);
+    }
     common::log::info("removed shortcuts + associations");
     let s = cleanup::remove_app_state_files(app_dir);
     common::log::info(format!("removed {} app state files", s));

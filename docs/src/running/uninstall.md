@@ -18,8 +18,10 @@ Add/Remove Programs). Uninstalling runs that `uninstall.exe`, which:
 
 1. Reads `installer_info.json` to find the real `install_dir`.
 2. Walks `installer_manifest.json` and removes every tracked file.
-3. Removes desktop / Start Menu shortcuts and file associations (only `.ext`
-   defaults that still point at our ProgID).
+3. Removes desktop / Start Menu shortcuts, file associations (only `.ext`
+   defaults that still point at our ProgID), and any free-form
+   [registry entries](../packaging/registry.md) (anti-stomp; empty created keys
+   pruned).
 4. Removes `version.json` + `installer_manifest.json` and empty subdirs.
 5. Deletes the HKCU `Uninstall` registry entry.
 6. Spawns a `%TEMP%` stage-2 copy of itself that deletes the **app dir** and the

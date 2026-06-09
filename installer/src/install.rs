@@ -25,14 +25,20 @@ pub fn finalize(
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("create uninstall data dir {}", data_dir.display()))?;
 
-    // Associations from a prior install of this product, read BEFORE we
-    // overwrite installer_info.json. Lets us drop the ones this version no
-    // longer declares (otherwise they orphan and even survive uninstall).
-    let prior_assocs: Vec<FileAssoc> = fs::read_to_string(data_dir.join("installer_info.json"))
+    // Prior install record, read BEFORE we overwrite installer_info.json, so we
+    // can drop the associations / registry entries this version no longer
+    // declares (otherwise they orphan and even survive uninstall).
+    let prior: Option<InstallInfo> = fs::read_to_string(data_dir.join("installer_info.json"))
         .ok()
-        .and_then(|t| serde_json::from_str::<InstallInfo>(&t).ok())
-        .map(|i| i.associations)
+        .and_then(|t| serde_json::from_str(&t).ok());
+    let prior_assocs: Vec<FileAssoc> = prior
+        .as_ref()
+        .map(|i| i.associations.clone())
         .unwrap_or_default();
+    let prior_reg = prior.map(|i| i.registry).unwrap_or_default();
+
+    // Resolve the registry token templates against this install.
+    let registry = expand_registry(payload, install_dir);
 
     // Atomic + retrying write: a fresh `.exe` is the prime Defender trigger
     // (it locks the new file to scan it), so a bare write could fail the
@@ -57,6 +63,7 @@ pub fn finalize(
         registry_key: key.clone(),
         exe: payload.manifest.exe.clone(),
         associations: payload.associations.clone(),
+        registry: registry.clone(),
     };
 
     // Register the Add/Remove Programs entry. Uses the in-memory `info`, not
@@ -85,6 +92,15 @@ pub fn finalize(
         }
     }
 
+    // Free-form registry: drop entries the previous install wrote but this
+    // version no longer declares, then (re)write the current set.
+    for e in common::registry::stale(&prior_reg, &registry) {
+        common::registry::remove_if_ours(&e);
+    }
+    for e in &registry {
+        common::registry::write(e);
+    }
+
     // State files written LAST. `installer_info.json` is the durable completion
     // marker: until it is (re)written it still holds the PREVIOUS association
     // set, so a crash anywhere above leaves a re-run able to recompute the stale
@@ -109,6 +125,48 @@ pub fn finalize(
     }
 
     Ok(())
+}
+
+/// Resolve token templates in each registry entry against this install.
+/// Tokens: `%APP_KEY%` (= `Software\<publisher>\<product_id>`), `%INSTALL_DIR%`,
+/// `%EXE%`, `%VERSION%`, `%PRODUCT%`, `%PRODUCT_ID%`, `%PUBLISHER%`. The
+/// publisher is sanitized so it stays a single registry-key component.
+fn expand_registry(
+    payload: &InstallerPayload,
+    install_dir: &Path,
+) -> Vec<common::models::RegEntry> {
+    use common::models::{RegEntry, RegValue};
+    let pub_s = common::paths::sanitize_component(&payload.publisher);
+    let app_key = format!(r"Software\{}\{}", pub_s, payload.product_id);
+    let exe = install_dir
+        .join(&payload.manifest.exe)
+        .to_string_lossy()
+        .replace('/', "\\");
+    let install = install_dir.to_string_lossy().replace('/', "\\");
+    let sub = |s: &str| {
+        s.replace("%APP_KEY%", &app_key)
+            .replace("%INSTALL_DIR%", &install)
+            .replace("%EXE%", &exe)
+            .replace("%VERSION%", &payload.to_version)
+            .replace("%PRODUCT_ID%", &payload.product_id)
+            .replace("%PRODUCT%", &payload.product)
+            .replace("%PUBLISHER%", &pub_s)
+    };
+    payload
+        .registry
+        .iter()
+        .map(|e| RegEntry {
+            hive: e.hive.clone(),
+            key: sub(&e.key),
+            name: sub(&e.name),
+            kind: e.kind,
+            value: match &e.value {
+                RegValue::Text(s) => RegValue::Text(sub(s)),
+                RegValue::List(v) => RegValue::List(v.iter().map(|s| sub(s)).collect()),
+                RegValue::Int(n) => RegValue::Int(*n),
+            },
+        })
+        .collect()
 }
 
 /// Drop a desktop and Start Menu shortcut pointing at the installed exe.

@@ -62,6 +62,9 @@ Required fields are checked after merging. See [Config file](../building/config.
 | `--force-reinstall` | Dev: rewrite all files, remove orphans, skip from-check. |
 | `--config <FILE.toml>` | Read any of the above from a TOML file. |
 
+Free-form [registry keys](../packaging/registry.md) are config-file only
+(`[[registry]]` tables), not CLI flags.
+
 ## Installer (`setup-*.exe`) runtime flags
 
 The built installer, not the builder:

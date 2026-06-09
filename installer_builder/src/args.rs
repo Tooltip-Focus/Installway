@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use common::models::{RegEntry, RegKind, RegValue};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -137,6 +138,21 @@ pub struct PackCli {
     pub reuse_stub: bool,
 }
 
+/// One `[[registry]]` table from the config file. Converted + validated into a
+/// [`RegEntry`] by [`build_registry`]. `value` is left as a raw `toml::Value`
+/// so a string / integer / array can all be accepted per `type`.
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct RegFileEntry {
+    pub hive: String,
+    pub key: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub value: toml::Value,
+}
+
 /// `pack` options as read from a TOML file. Flat keys matching the CLI long
 /// names (snake_case). Unknown keys are rejected to catch typos.
 #[derive(Deserialize, Debug, Default)]
@@ -170,6 +186,9 @@ pub struct PackFile {
     pub out: Option<PathBuf>,
     #[serde(default)]
     pub reuse_stub: bool,
+    /// Free-form registry entries (config-file only).
+    #[serde(default)]
+    pub registry: Vec<RegFileEntry>,
 }
 
 /// Fully resolved `pack` options consumed by `pack::run`. CLI > TOML > default.
@@ -197,6 +216,7 @@ pub struct PackArgs {
     pub uninstaller: Option<PathBuf>,
     pub out: PathBuf,
     pub reuse_stub: bool,
+    pub registry: Vec<RegEntry>,
 }
 
 impl PackArgs {
@@ -263,7 +283,78 @@ impl PackArgs {
             skip_path: cli.skip_path || file.skip_path,
             upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
             reuse_stub: cli.reuse_stub || file.reuse_stub,
+            registry: build_registry(file.registry)?,
         })
+    }
+}
+
+/// Convert + validate `[[registry]]` entries. HKCU only; type/value must agree;
+/// key non-empty and not starting with `\`.
+fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegEntry>> {
+    let mut out = Vec::with_capacity(raw.len());
+    for (i, e) in raw.into_iter().enumerate() {
+        let n = i + 1;
+        if !e.hive.eq_ignore_ascii_case("HKCU") {
+            bail!("registry #{n}: hive '{}' unsupported (HKCU only)", e.hive);
+        }
+        let key = e.key.trim().to_string();
+        if key.is_empty() {
+            bail!("registry #{n}: empty key");
+        }
+        if key.starts_with('\\') {
+            bail!("registry #{n}: key must not start with '\\'");
+        }
+        let kind = match e.kind.to_ascii_lowercase().as_str() {
+            "sz" => RegKind::Sz,
+            "expand_sz" => RegKind::ExpandSz,
+            "dword" => RegKind::Dword,
+            "qword" => RegKind::Qword,
+            "multi_sz" => RegKind::MultiSz,
+            "binary" => RegKind::Binary,
+            other => bail!("registry #{n}: unknown type '{other}'"),
+        };
+        let value = convert_reg_value(kind, &e.value).ok_or_else(|| {
+            anyhow::anyhow!(
+                "registry #{n} ('{key}'): value does not match type '{}'",
+                e.kind
+            )
+        })?;
+        out.push(RegEntry {
+            hive: "HKCU".to_string(),
+            key,
+            name: e.name,
+            kind,
+            value,
+        });
+    }
+    Ok(out)
+}
+
+fn convert_reg_value(kind: RegKind, v: &toml::Value) -> Option<RegValue> {
+    match kind {
+        RegKind::Sz | RegKind::ExpandSz => Some(RegValue::Text(v.as_str()?.to_string())),
+        RegKind::Binary => {
+            let s = v.as_str()?;
+            (s.len() % 2 == 0 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then(|| RegValue::Text(s.to_string()))
+        }
+        RegKind::Dword => {
+            let n = v.as_integer()?;
+            (0..=u32::MAX as i64)
+                .contains(&n)
+                .then(|| RegValue::Int(n as u64))
+        }
+        RegKind::Qword => {
+            let n = v.as_integer()?;
+            (n >= 0).then(|| RegValue::Int(n as u64))
+        }
+        RegKind::MultiSz => {
+            let arr = v.as_array()?;
+            arr.iter()
+                .map(|it| it.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+                .map(RegValue::List)
+        }
     }
 }
 
@@ -362,5 +453,54 @@ force_reinstall = true
         let mut cli = empty_cli();
         cli.config = Some(cfg);
         assert!(PackArgs::resolve(cli).is_err());
+    }
+
+    fn resolve_with(extra: &str) -> Result<PackArgs> {
+        let (_dir, cfg) = write_cfg(&format!("{SAMPLE}{extra}"));
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        let r = PackArgs::resolve(cli);
+        // keep tempdir alive until resolve has read the file
+        drop(_dir);
+        r
+    }
+
+    #[test]
+    fn registry_parsed_and_typed() {
+        let r = resolve_with(
+            "\n[[registry]]\nhive='HKCU'\nkey='Software\\\\X'\nname='Build'\ntype='dword'\nvalue=7\n\
+             [[registry]]\nhive='HKCU'\nkey='%APP_KEY%'\ntype='multi_sz'\nvalue=['a','b']\n",
+        )
+        .unwrap();
+        assert_eq!(r.registry.len(), 2);
+        assert_eq!(r.registry[0].kind, RegKind::Dword);
+        assert_eq!(r.registry[0].value, RegValue::Int(7));
+        assert_eq!(r.registry[1].kind, RegKind::MultiSz);
+        assert_eq!(
+            r.registry[1].value,
+            RegValue::List(vec!["a".into(), "b".into()])
+        );
+    }
+
+    #[test]
+    fn registry_rejects_bad_inputs() {
+        // unknown type
+        assert!(
+            resolve_with("\n[[registry]]\nhive='HKCU'\nkey='K'\ntype='nope'\nvalue=1\n").is_err()
+        );
+        // HKLM not allowed
+        assert!(
+            resolve_with("\n[[registry]]\nhive='HKLM'\nkey='K'\ntype='sz'\nvalue='x'\n").is_err()
+        );
+        // dword given a string
+        assert!(
+            resolve_with("\n[[registry]]\nhive='HKCU'\nkey='K'\ntype='dword'\nvalue='x'\n")
+                .is_err()
+        );
+        // bad hex for binary
+        assert!(
+            resolve_with("\n[[registry]]\nhive='HKCU'\nkey='K'\ntype='binary'\nvalue='XY'\n")
+                .is_err()
+        );
     }
 }
