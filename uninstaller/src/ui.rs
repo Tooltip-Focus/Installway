@@ -580,6 +580,15 @@ pub fn fatal(msg: &str) {
     }
 }
 
+/// Modal info dialog (e.g. the "uninstall complete" confirmation).
+pub fn info(msg: &str, caption: &str) {
+    let t = wide(msg);
+    let c = wide(caption);
+    unsafe {
+        MessageBoxW(None, PCWSTR(t.as_ptr()), PCWSTR(c.as_ptr()), MB_OK | MB_ICONINFORMATION);
+    }
+}
+
 #[allow(dead_code)]
 pub fn os_string_from_wide(buf: &[u16]) -> String {
     let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());

@@ -136,7 +136,12 @@ pub fn run(silent: bool) -> Result<()> {
         auto_start: false,
     };
 
-    let _ = ui::run(params);
+    if ui::run(params) {
+        ui::info(
+            &tr.fmt("uninstall.complete_message", &[("product", &info.product)]),
+            &tr.get("uninstall.complete_caption"),
+        );
+    }
     Ok(())
 }
 
