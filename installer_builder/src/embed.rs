@@ -29,9 +29,13 @@ pub fn embed_resources(
         .collect();
 
     unsafe {
-        let h = BeginUpdateResourceW(PCWSTR(wide.as_ptr()), false).context("BeginUpdateResource")?;
+        let h =
+            BeginUpdateResourceW(PCWSTR(wide.as_ptr()), false).context("BeginUpdateResource")?;
         if h.is_invalid() {
-            bail!("BeginUpdateResource returned invalid handle for {}", exe.display());
+            bail!(
+                "BeginUpdateResource returned invalid handle for {}",
+                exe.display()
+            );
         }
 
         const RT_RCDATA: u16 = 10;

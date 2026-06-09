@@ -154,14 +154,21 @@ fn run_silent(
     let n = cleanup::remove_payload_files(app_dir, manifest);
     common::log::info(format!("removed {} payload files", n));
     cleanup::remove_shortcuts(&info.product);
-    let assoc_id = if info.product_id.is_empty() { &info.product } else { &info.product_id };
+    let assoc_id = if info.product_id.is_empty() {
+        &info.product
+    } else {
+        &info.product_id
+    };
     common::assoc::unregister(assoc_id, &info.associations);
     common::log::info("removed shortcuts + associations");
     let s = cleanup::remove_app_state_files(app_dir);
     common::log::info(format!("removed {} app state files", s));
     cleanup::remove_empty_subdirs(app_dir);
     cleanup::unregister(&info.registry_key);
-    common::log::info(format!("unregistered HKCU Uninstall\\{}", info.registry_key));
+    common::log::info(format!(
+        "unregistered HKCU Uninstall\\{}",
+        info.registry_key
+    ));
     spawn_finalize(Some(app_dir), data_dir)
 }
 
@@ -183,9 +190,12 @@ fn spawn_finalize(app_dir: Option<&Path>, data_dir: &Path) -> Result<()> {
 
     let mut cmd = Command::new(&dest);
     cmd.arg("finalize")
-        .arg("--data-dir").arg(data_dir)
-        .arg("--product").arg(product)
-        .arg("--parent-pid").arg(std::process::id().to_string());
+        .arg("--data-dir")
+        .arg(data_dir)
+        .arg("--product")
+        .arg(product)
+        .arg("--parent-pid")
+        .arg(std::process::id().to_string());
     if let Some(dir) = app_dir {
         cmd.arg("--app-dir").arg(dir);
     }

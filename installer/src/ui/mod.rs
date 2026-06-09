@@ -16,7 +16,11 @@ pub(crate) fn sample_payload(view: &str) -> common::models::InstallerPayload {
     use common::models::{InstallerPayload, Manifest, PayloadKind};
     let is_patch = view.contains("patch");
     InstallerPayload {
-        kind: if is_patch { PayloadKind::Patch } else { PayloadKind::Full },
+        kind: if is_patch {
+            PayloadKind::Patch
+        } else {
+            PayloadKind::Full
+        },
         product: "Sample App".to_string(),
         product_id: "SampleApp".to_string(),
         publisher: "Acme Corp".to_string(),

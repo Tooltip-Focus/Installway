@@ -78,16 +78,21 @@ fn run() -> Result<()> {
     }
 
     // Language detection uses the original user-visible arguments (no argv[0]).
-    ui::set_translator(common::i18n::Translator::detect(
-        if argv.len() > 1 { &argv[1..] } else { &[] },
-    ));
+    ui::set_translator(common::i18n::Translator::detect(if argv.len() > 1 {
+        &argv[1..]
+    } else {
+        &[]
+    }));
 
     let cli = Cli::parse_from(&argv);
 
     match cli.command {
-        Some(Cmd::Finalize { app_dir, data_dir, product, parent_pid }) => {
-            stages::finalize::run(app_dir, data_dir, product, parent_pid)
-        }
+        Some(Cmd::Finalize {
+            app_dir,
+            data_dir,
+            product,
+            parent_pid,
+        }) => stages::finalize::run(app_dir, data_dir, product, parent_pid),
         None => stages::uninstall::run(cli.silent),
     }
 }

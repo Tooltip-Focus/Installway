@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-use embed_manifest::{embed_manifest, new_manifest};
 use embed_manifest::manifest::ExecutionLevel;
+use embed_manifest::{embed_manifest, new_manifest};
 use std::env;
 use std::fs;
 use std::path::PathBuf;

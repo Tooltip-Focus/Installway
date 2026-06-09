@@ -6,14 +6,14 @@
 //! back to the UI thread.
 
 use super::{
-    BM_GETCHECK, ID_ACCEPT_CHK, ID_LAUNCH_CHK, ID_PATH_EDIT, ID_PROGRESS, ID_STATUS, PAYLOAD, Phase,
-    STATE, apply_phase, message_box, tr,
+    BM_GETCHECK, ID_ACCEPT_CHK, ID_LAUNCH_CHK, ID_PATH_EDIT, ID_PROGRESS, ID_STATUS, PAYLOAD,
+    Phase, STATE, apply_phase, message_box, tr,
 };
 use crate::extract::{InstallCtx, install};
 use crate::install as install_mod;
 use crate::ui::helpers::{
-    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, get_window_text, scale_progress, set_dlg_text,
-    set_progress,
+    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, get_window_text, scale_progress,
+    set_dlg_text, set_progress,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,9 +26,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 pub(super) unsafe fn on_next(hwnd: HWND) {
-    let phase = STATE.with(|s| s.borrow().as_ref().map(|st| st.borrow().phase).unwrap_or(Phase::License));
+    let phase = STATE.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|st| st.borrow().phase)
+            .unwrap_or(Phase::License)
+    });
     if phase == Phase::License {
-        let accepted = STATE.with(|s| s.borrow().as_ref().map(|st| st.borrow().license_accepted).unwrap_or(false));
+        let accepted = STATE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .map(|st| st.borrow().license_accepted)
+                .unwrap_or(false)
+        });
         if !accepted {
             unsafe { message_box(hwnd, &tr().get("install.must_accept"), MB_ICONWARNING) };
             return;
@@ -43,7 +53,12 @@ pub(super) unsafe fn on_next(hwnd: HWND) {
 }
 
 pub(super) unsafe fn on_back(hwnd: HWND) {
-    let phase = STATE.with(|s| s.borrow().as_ref().map(|st| st.borrow().phase).unwrap_or(Phase::License));
+    let phase = STATE.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|st| st.borrow().phase)
+            .unwrap_or(Phase::License)
+    });
     if phase == Phase::Choose && !super::skip_license() {
         unsafe { apply_phase(hwnd, Phase::License) };
     }
@@ -125,7 +140,9 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
     unsafe { apply_phase(hwnd, Phase::Progress) };
 
     let shared = STATE.with(|s| {
-        s.borrow().as_ref().map(|st| (st.borrow().cancel.clone(), st.borrow().progress.clone()))
+        s.borrow()
+            .as_ref()
+            .map(|st| (st.borrow().cancel.clone(), st.borrow().progress.clone()))
     });
     let Some((cancel, progress_shared)) = shared else {
         return; // STATE not initialized - nothing to do.
@@ -171,7 +188,12 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
 }
 
 pub(super) unsafe fn on_cancel(hwnd: HWND) {
-    let phase = STATE.with(|s| s.borrow().as_ref().map(|st| st.borrow().phase).unwrap_or(Phase::License));
+    let phase = STATE.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|st| st.borrow().phase)
+            .unwrap_or(Phase::License)
+    });
     match phase {
         Phase::License | Phase::Choose => {
             let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
@@ -192,8 +214,17 @@ pub(super) unsafe fn on_finish(hwnd: HWND) {
     let h = unsafe { GetDlgItem(Some(hwnd), ID_LAUNCH_CHK as i32).unwrap_or_default() };
     let checked = unsafe { SendMessageW(h, BM_GETCHECK, None, None) }.0 as u32 == BST_CHECKED.0;
     if checked {
-        let path = STATE.with(|s| s.borrow().as_ref().and_then(|st| st.borrow().chosen_path.clone()));
-        let exe = PAYLOAD.with(|p| p.borrow().as_ref().map(|p| p.manifest.exe.clone()).unwrap_or_default());
+        let path = STATE.with(|s| {
+            s.borrow()
+                .as_ref()
+                .and_then(|st| st.borrow().chosen_path.clone())
+        });
+        let exe = PAYLOAD.with(|p| {
+            p.borrow()
+                .as_ref()
+                .map(|p| p.manifest.exe.clone())
+                .unwrap_or_default()
+        });
         if let Some(pb) = path {
             let _ = crate::install::launch_product(&pb, &exe);
         }
@@ -203,7 +234,9 @@ pub(super) unsafe fn on_finish(hwnd: HWND) {
 
 pub(super) unsafe fn update_progress(hwnd: HWND) {
     STATE.with(|s| {
-        let Some(state) = s.borrow().as_ref().cloned() else { return; };
+        let Some(state) = s.borrow().as_ref().cloned() else {
+            return;
+        };
         let st = state.borrow();
         let (done, total, name) = match st.progress.lock() {
             Ok(guard) => (guard.done, guard.total, guard.name.clone()),

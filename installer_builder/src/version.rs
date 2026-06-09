@@ -18,7 +18,9 @@ const CODEPAGE_UNICODE: u16 = 0x04B0; // 1200
 
 /// Parse "a.b.c.d" (any missing parts = 0) into four u16s.
 fn parse_quad(v: &str) -> (u16, u16, u16, u16) {
-    let mut it = v.split(['.', '-', '+']).filter_map(|s| s.parse::<u16>().ok());
+    let mut it = v
+        .split(['.', '-', '+'])
+        .filter_map(|s| s.parse::<u16>().ok());
     (
         it.next().unwrap_or(0),
         it.next().unwrap_or(0),
@@ -94,12 +96,7 @@ fn fixed_file_info(ver: (u16, u16, u16, u16)) -> Vec<u8> {
 }
 
 /// Build the full VS_VERSIONINFO blob.
-pub fn build(
-    product: &str,
-    publisher: &str,
-    version: &str,
-    original_filename: &str,
-) -> Vec<u8> {
+pub fn build(product: &str, publisher: &str, version: &str, original_filename: &str) -> Vec<u8> {
     let quad = parse_quad(version);
     let desc = format!("{} Setup", product);
 
@@ -122,7 +119,13 @@ pub fn build(
     let mut translation = Vec::with_capacity(4);
     translation.extend_from_slice(&LANG_US_EN.to_le_bytes());
     translation.extend_from_slice(&CODEPAGE_UNICODE.to_le_bytes());
-    let var = node("Translation", 0, translation.len() as u16, &translation, &[]);
+    let var = node(
+        "Translation",
+        0,
+        translation.len() as u16,
+        &translation,
+        &[],
+    );
     let var_file_info = node("VarFileInfo", 1, 0, &[], &[var]);
 
     // Root VS_VERSION_INFO with VS_FIXEDFILEINFO value.
@@ -159,7 +162,10 @@ pub fn embed(target: &Path, product: &str, publisher: &str, version: &str) -> Re
         let h = BeginUpdateResourceW(PCWSTR(wide.as_ptr()), false)
             .with_context(|| format!("BeginUpdateResource {}", target.display()))?;
         if h.is_invalid() {
-            bail!("BeginUpdateResource invalid handle for {}", target.display());
+            bail!(
+                "BeginUpdateResource invalid handle for {}",
+                target.display()
+            );
         }
         UpdateResourceW(
             h,
@@ -195,9 +201,13 @@ mod tests {
     fn build_has_fixed_info_signature_and_strings() {
         let b = build("Prod", "Pub", "1.2.3", "setup.exe");
         // VS_FIXEDFILEINFO signature 0xFEEF04BD, little-endian.
-        assert!(contains(&b, &0xFEEF04BDu32.to_le_bytes()), "missing FIXEDFILEINFO sig");
+        assert!(
+            contains(&b, &0xFEEF04BDu32.to_le_bytes()),
+            "missing FIXEDFILEINFO sig"
+        );
         // UTF-16 strings present.
-        let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect() };
+        let utf16 =
+            |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect() };
         assert!(contains(&b, &utf16("Prod")), "ProductName");
         assert!(contains(&b, &utf16("Pub")), "CompanyName");
         assert!(contains(&b, &utf16("1.2.3")), "version");

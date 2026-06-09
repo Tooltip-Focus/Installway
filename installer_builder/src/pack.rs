@@ -19,8 +19,8 @@ use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 const PATCHES_PREFIX: &str = "patches/";
 const FULL_PREFIX: &str = "full/";
@@ -81,7 +81,12 @@ pub fn run(args: &PackArgs) -> Result<()> {
         Some(p) => {
             let text = fs::read_to_string(p)
                 .with_context(|| format!("read license file {}", p.display()))?;
-            println!("License: {} ({} bytes) from {}", trimmed_title(&text), text.len(), p.display());
+            println!(
+                "License: {} ({} bytes) from {}",
+                trimmed_title(&text),
+                text.len(),
+                p.display()
+            );
             Some(text)
         }
         None => None,
@@ -90,7 +95,11 @@ pub fn run(args: &PackArgs) -> Result<()> {
     let associations = parse_assocs(&args.assoc, &args.product_id)?;
 
     let payload = InstallerPayload {
-        kind: if is_patch { PayloadKind::Patch } else { PayloadKind::Full },
+        kind: if is_patch {
+            PayloadKind::Patch
+        } else {
+            PayloadKind::Full
+        },
         product: args.product.clone(),
         product_id: args.product_id.clone(),
         publisher: args.publisher.clone(),
@@ -132,7 +141,9 @@ pub fn run(args: &PackArgs) -> Result<()> {
             p.clone()
         }
         None => build_installer_stub(
-            pub_key_hex.as_deref().expect("pub_key_hex set in toolchain mode"),
+            pub_key_hex
+                .as_deref()
+                .expect("pub_key_hex set in toolchain mode"),
             args.reuse_stub,
         )?,
     };
@@ -153,7 +164,10 @@ pub fn run(args: &PackArgs) -> Result<()> {
                     Some(i)
                 }
                 Ok(None) => {
-                    println!("Icon: source exe {} has no icon resources", exe_path.display());
+                    println!(
+                        "Icon: source exe {} has no icon resources",
+                        exe_path.display()
+                    );
                     None
                 }
                 Err(e) => {
@@ -176,12 +190,14 @@ pub fn run(args: &PackArgs) -> Result<()> {
         None => build_uninstaller(args.reuse_stub)?,
     };
     // Stamp icons on a %TEMP% copy so we don't mutate the cached release artifact.
-    let staged_uninstaller = std::env::temp_dir().join(format!(
-        "rustinst-uninst-{}.exe",
-        std::process::id()
-    ));
+    let staged_uninstaller =
+        std::env::temp_dir().join(format!("rustinst-uninst-{}.exe", std::process::id()));
     copy_retry(&uninstaller, &staged_uninstaller).with_context(|| {
-        format!("stage uninstaller {} -> {}", uninstaller.display(), staged_uninstaller.display())
+        format!(
+            "stage uninstaller {} -> {}",
+            uninstaller.display(),
+            staged_uninstaller.display()
+        )
     })?;
     if let Some(i) = &icons {
         if let Err(e) = crate::icon::embed_icons(&staged_uninstaller, i) {
@@ -191,12 +207,16 @@ pub fn run(args: &PackArgs) -> Result<()> {
     let uninstaller_bytes = fs::read(&staged_uninstaller)
         .with_context(|| format!("read {}", staged_uninstaller.display()))?;
     let _ = remove_file_retry(&staged_uninstaller);
-    println!("Uninstaller: {} bytes (icon-stamped)", uninstaller_bytes.len());
+    println!(
+        "Uninstaller: {} bytes (icon-stamped)",
+        uninstaller_bytes.len()
+    );
 
     if let Some(parent) = args.out.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(&stub, &args.out).with_context(|| format!("copy {} -> {}", stub.display(), args.out.display()))?;
+    fs::copy(&stub, &args.out)
+        .with_context(|| format!("copy {} -> {}", stub.display(), args.out.display()))?;
     println!("Copied stub to {}", args.out.display());
 
     // Small resources via the resource API.
@@ -229,13 +249,15 @@ pub fn run(args: &PackArgs) -> Result<()> {
 
     println!();
     println!("DONE.");
-    println!("Next step (Authenticode): signtool sign /fd SHA256 /tr http://timestamp.digicert.com {}", args.out.display());
+    println!(
+        "Next step (Authenticode): signtool sign /fd SHA256 /tr http://timestamp.digicert.com {}",
+        args.out.display()
+    );
     Ok(())
 }
 
 fn load_signing_key(path: &Path) -> Result<SigningKey> {
-    let hex_data = fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let hex_data = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let bytes = hex::decode(hex_data.trim())
         .with_context(|| format!("decode hex private key {}", path.display()))?;
     let arr: [u8; 32] = bytes
@@ -245,8 +267,7 @@ fn load_signing_key(path: &Path) -> Result<SigningKey> {
 }
 
 fn load_pub_key_hex(path: &Path) -> Result<String> {
-    let hex_data = fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let hex_data = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let hex_data = hex_data.trim().to_string();
     let bytes = hex::decode(&hex_data)
         .with_context(|| format!("decode hex public key {}", path.display()))?;
@@ -293,7 +314,15 @@ fn build_full(input: &Path, exe: &str, version: &str) -> Result<(Vec<u8>, Manife
                 let mut t = total_size.lock().unwrap();
                 *t += size;
             }
-            Ok((rel.clone(), FileEntry { hash, size, patch: None }, bytes))
+            Ok((
+                rel.clone(),
+                FileEntry {
+                    hash,
+                    size,
+                    patch: None,
+                },
+                bytes,
+            ))
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -321,8 +350,9 @@ fn build_patch(
 ) -> Result<(Vec<u8>, Manifest)> {
     // Warn up front if hdiffz is missing: patching still works but ships full
     // files instead of HDiffPatch deltas.
-    if let Some(exe_dir) =
-        std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf))
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
     {
         let hd = exe_dir.join("hdiffz.exe");
         if !hd.exists() {
@@ -353,10 +383,8 @@ fn build_patch(
     let total_patch_size = Mutex::new(0u64);
 
     // Per-file work: hash new, hash old if present, generate patch if both exist + differ.
-    let temp_patches = std::env::temp_dir().join(format!(
-        "installway-patches-{}",
-        std::process::id()
-    ));
+    let temp_patches =
+        std::env::temp_dir().join(format!("installway-patches-{}", std::process::id()));
     fs::create_dir_all(&temp_patches)?;
 
     struct WorkOut {
@@ -380,7 +408,11 @@ fn build_patch(
             if !old_set.contains(rel) {
                 return Ok(WorkOut {
                     rel: rel.clone(),
-                    entry: FileEntry { hash: new_hash, size: new_size, patch: None },
+                    entry: FileEntry {
+                        hash: new_hash,
+                        size: new_size,
+                        patch: None,
+                    },
                     patch_path: None,
                     full_needed: true,
                 });
@@ -392,7 +424,11 @@ fn build_patch(
                 // Unchanged - no payload entry needed.
                 return Ok(WorkOut {
                     rel: rel.clone(),
-                    entry: FileEntry { hash: new_hash, size: new_size, patch: None },
+                    entry: FileEntry {
+                        hash: new_hash,
+                        size: new_size,
+                        patch: None,
+                    },
                     patch_path: None,
                     full_needed: false,
                 });
@@ -430,7 +466,11 @@ fn build_patch(
 
             Ok(WorkOut {
                 rel: rel.clone(),
-                entry: FileEntry { hash: new_hash, size: new_size, patch: None },
+                entry: FileEntry {
+                    hash: new_hash,
+                    size: new_size,
+                    patch: None,
+                },
                 patch_path: None,
                 full_needed: true,
             })
@@ -470,9 +510,8 @@ fn build_patch(
 /// media only - archive containers (.zip/.gz/...) can wrap weakly-compressed
 /// data zstd still shrinks, so we let zstd try those.
 const ALREADY_COMPRESSED: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "avif", "heic",
-    "mp3", "aac", "ogg", "opus", "flac", "mp4", "m4v", "mov", "avi", "mkv", "webm",
-    "woff2", // brotli-compressed internally
+    "png", "jpg", "jpeg", "gif", "webp", "avif", "heic", "mp3", "aac", "ogg", "opus", "flac",
+    "mp4", "m4v", "mov", "avi", "mkv", "webm", "woff2", // brotli-compressed internally
 ];
 
 /// Pick the compression method for one entry by extension: `Stored` for
@@ -540,10 +579,11 @@ fn write_zip(
     // as consumed to keep peak memory down.
     let mut zip = ZipWriter::new(Cursor::new(Vec::with_capacity(16 * 1024 * 1024)));
     for mini in minis.into_iter() {
-        let mut src = zip::ZipArchive::new(Cursor::new(mini))
-            .context("reopen worker mini-zip for merge")?;
+        let mut src =
+            zip::ZipArchive::new(Cursor::new(mini)).context("reopen worker mini-zip for merge")?;
         let entry = src.by_index_raw(0).context("read mini-zip entry")?;
-        zip.raw_copy_file(entry).context("merge entry into payload zip")?;
+        zip.raw_copy_file(entry)
+            .context("merge entry into payload zip")?;
     }
 
     Ok(zip.finish()?.into_inner())
@@ -617,7 +657,10 @@ fn find_workspace_root() -> Result<PathBuf> {
             }
         }
         if !p.pop() {
-            bail!("could not locate workspace root from {:?}", std::env::current_dir());
+            bail!(
+                "could not locate workspace root from {:?}",
+                std::env::current_dir()
+            );
         }
     }
 }
@@ -664,7 +707,11 @@ fn parse_assocs(raw: &[String], product_id: &str) -> Result<Vec<FileAssoc>> {
 
 /// First non-empty line of `s`, truncated to 60 chars - used for log preview.
 fn trimmed_title(s: &str) -> String {
-    let line = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let line = s
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if line.chars().count() > 60 {
         format!("{}...", line.chars().take(60).collect::<String>())
     } else {
@@ -678,11 +725,7 @@ mod tests {
 
     #[test]
     fn parse_assocs_valid_and_colon_in_desc() {
-        let v = parse_assocs(
-            &[".myx:My Doc".to_string(), ".a:b:c".to_string()],
-            "Prod",
-        )
-        .unwrap();
+        let v = parse_assocs(&[".myx:My Doc".to_string(), ".a:b:c".to_string()], "Prod").unwrap();
         assert_eq!(v[0].ext, ".myx");
         assert_eq!(v[0].description, "My Doc");
         // split_once on the first ':' -> description keeps the rest.
@@ -702,13 +745,13 @@ mod tests {
             assert!(validate_product_id(ok).is_ok(), "should accept {ok}");
         }
         for bad in [
-            "",            // empty
-            "1abc",        // starts with digit
-            "_app",        // starts with non-letter
-            "my app",      // space
-            "a/b",         // slash
-            "app:1",       // colon
-            "café",        // non-ASCII
+            "",              // empty
+            "1abc",          // starts with digit
+            "_app",          // starts with non-letter
+            "my app",        // space
+            "a/b",           // slash
+            "app:1",         // colon
+            "café",          // non-ASCII
             &"a".repeat(51), // too long
         ] {
             assert!(validate_product_id(bad).is_err(), "should reject {bad:?}");
@@ -718,7 +761,9 @@ mod tests {
     #[test]
     fn case_collision_detection() {
         assert!(check_case_collisions(&["A.txt".to_string(), "b.txt".to_string()]).is_ok());
-        assert!(check_case_collisions(&["dir/A.txt".to_string(), "dir/a.txt".to_string()]).is_err());
+        assert!(
+            check_case_collisions(&["dir/A.txt".to_string(), "dir/a.txt".to_string()]).is_err()
+        );
         assert!(check_case_collisions(&["Foo".to_string(), "foo".to_string()]).is_err());
     }
 

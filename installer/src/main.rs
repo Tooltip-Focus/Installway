@@ -51,27 +51,36 @@ fn run() -> Result<()> {
 
     // Compact auto-start update UI (app-triggered self-update): no license,
     // path picker or buttons - just icon + progress.
-    if let Some(idx) = args.iter().position(|a| a == "--minimal" || a == "/minimal") {
+    if let Some(idx) = args
+        .iter()
+        .position(|a| a == "--minimal" || a == "/minimal")
+    {
         let path = path_arg(&args, idx)
             .or_else(|| std::env::var("INSTALLWAY_PATH").ok())
-            .unwrap_or_else(|| default_install_path(&loaded.payload).to_string_lossy().into_owned());
+            .unwrap_or_else(|| {
+                default_install_path(&loaded.payload)
+                    .to_string_lossy()
+                    .into_owned()
+            });
         return ui::minimal::run(loaded, PathBuf::from(path), launch, translator);
     }
 
     if let Some(idx) = args.iter().position(|a| a == "--silent" || a == "/S") {
         let path = path_arg(&args, idx)
             .or_else(|| std::env::var("INSTALLWAY_PATH").ok())
-            .unwrap_or_else(|| default_install_path(&loaded.payload).to_string_lossy().into_owned());
+            .unwrap_or_else(|| {
+                default_install_path(&loaded.payload)
+                    .to_string_lossy()
+                    .into_owned()
+            });
         return run_silent(&loaded, PathBuf::from(path), launch);
     }
     // Diagnostic: re-hash installed files against the manifest in the data dir.
     if args.iter().any(|a| a == "--verify-install") {
         attach_console();
-        let data_dir = common::paths::uninstall_dir(
-            &loaded.payload.publisher,
-            &loaded.payload.product_id,
-        )
-        .context("resolve data dir")?;
+        let data_dir =
+            common::paths::uninstall_dir(&loaded.payload.publisher, &loaded.payload.product_id)
+                .context("resolve data dir")?;
         return extract::verify_install(&data_dir);
     }
 
@@ -87,7 +96,11 @@ fn run() -> Result<()> {
                 common::models::PayloadKind::Full => "FULL",
                 common::models::PayloadKind::Patch => "PATCH",
             },
-            loaded.payload.from_version.clone().unwrap_or_else(|| "(fresh)".to_string()),
+            loaded
+                .payload
+                .from_version
+                .clone()
+                .unwrap_or_else(|| "(fresh)".to_string()),
             loaded.payload.to_version,
             loaded.zip().len(),
             license,
@@ -118,15 +131,13 @@ fn attach_console() {
     }
 }
 
-fn run_silent(
-    loaded: &payload::LoadedPayload,
-    install_dir: PathBuf,
-    launch: bool,
-) -> Result<()> {
+fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: bool) -> Result<()> {
     attach_console();
     println!(
         "Silent install: {} {} -> {}",
-        loaded.payload.product, loaded.payload.to_version, install_dir.display()
+        loaded.payload.product,
+        loaded.payload.to_version,
+        install_dir.display()
     );
     let progress = Arc::new(|done: u64, total: u64, name: &str| {
         if total > 0 {
@@ -205,7 +216,10 @@ fn expand_env(s: &str) -> String {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
     use windows::core::PCWSTR;
-    let src: Vec<u16> = std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect();
+    let src: Vec<u16> = std::ffi::OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let needed = unsafe { ExpandEnvironmentStringsW(PCWSTR(src.as_ptr()), None) };
     if needed == 0 {
         return s.to_string();
@@ -224,7 +238,10 @@ fn report_fatal(msg: &str) {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     use windows::core::PCWSTR;
-    let text: Vec<u16> = OsStr::new(msg).encode_wide().chain(std::iter::once(0)).collect();
+    let text: Vec<u16> = OsStr::new(msg)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let cap: Vec<u16> = OsStr::new("Installer error")
         .encode_wide()
         .chain(std::iter::once(0))

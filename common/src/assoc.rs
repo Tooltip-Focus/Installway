@@ -65,9 +65,7 @@ pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc]) {
             set_default(h, &format!("\"{}\",0", exe_path));
             close(h);
         }
-        if let Some(h) =
-            create_key(&format!(r"Software\Classes\{}\shell\open\command", progid))
-        {
+        if let Some(h) = create_key(&format!(r"Software\Classes\{}\shell\open\command", progid)) {
             set_default(h, &format!("\"{}\" \"%1\"", exe_path));
             close(h);
         }
@@ -91,8 +89,7 @@ pub fn unregister(product_id: &str, assocs: &[FileAssoc]) {
         let progid = progid_for(product_id, &ext);
 
         // Only clear the extension default if it still points at us.
-        if read_default(&format!(r"Software\Classes\{}", ext)).as_deref() == Some(progid.as_str())
-        {
+        if read_default(&format!(r"Software\Classes\{}", ext)).as_deref() == Some(progid.as_str()) {
             delete_tree(&format!(r"Software\Classes\{}", ext));
         }
         delete_tree(&format!(r"Software\Classes\{}", progid));
@@ -132,8 +129,7 @@ fn set_default(hkey: HKEY, value: &str) {
     use windows::Win32::System::Registry::{REG_SZ, RegSetValueExW};
     use windows::core::PCWSTR;
     let v: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
-    let bytes: &[u8] =
-        unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) };
+    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) };
     unsafe {
         // Name = null/empty → the key's (Default) value.
         let _ = RegSetValueExW(hkey, PCWSTR::null(), None, REG_SZ, Some(bytes));
@@ -155,7 +151,14 @@ fn read_default(sub: &str) -> Option<String> {
     let w: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let mut hkey = HKEY::default();
-        if RegOpenKeyExW(HKEY_CURRENT_USER, PCWSTR(w.as_ptr()), None, KEY_READ, &mut hkey).is_err()
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(w.as_ptr()),
+            None,
+            KEY_READ,
+            &mut hkey,
+        )
+        .is_err()
         {
             return None;
         }
@@ -215,14 +218,20 @@ mod tests {
     }
 
     fn assoc(ext: &str) -> FileAssoc {
-        FileAssoc { ext: ext.to_string(), description: format!("{ext} doc") }
+        FileAssoc {
+            ext: ext.to_string(),
+            description: format!("{ext} doc"),
+        }
     }
 
     #[test]
     fn stale_returns_only_dropped_extensions() {
         let prior = [assoc(".myx"), assoc(".myz"), assoc(".abc")];
         let current = [assoc(".abc")];
-        let got: Vec<String> = stale(&prior, &current).iter().map(|a| a.ext.clone()).collect();
+        let got: Vec<String> = stale(&prior, &current)
+            .iter()
+            .map(|a| a.ext.clone())
+            .collect();
         assert_eq!(got, vec![".myx".to_string(), ".myz".to_string()]);
     }
 

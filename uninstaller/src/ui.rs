@@ -157,8 +157,18 @@ pub fn run(params: UninstallParams) -> bool {
         };
 
         if !hicon.is_invalid() {
-            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(1)), Some(LPARAM(hicon.0 as isize)));
-            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(0)), Some(LPARAM(hicon.0 as isize)));
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(1)),
+                Some(LPARAM(hicon.0 as isize)),
+            );
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(0)),
+                Some(LPARAM(hicon.0 as isize)),
+            );
         }
 
         center(hwnd);
@@ -195,8 +205,8 @@ pub fn run(params: UninstallParams) -> bool {
             });
             if started && let Some(w) = worker_holder.take() {
                 thread::spawn(move || {
-                    let progress: Arc<dyn Fn(u64, u64, &str) + Send + Sync> = Arc::new(
-                        move |done, total, name| {
+                    let progress: Arc<dyn Fn(u64, u64, &str) + Send + Sync> =
+                        Arc::new(move |done, total, name| {
                             set_progress(done, total, name);
                             let _ = PostMessageW(
                                 Some(HWND(hwnd_isize as *mut _)),
@@ -204,8 +214,7 @@ pub fn run(params: UninstallParams) -> bool {
                                 WPARAM(0),
                                 LPARAM(0),
                             );
-                        },
-                    );
+                        });
                     w(progress);
                     let _ = PostMessageW(
                         Some(HWND(hwnd_isize as *mut _)),
@@ -272,7 +281,12 @@ unsafe fn apply_font(hwnd: HWND, id: usize, font: HFONT) {
     unsafe {
         let h = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
         if !h.is_invalid() {
-            SendMessageW(h, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
+            SendMessageW(
+                h,
+                WM_SETFONT,
+                Some(WPARAM(font.0 as usize)),
+                Some(LPARAM(1)),
+            );
         }
     }
 }
@@ -416,7 +430,12 @@ unsafe fn build_controls(hwnd: HWND, p: &UninstallParams) {
             unsafe {
                 apply_font(hwnd, ID_HEADER, st.font_header);
                 for id in [
-                    ID_SUBHEADER, ID_CONFIRM_TEXT, ID_PROGRESS, ID_STATUS, ID_YES_BTN, ID_NO_BTN,
+                    ID_SUBHEADER,
+                    ID_CONFIRM_TEXT,
+                    ID_PROGRESS,
+                    ID_STATUS,
+                    ID_YES_BTN,
+                    ID_NO_BTN,
                 ] {
                     apply_font(hwnd, id, st.font_body);
                 }
@@ -539,15 +558,26 @@ fn set_progress(done: u64, total: u64, name: &str) {
 
 unsafe fn update_progress(hwnd: HWND) {
     STATE.with(|s| {
-        let Some(state) = s.borrow().as_ref().cloned() else { return; };
+        let Some(state) = s.borrow().as_ref().cloned() else {
+            return;
+        };
         let st = state.borrow();
         let bar = unsafe { GetDlgItem(Some(hwnd), ID_PROGRESS as i32).unwrap_or_default() };
         let label = unsafe { GetDlgItem(Some(hwnd), ID_STATUS as i32).unwrap_or_default() };
-        let total = if st.progress_total == 0 { 1 } else { st.progress_total };
+        let total = if st.progress_total == 0 {
+            1
+        } else {
+            st.progress_total
+        };
         let scaled = ((st.progress_done as u128 * 10000u128) / total as u128) as i32;
         unsafe {
             SendMessageW(bar, PBM_SETRANGE32, Some(WPARAM(0)), Some(LPARAM(10000)));
-            SendMessageW(bar, PBM_SETPOS, Some(WPARAM(scaled as usize)), Some(LPARAM(0)));
+            SendMessageW(
+                bar,
+                PBM_SETPOS,
+                Some(WPARAM(scaled as usize)),
+                Some(LPARAM(0)),
+            );
             let label_text = wide(&st.status);
             let _ = SetWindowTextW(label, PCWSTR(label_text.as_ptr()));
         }
@@ -556,7 +586,9 @@ unsafe fn update_progress(hwnd: HWND) {
 
 unsafe fn center(hwnd: HWND) {
     let mut rect = RECT::default();
-    unsafe { let _ = GetWindowRect(hwnd, &mut rect); };
+    unsafe {
+        let _ = GetWindowRect(hwnd, &mut rect);
+    };
     let w = rect.right - rect.left;
     let h = rect.bottom - rect.top;
     let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
@@ -569,14 +601,22 @@ unsafe fn center(hwnd: HWND) {
 }
 
 fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 pub fn fatal(msg: &str) {
     let t = wide(msg);
     let c = wide(&tr().get("uninstall.fatal_caption"));
     unsafe {
-        MessageBoxW(None, PCWSTR(t.as_ptr()), PCWSTR(c.as_ptr()), MB_OK | MB_ICONERROR);
+        MessageBoxW(
+            None,
+            PCWSTR(t.as_ptr()),
+            PCWSTR(c.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 
@@ -585,7 +625,12 @@ pub fn info(msg: &str, caption: &str) {
     let t = wide(msg);
     let c = wide(caption);
     unsafe {
-        MessageBoxW(None, PCWSTR(t.as_ptr()), PCWSTR(c.as_ptr()), MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(
+            None,
+            PCWSTR(t.as_ptr()),
+            PCWSTR(c.as_ptr()),
+            MB_OK | MB_ICONINFORMATION,
+        );
     }
 }
 

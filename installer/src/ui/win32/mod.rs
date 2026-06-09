@@ -20,8 +20,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT, SetBkMode,
-    SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT,
+    SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
@@ -135,7 +135,14 @@ pub fn run(
             let _ = ShowWindow(hwnd, SW_SHOW);
             handlers::on_install(hwnd);
         } else {
-            apply_phase(hwnd, if skip_license { Phase::Choose } else { Phase::License });
+            apply_phase(
+                hwnd,
+                if skip_license {
+                    Phase::Choose
+                } else {
+                    Phase::License
+                },
+            );
             let _ = ShowWindow(hwnd, SW_SHOW);
         }
         helpers::pump_messages();
@@ -180,7 +187,10 @@ unsafe fn create_window(
 
         let title = helpers::wide(&tr().fmt(
             "install.window_title",
-            &[("product", &payload.product), ("version", &payload.to_version)],
+            &[
+                ("product", &payload.product),
+                ("version", &payload.to_version),
+            ],
         ));
 
         let state = Rc::new(RefCell::new(UiState {
@@ -220,8 +230,18 @@ unsafe fn create_window(
         )?;
 
         if !hicon.is_invalid() {
-            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(1)), Some(LPARAM(hicon.0 as isize)));
-            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(0)), Some(LPARAM(hicon.0 as isize)));
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(1)),
+                Some(LPARAM(hicon.0 as isize)),
+            );
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(0)),
+                Some(LPARAM(hicon.0 as isize)),
+            );
         }
 
         helpers::center(hwnd);
@@ -316,18 +336,28 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     show(ID_BROWSE_BTN, choose);
 
     show(ID_PROGRESS, prog);
-    show(ID_STATUS, phase == Phase::Progress || phase == Phase::Done || phase == Phase::Error);
+    show(
+        ID_STATUS,
+        phase == Phase::Progress || phase == Phase::Done || phase == Phase::Error,
+    );
     show(ID_LAUNCH_CHK, phase == Phase::Done);
 
     show(ID_BACK_BTN, phase == Phase::Choose && !skip_license());
     show(ID_NEXT_BTN, phase == Phase::License);
     show(ID_INSTALL_BTN, phase == Phase::Choose);
-    show(ID_CANCEL_BTN, phase == Phase::License || phase == Phase::Choose || phase == Phase::Progress);
+    show(
+        ID_CANCEL_BTN,
+        phase == Phase::License || phase == Phase::Choose || phase == Phase::Progress,
+    );
     show(ID_CLOSE_BTN, phase == Phase::Done || phase == Phase::Error);
 
     // With no Choose page, the License "Next" is really the install trigger.
     if phase == Phase::License {
-        let label = if skip_path() { "install.install" } else { "install.next" };
+        let label = if skip_path() {
+            "install.install"
+        } else {
+            "install.next"
+        };
         unsafe { helpers::set_dlg_text(hwnd, ID_NEXT_BTN, &tr().get(label)) };
     }
 
@@ -336,12 +366,21 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
             helpers::set_dlg_text(hwnd, ID_STATUS, &tr().get("install.done"));
             // Default the launch checkbox to checked if launch flag set OR exe known.
             let default_checked = LAUNCH_FLAG.with(|l| *l.borrow())
-                || PAYLOAD.with(|p| p.borrow().as_ref().map(|p| !p.manifest.exe.is_empty()).unwrap_or(false));
+                || PAYLOAD.with(|p| {
+                    p.borrow()
+                        .as_ref()
+                        .map(|p| !p.manifest.exe.is_empty())
+                        .unwrap_or(false)
+                });
             let h = GetDlgItem(Some(hwnd), ID_LAUNCH_CHK as i32).unwrap_or_default();
             SendMessageW(
                 h,
                 BM_SETCHECK,
-                Some(WPARAM(if default_checked { BST_CHECKED.0 as usize } else { BST_UNCHECKED.0 as usize })),
+                Some(WPARAM(if default_checked {
+                    BST_CHECKED.0 as usize
+                } else {
+                    BST_UNCHECKED.0 as usize
+                })),
                 Some(LPARAM(0)),
             );
         }
@@ -359,17 +398,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let _ = SetBkMode(hdc, TRANSPARENT);
             if ctrl == banner || ctrl == header || ctrl == sub {
                 SetTextColor(hdc, COLORREF(0x00333333));
-                return LRESULT(
-                    STATE.with(|s| {
-                        s.borrow().as_ref().map(|st| st.borrow().banner_brush.0 as isize).unwrap_or(0)
-                    }),
-                );
+                return LRESULT(STATE.with(|s| {
+                    s.borrow()
+                        .as_ref()
+                        .map(|st| st.borrow().banner_brush.0 as isize)
+                        .unwrap_or(0)
+                }));
             }
-            return LRESULT(
-                STATE.with(|s| {
-                    s.borrow().as_ref().map(|st| st.borrow().card_brush.0 as isize).unwrap_or(0)
-                }),
-            );
+            return LRESULT(STATE.with(|s| {
+                s.borrow()
+                    .as_ref()
+                    .map(|st| st.borrow().card_brush.0 as isize)
+                    .unwrap_or(0)
+            }));
         },
         WM_COMMAND => unsafe {
             let id = (wparam.0 & 0xFFFF) as usize;
@@ -397,7 +438,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             STATE.with(|s| {
                 if let Some(state) = s.borrow().as_ref() {
                     let text = state.borrow().error_text.clone();
-                    helpers::set_dlg_text(hwnd, ID_STATUS, &format!("{}{}", tr().get("install.err_prefix"), text));
+                    helpers::set_dlg_text(
+                        hwnd,
+                        ID_STATUS,
+                        &format!("{}{}", tr().get("install.err_prefix"), text),
+                    );
                 }
             });
             apply_phase(hwnd, Phase::Error);

@@ -27,14 +27,14 @@ use anyhow::Result;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use std::thread;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT, SetBkMode,
-    SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT,
+    SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
@@ -93,7 +93,13 @@ pub fn run(
     let win = unsafe { build_window(&loaded.payload)? };
 
     // Worker runs in safe code; only the message posts touch FFI.
-    spawn_worker(win.hwnd_isize, install_dir, launch_flag, win.cancel, win.prog);
+    spawn_worker(
+        win.hwnd_isize,
+        install_dir,
+        launch_flag,
+        win.cancel,
+        win.prog,
+    );
 
     unsafe { helpers::pump_messages() };
     Ok(())
@@ -146,7 +152,11 @@ unsafe fn build_window(payload: &common::models::InstallerPayload) -> Result<Win
     let title_w = wide(&tr().get("install.minimal_title"));
     let state = Rc::new(RefCell::new(State {
         cancel: Arc::new(AtomicBool::new(false)),
-        prog: Arc::new(Mutex::new(Prog { done: 0, total: 0, name: String::new() })),
+        prog: Arc::new(Mutex::new(Prog {
+            done: 0,
+            total: 0,
+            name: String::new(),
+        })),
         error: String::new(),
         font_title: create_font("Segoe UI Semibold", 20, FW_SEMIBOLD.0 as i32),
         font_body: create_font("Segoe UI", 15, FW_NORMAL.0 as i32),
@@ -178,8 +188,18 @@ unsafe fn build_window(payload: &common::models::InstallerPayload) -> Result<Win
     }?;
     if !hicon.is_invalid() {
         unsafe {
-            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(1)), Some(LPARAM(hicon.0 as isize)));
-            SendMessageW(hwnd, WM_SETICON, Some(WPARAM(0)), Some(LPARAM(hicon.0 as isize)));
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(1)),
+                Some(LPARAM(hicon.0 as isize)),
+            );
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(0)),
+                Some(LPARAM(hicon.0 as isize)),
+            );
         }
     }
 
@@ -189,7 +209,11 @@ unsafe fn build_window(payload: &common::models::InstallerPayload) -> Result<Win
         let _ = ShowWindow(hwnd, SW_SHOW);
     }
 
-    Ok(Window { hwnd_isize: hwnd.0 as isize, cancel, prog })
+    Ok(Window {
+        hwnd_isize: hwnd.0 as isize,
+        cancel,
+        prog,
+    })
 }
 
 /// Auto-start the install worker (no button). Posts progress/done/error back
@@ -256,7 +280,10 @@ unsafe fn build_controls(hwnd: HWND, payload: &common::models::InstallerPayload)
     let title_w = wide(&tr.get("install.minimal_title"));
     let sub_w = wide(&tr.fmt(
         "install.minimal_sub",
-        &[("product", &payload.product), ("version", &payload.to_version)],
+        &[
+            ("product", &payload.product),
+            ("version", &payload.to_version),
+        ],
     ));
 
     unsafe {
@@ -372,7 +399,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 SetTextColor(hdc, COLORREF(0x00202020));
             }
             return LRESULT(STATE.with(|s| {
-                s.borrow().as_ref().map(|st| st.borrow().bg.0 as isize).unwrap_or(0)
+                s.borrow()
+                    .as_ref()
+                    .map(|st| st.borrow().bg.0 as isize)
+                    .unwrap_or(0)
             }));
         },
         m if m == WM_APP_PROGRESS => unsafe {
@@ -395,7 +425,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             STATE.with(|s| {
                 if let Some(st) = s.borrow().as_ref() {
                     let e = st.borrow().error.clone();
-                    set_dlg_text(hwnd, ID_STATUS, &format!("{}{}", tr().get("install.err_prefix"), e));
+                    set_dlg_text(
+                        hwnd,
+                        ID_STATUS,
+                        &format!("{}{}", tr().get("install.err_prefix"), e),
+                    );
                 }
             });
             LRESULT(0)
@@ -422,7 +456,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 unsafe fn update_progress(hwnd: HWND) {
     STATE.with(|s| {
-        let Some(st) = s.borrow().as_ref().cloned() else { return; };
+        let Some(st) = s.borrow().as_ref().cloned() else {
+            return;
+        };
         let st = st.borrow();
         let (done, total, name) = match st.prog.lock() {
             Ok(p) => (p.done, p.total, p.name.clone()),

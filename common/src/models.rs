@@ -194,7 +194,10 @@ mod tests {
                 total_patch_size: 0,
             },
             license_text: None,
-            associations: vec![FileAssoc { ext: ".x".into(), description: "X".into() }],
+            associations: vec![FileAssoc {
+                ext: ".x".into(),
+                description: "X".into(),
+            }],
             force_reinstall: true,
             skip_license: true,
             skip_path: false,
@@ -208,7 +211,10 @@ mod tests {
         assert!(back.force_reinstall);
         assert!(back.skip_license);
         assert!(!back.skip_path);
-        assert_eq!(back.default_install_dir.as_deref(), Some(r"%LOCALAPPDATA%\Programs\P"));
+        assert_eq!(
+            back.default_install_dir.as_deref(),
+            Some(r"%LOCALAPPDATA%\Programs\P")
+        );
         assert!(back.upgrade_minimal_ui);
         assert_eq!(back.associations.len(), 1);
         assert_eq!(back.from_version.as_deref(), Some("1.0"));

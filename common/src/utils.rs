@@ -42,7 +42,9 @@ pub fn rename_retry(src: &Path, dest: &Path) -> Result<()> {
         src.display(),
         dest.display(),
         FS_RETRIES,
-        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown".into())
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown".into())
     ))
 }
 
@@ -65,7 +67,9 @@ pub fn remove_file_retry(path: &Path) -> Result<()> {
         "could not remove {} after {} attempts: {}",
         path.display(),
         FS_RETRIES,
-        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown".into())
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown".into())
     ))
 }
 
@@ -104,7 +108,9 @@ pub fn copy_retry(src: &Path, dest: &Path) -> Result<()> {
         src.display(),
         dest.display(),
         FS_RETRIES,
-        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown".into())
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown".into())
     ))
 }
 
@@ -125,13 +131,14 @@ fn write_bytes_retry(path: &Path, bytes: &[u8]) -> Result<()> {
         "could not write {} after {} attempts: {}",
         path.display(),
         FS_RETRIES,
-        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown".into())
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown".into())
     ))
 }
 
 pub fn file_blake3(path: &Path) -> Result<String> {
-    let mut file = File::open(path)
-        .with_context(|| format!("open {}", path.display()))?;
+    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = blake3::Hasher::new();
     std::io::copy(&mut file, &mut hasher)?;
     Ok(hasher.finalize().to_hex().to_string())

@@ -187,7 +187,11 @@ fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path) -> Result<()>
         );
         set_sz_logged(hkey, "InstallLocation", &info.install_dir);
         set_sz_logged(hkey, "Publisher", &info.publisher);
-        set_sz_logged(hkey, "InstallDate", &install_date_yyyymmdd(info.installed_at_unix));
+        set_sz_logged(
+            hkey,
+            "InstallDate",
+            &install_date_yyyymmdd(info.installed_at_unix),
+        );
         set_sz_logged(hkey, "DisplayIcon", &uninstaller_path.to_string_lossy());
         set_sz_logged(hkey, "NoModify", "1");
         set_sz_logged(hkey, "NoRepair", "1");
@@ -206,9 +210,7 @@ unsafe fn set_sz(
     use windows::core::PCWSTR;
     let n: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     let v: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
-    let bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2)
-    };
+    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) };
     let rc = unsafe { RegSetValueExW(hkey, PCWSTR(n.as_ptr()), None, REG_SZ, Some(bytes)) };
     if rc.is_err() {
         anyhow::bail!("RegSetValueEx({}) failed: {:?}", name, rc);

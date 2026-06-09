@@ -26,8 +26,7 @@ const ES_MULTILINE: u32 = 0x0004;
 const ES_LEFT: u32 = 0x0000;
 const WS_VSCROLL: WINDOW_STYLE = WINDOW_STYLE(0x0020_0000);
 
-const LOREM: &str =
-"END USER LICENSE AGREEMENT - SAMPLE\r\n\r\n\
+const LOREM: &str = "END USER LICENSE AGREEMENT - SAMPLE\r\n\r\n\
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod \
 tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, \
 quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo \
@@ -46,7 +45,11 @@ excepturi sint occaecati cupiditate non provident, similique sunt in culpa \
 qui officia deserunt mollitia animi, id est laborum et dolorum fuga.\r\n\r\n\
 By clicking 'I accept' you agree to be bound by the terms above.";
 
-pub(super) unsafe fn build_controls(hwnd: HWND, payload: &InstallerPayload, default_path: &PathBuf) {
+pub(super) unsafe fn build_controls(
+    hwnd: HWND,
+    payload: &InstallerPayload,
+    default_path: &PathBuf,
+) {
     let hinst = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() }.0);
     unsafe {
         build_banner_header(hwnd, hinst, payload);
@@ -64,7 +67,10 @@ unsafe fn build_banner_header(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerP
     let tr = tr();
     let header = wide(&tr.fmt(
         "install.header",
-        &[("product", &payload.product), ("version", &payload.to_version)],
+        &[
+            ("product", &payload.product),
+            ("version", &payload.to_version),
+        ],
     ));
     let sub = match payload.kind {
         PayloadKind::Full => tr.get("install.sub_full"),
@@ -81,22 +87,46 @@ unsafe fn build_banner_header(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerP
     unsafe {
         // Banner background - a wide empty STATIC; WM_CTLCOLORSTATIC paints it.
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("STATIC"), w!(""),
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!(""),
             WS_VISIBLE | WS_CHILD,
-            0, 0, WIN_W, BANNER_H,
-            Some(hwnd), Some(HMENU(ID_BANNER as *mut _)), Some(hinst), None,
+            0,
+            0,
+            WIN_W,
+            BANNER_H,
+            Some(hwnd),
+            Some(HMENU(ID_BANNER as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("STATIC"), PCWSTR(header.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            PCWSTR(header.as_ptr()),
             WS_VISIBLE | WS_CHILD,
-            PAD, 16, WIN_W - PAD * 2, 28,
-            Some(hwnd), Some(HMENU(ID_HEADER as *mut _)), Some(hinst), None,
+            PAD,
+            16,
+            WIN_W - PAD * 2,
+            28,
+            Some(hwnd),
+            Some(HMENU(ID_HEADER as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("STATIC"), PCWSTR(sub_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            PCWSTR(sub_w.as_ptr()),
             WS_VISIBLE | WS_CHILD,
-            PAD, 46, WIN_W - PAD * 2, 20,
-            Some(hwnd), Some(HMENU(ID_SUBHEADER as *mut _)), Some(hinst), None,
+            PAD,
+            46,
+            WIN_W - PAD * 2,
+            20,
+            Some(hwnd),
+            Some(HMENU(ID_SUBHEADER as *mut _)),
+            Some(hinst),
+            None,
         );
     }
 }
@@ -113,17 +143,35 @@ unsafe fn build_license(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerPayload
     let license_w = wide(payload.license_text.as_deref().unwrap_or(LOREM));
     unsafe {
         let _ = CreateWindowExW(
-            WS_EX_CLIENTEDGE, w!("EDIT"), PCWSTR(license_w.as_ptr()),
-            WS_CHILD | WS_CLIPSIBLINGS | WS_VSCROLL
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            PCWSTR(license_w.as_ptr()),
+            WS_CHILD
+                | WS_CLIPSIBLINGS
+                | WS_VSCROLL
                 | WINDOW_STYLE((ES_MULTILINE | ES_READONLY | ES_LEFT) as u32),
-            PAD, license_top, WIN_W - PAD * 2, license_h,
-            Some(hwnd), Some(HMENU(ID_LICENSE_EDIT as *mut _)), Some(hinst), None,
+            PAD,
+            license_top,
+            WIN_W - PAD * 2,
+            license_h,
+            Some(hwnd),
+            Some(HMENU(ID_LICENSE_EDIT as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(accept_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(accept_w.as_ptr()),
             WS_CHILD | WS_CLIPSIBLINGS | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX),
-            PAD, checkbox_y, WIN_W - PAD * 2, 22,
-            Some(hwnd), Some(HMENU(ID_ACCEPT_CHK as *mut _)), Some(hinst), None,
+            PAD,
+            checkbox_y,
+            WIN_W - PAD * 2,
+            22,
+            Some(hwnd),
+            Some(HMENU(ID_ACCEPT_CHK as *mut _)),
+            Some(hinst),
+            None,
         );
     }
 }
@@ -136,22 +184,46 @@ unsafe fn build_choose(hwnd: HWND, hinst: HINSTANCE, default_path: &PathBuf) {
     let path_str = wide(&default_path.to_string_lossy());
     unsafe {
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("STATIC"), PCWSTR(choose_label_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            PCWSTR(choose_label_w.as_ptr()),
             WS_CHILD,
-            PAD, BANNER_H + PAD + 8, WIN_W - PAD * 2, 20,
-            Some(hwnd), Some(HMENU(ID_PATH_LABEL as *mut _)), Some(hinst), None,
+            PAD,
+            BANNER_H + PAD + 8,
+            WIN_W - PAD * 2,
+            20,
+            Some(hwnd),
+            Some(HMENU(ID_PATH_LABEL as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WS_EX_CLIENTEDGE, w!("EDIT"), PCWSTR(path_str.as_ptr()),
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            PCWSTR(path_str.as_ptr()),
             WS_CHILD | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
-            PAD, BANNER_H + PAD + 32, WIN_W - PAD * 2 - 120, 28,
-            Some(hwnd), Some(HMENU(ID_PATH_EDIT as *mut _)), Some(hinst), None,
+            PAD,
+            BANNER_H + PAD + 32,
+            WIN_W - PAD * 2 - 120,
+            28,
+            Some(hwnd),
+            Some(HMENU(ID_PATH_EDIT as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(browse_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(browse_w.as_ptr()),
             WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON),
-            WIN_W - PAD - 110, BANNER_H + PAD + 32, 110, 28,
-            Some(hwnd), Some(HMENU(ID_BROWSE_BTN as *mut _)), Some(hinst), None,
+            WIN_W - PAD - 110,
+            BANNER_H + PAD + 32,
+            110,
+            28,
+            Some(hwnd),
+            Some(HMENU(ID_BROWSE_BTN as *mut _)),
+            Some(hinst),
+            None,
         );
     }
 }
@@ -160,16 +232,32 @@ unsafe fn build_choose(hwnd: HWND, hinst: HINSTANCE, default_path: &PathBuf) {
 unsafe fn build_progress(hwnd: HWND, hinst: HINSTANCE) {
     unsafe {
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), PROGRESS_CLASSW, PCWSTR::null(),
+            WINDOW_EX_STYLE(0),
+            PROGRESS_CLASSW,
+            PCWSTR::null(),
             WS_CHILD,
-            PAD, BANNER_H + PAD + 16, WIN_W - PAD * 2, 22,
-            Some(hwnd), Some(HMENU(ID_PROGRESS as *mut _)), Some(hinst), None,
+            PAD,
+            BANNER_H + PAD + 16,
+            WIN_W - PAD * 2,
+            22,
+            Some(hwnd),
+            Some(HMENU(ID_PROGRESS as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("STATIC"), w!(""),
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!(""),
             WS_CHILD,
-            PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 48,
-            Some(hwnd), Some(HMENU(ID_STATUS as *mut _)), Some(hinst), None,
+            PAD,
+            BANNER_H + PAD + 48,
+            WIN_W - PAD * 2,
+            48,
+            Some(hwnd),
+            Some(HMENU(ID_STATUS as *mut _)),
+            Some(hinst),
+            None,
         );
     }
 }
@@ -179,10 +267,18 @@ unsafe fn build_done(hwnd: HWND, hinst: HINSTANCE) {
     let run_now_w = wide(&tr().get("install.run_now"));
     unsafe {
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(run_now_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(run_now_w.as_ptr()),
             WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX),
-            PAD, WIN_H - 124, WIN_W - PAD * 2, 22,
-            Some(hwnd), Some(HMENU(ID_LAUNCH_CHK as *mut _)), Some(hinst), None,
+            PAD,
+            WIN_H - 124,
+            WIN_W - PAD * 2,
+            22,
+            Some(hwnd),
+            Some(HMENU(ID_LAUNCH_CHK as *mut _)),
+            Some(hinst),
+            None,
         );
     }
 }
@@ -198,49 +294,101 @@ unsafe fn build_buttons(hwnd: HWND, hinst: HINSTANCE) {
     let btn_y = WIN_H - 84;
     unsafe {
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(back_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(back_w.as_ptr()),
             WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON),
-            PAD, btn_y, 100, 32,
-            Some(hwnd), Some(HMENU(ID_BACK_BTN as *mut _)), Some(hinst), None,
+            PAD,
+            btn_y,
+            100,
+            32,
+            Some(hwnd),
+            Some(HMENU(ID_BACK_BTN as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(next_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(next_w.as_ptr()),
             WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON),
-            WIN_W - PAD - 240, btn_y, 110, 32,
-            Some(hwnd), Some(HMENU(ID_NEXT_BTN as *mut _)), Some(hinst), None,
+            WIN_W - PAD - 240,
+            btn_y,
+            110,
+            32,
+            Some(hwnd),
+            Some(HMENU(ID_NEXT_BTN as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(install_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(install_w.as_ptr()),
             WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON),
-            WIN_W - PAD - 240, btn_y, 110, 32,
-            Some(hwnd), Some(HMENU(ID_INSTALL_BTN as *mut _)), Some(hinst), None,
+            WIN_W - PAD - 240,
+            btn_y,
+            110,
+            32,
+            Some(hwnd),
+            Some(HMENU(ID_INSTALL_BTN as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(cancel_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(cancel_w.as_ptr()),
             WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON),
-            WIN_W - PAD - 120, btn_y, 120, 32,
-            Some(hwnd), Some(HMENU(ID_CANCEL_BTN as *mut _)), Some(hinst), None,
+            WIN_W - PAD - 120,
+            btn_y,
+            120,
+            32,
+            Some(hwnd),
+            Some(HMENU(ID_CANCEL_BTN as *mut _)),
+            Some(hinst),
+            None,
         );
         let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0), w!("BUTTON"), PCWSTR(finish_w.as_ptr()),
+            WINDOW_EX_STYLE(0),
+            w!("BUTTON"),
+            PCWSTR(finish_w.as_ptr()),
             WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON),
-            WIN_W - PAD - 120, btn_y, 120, 32,
-            Some(hwnd), Some(HMENU(ID_CLOSE_BTN as *mut _)), Some(hinst), None,
+            WIN_W - PAD - 120,
+            btn_y,
+            120,
+            32,
+            Some(hwnd),
+            Some(HMENU(ID_CLOSE_BTN as *mut _)),
+            Some(hinst),
+            None,
         );
     }
 }
 
 unsafe fn apply_fonts(hwnd: HWND) {
     STATE.with(|s| {
-        let Some(st) = s.borrow().as_ref().cloned() else { return; };
+        let Some(st) = s.borrow().as_ref().cloned() else {
+            return;
+        };
         let st = st.borrow();
         unsafe {
             helpers::set_font(hwnd, ID_HEADER, st.font_header);
             helpers::set_font(hwnd, ID_SUBHEADER, st.font_normal);
             for id in [
-                ID_PATH_LABEL, ID_PATH_EDIT, ID_BROWSE_BTN, ID_INSTALL_BTN, ID_CANCEL_BTN,
-                ID_PROGRESS, ID_STATUS, ID_CLOSE_BTN, ID_LICENSE_EDIT, ID_ACCEPT_CHK,
-                ID_NEXT_BTN, ID_BACK_BTN, ID_LAUNCH_CHK,
+                ID_PATH_LABEL,
+                ID_PATH_EDIT,
+                ID_BROWSE_BTN,
+                ID_INSTALL_BTN,
+                ID_CANCEL_BTN,
+                ID_PROGRESS,
+                ID_STATUS,
+                ID_CLOSE_BTN,
+                ID_LICENSE_EDIT,
+                ID_ACCEPT_CHK,
+                ID_NEXT_BTN,
+                ID_BACK_BTN,
+                ID_LAUNCH_CHK,
             ] {
                 helpers::set_font(hwnd, id, st.font_normal);
             }

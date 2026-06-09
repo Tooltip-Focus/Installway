@@ -44,7 +44,12 @@ fn schedule_delete_on_reboot(path: &Path) -> bool {
         .chain(std::iter::once(0))
         .collect();
     unsafe {
-        MoveFileExW(PCWSTR(wide.as_ptr()), PCWSTR::null(), MOVEFILE_DELAY_UNTIL_REBOOT).is_ok()
+        MoveFileExW(
+            PCWSTR(wide.as_ptr()),
+            PCWSTR::null(),
+            MOVEFILE_DELAY_UNTIL_REBOOT,
+        )
+        .is_ok()
     }
 }
 
@@ -121,10 +126,19 @@ pub fn remove_payload_files(install_dir: &Path, manifest: &Manifest) -> usize {
 pub fn remove_shortcuts(product: &str) {
     for p in common::shortcuts::paths_for(product) {
         match remove_file_robust(&p) {
-            Removal::Absent => common::log::warn(format!("could not remove shortcut (absent): {}", p.display())),
-            Removal::Removed => {},
-            Removal::Pending => common::log::warn(format!("shortcut deletion will be delayed for next reboot: {}", p.display())),
-            Removal::Stuck => common::log::warn(format!("could not remove shortcut (locked): {}", p.display())),
+            Removal::Absent => common::log::warn(format!(
+                "could not remove shortcut (absent): {}",
+                p.display()
+            )),
+            Removal::Removed => {}
+            Removal::Pending => common::log::warn(format!(
+                "shortcut deletion will be delayed for next reboot: {}",
+                p.display()
+            )),
+            Removal::Stuck => common::log::warn(format!(
+                "could not remove shortcut (locked): {}",
+                p.display()
+            )),
         }
     }
 }
@@ -203,7 +217,11 @@ mod tests {
         let mut files = std::collections::HashMap::new();
         files.insert(
             "bin/a.exe".to_string(),
-            FileEntry { hash: "h".into(), size: 1, patch: None },
+            FileEntry {
+                hash: "h".into(),
+                size: 1,
+                patch: None,
+            },
         );
         let m = Manifest {
             version: "1.0".into(),

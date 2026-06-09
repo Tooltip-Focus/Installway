@@ -13,19 +13,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+use windows::Win32::Foundation::BOOL;
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WAIT_OBJECT_0, WPARAM};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_NAME_WIN32, PROCESS_SYNCHRONIZE,
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
     QueryFullProcessImageNameW, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindow, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-    SetForegroundWindow, ShowWindow, GW_OWNER, SW_RESTORE, WM_CLOSE,
+    EnumWindows, GW_OWNER, GetWindow, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+    SW_RESTORE, SetForegroundWindow, ShowWindow, WM_CLOSE,
 };
-use windows::Win32::Foundation::BOOL;
 use windows::core::PWSTR;
 
 /// Poll cadence while waiting for exit.
@@ -163,12 +163,8 @@ fn process_image_path(pid: u32) -> Option<std::path::PathBuf> {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 32768];
         let mut len = buf.len() as u32;
-        let res = QueryFullProcessImageNameW(
-            h,
-            PROCESS_NAME_WIN32,
-            PWSTR(buf.as_mut_ptr()),
-            &mut len,
-        );
+        let res =
+            QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
         let _ = CloseHandle(h);
         if res.is_ok() && len > 0 {
             Some(std::path::PathBuf::from(String::from_utf16_lossy(

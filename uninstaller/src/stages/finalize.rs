@@ -27,7 +27,10 @@ pub fn run(
     common::log::info(format!(
         "finalize start: product={} app_dir={} data_dir={} parent_pid={:?}",
         product,
-        app_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "<none>".into()),
+        app_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<none>".into()),
         data_dir.display(),
         parent_pid
     ));
@@ -111,6 +114,10 @@ fn schedule_self_delete_on_reboot() {
         .chain(std::iter::once(0))
         .collect();
     unsafe {
-        let _ = MoveFileExW(PCWSTR(w.as_ptr()), PCWSTR::null(), MOVEFILE_DELAY_UNTIL_REBOOT);
+        let _ = MoveFileExW(
+            PCWSTR(w.as_ptr()),
+            PCWSTR::null(),
+            MOVEFILE_DELAY_UNTIL_REBOOT,
+        );
     }
 }

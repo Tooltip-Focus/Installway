@@ -215,13 +215,28 @@ impl PackArgs {
         let req = |name: &str| format!("missing '{name}' (pass --{name} or set it in --config)");
 
         Ok(PackArgs {
-            product: cli.product.or(file.product).with_context(|| req("product"))?,
-            product_id: cli.product_id.or(file.product_id).with_context(|| req("product-id"))?,
-            publisher: cli.publisher.or(file.publisher).with_context(|| req("publisher"))?,
-            to_version: cli.to_version.or(file.to_version).with_context(|| req("to-version"))?,
+            product: cli
+                .product
+                .or(file.product)
+                .with_context(|| req("product"))?,
+            product_id: cli
+                .product_id
+                .or(file.product_id)
+                .with_context(|| req("product-id"))?,
+            publisher: cli
+                .publisher
+                .or(file.publisher)
+                .with_context(|| req("publisher"))?,
+            to_version: cli
+                .to_version
+                .or(file.to_version)
+                .with_context(|| req("to-version"))?,
             input: cli.input.or(file.input).with_context(|| req("input"))?,
             exe: cli.exe.or(file.exe).with_context(|| req("exe"))?,
-            priv_key: cli.priv_key.or(file.priv_key).with_context(|| req("priv-key"))?,
+            priv_key: cli
+                .priv_key
+                .or(file.priv_key)
+                .with_context(|| req("priv-key"))?,
             out: cli.out.or(file.out).with_context(|| req("out"))?,
 
             from_dir: cli.from_dir.or(file.from_dir),
@@ -233,7 +248,11 @@ impl PackArgs {
             uninstaller: cli.uninstaller.or(file.uninstaller),
 
             // CLI list replaces the file list when present.
-            assoc: if cli.assoc.is_empty() { file.assoc } else { cli.assoc },
+            assoc: if cli.assoc.is_empty() {
+                file.assoc
+            } else {
+                cli.assoc
+            },
             min_installer_version: cli
                 .min_installer_version
                 .or(file.min_installer_version)

@@ -64,7 +64,11 @@ impl Translator {
     /// Build a translator for an explicit language code (2 chars).
     /// Unknown codes return the default-language translator.
     pub fn for_lang(code: &str) -> Self {
-        let two = code.split(['-', '_']).next().unwrap_or(code).to_ascii_lowercase();
+        let two = code
+            .split(['-', '_'])
+            .next()
+            .unwrap_or(code)
+            .to_ascii_lowercase();
         for (c, _) in SUPPORTED {
             if *c == two {
                 return Self { lang: c };
@@ -122,9 +126,7 @@ impl Translator {
 
 impl Default for Translator {
     fn default() -> Self {
-        Self {
-            lang: DEFAULT_LANG,
-        }
+        Self { lang: DEFAULT_LANG }
     }
 }
 
@@ -162,7 +164,10 @@ mod tests {
     #[test]
     fn fmt_substitutes_placeholders() {
         let en = Translator::for_lang("en");
-        let s = en.fmt("install.window_title", &[("product", "Foo"), ("version", "1.0")]);
+        let s = en.fmt(
+            "install.window_title",
+            &[("product", "Foo"), ("version", "1.0")],
+        );
         assert!(s.contains("Foo") && s.contains("1.0"));
     }
 

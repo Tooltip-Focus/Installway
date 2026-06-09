@@ -173,12 +173,9 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
     // Close any running copy of the target app first (WM_CLOSE, never killed).
     {
         let pcb = ctx.on_progress.clone();
-        crate::proc::ensure_closed(
-            &ctx.install_dir,
-            &manifest.exe,
-            &ctx.cancel,
-            &move |msg| pcb(0, 0, msg),
-        )?;
+        crate::proc::ensure_closed(&ctx.install_dir, &manifest.exe, &ctx.cancel, &move |msg| {
+            pcb(0, 0, msg)
+        })?;
     }
 
     let temp_dir = ctx.install_dir.join(".installer_tmp");
@@ -206,8 +203,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
     ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
 
     // Deterministic order - easier UX and reproducible.
-    let mut entries: Vec<(&String, &common::models::FileEntry)> =
-        manifest.files.iter().collect();
+    let mut entries: Vec<(&String, &common::models::FileEntry)> = manifest.files.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
 
     // ---- PHASE 1: STAGE (parallel) ------------------------------------
@@ -439,10 +435,7 @@ fn stage_file(
                             common::log::info(format!("staged (patch): {}", rel));
                             return Ok(());
                         }
-                        common::log::warn(format!(
-                            "patch unusable, falling back to full: {}",
-                            rel
-                        ));
+                        common::log::warn(format!("patch unusable, falling back to full: {}", rel));
                         let _ = fs::remove_file(staged_path);
                     }
                 }
@@ -503,7 +496,10 @@ fn acquire_install_lock(install_dir: &Path) -> Result<InstallLock> {
     use windows::core::PCWSTR;
 
     // Normalize the path so different spellings of the same dir collide.
-    let key = install_dir.to_string_lossy().to_lowercase().replace('/', "\\");
+    let key = install_dir
+        .to_string_lossy()
+        .to_lowercase()
+        .replace('/', "\\");
     let hash = blake3::hash(key.as_bytes()).to_hex();
     // Local\ namespace = per-session, which matches our per-user installs.
     let name = format!("Local\\Installway-Install-{}", &hash.as_str()[..32]);
@@ -612,7 +608,9 @@ fn human_bytes(b: u64) -> String {
 }
 
 fn read_from_zip(archive: &mut ZipArchive<Cursor<&[u8]>>, rel: &str) -> Result<Vec<u8>> {
-    let mut f = archive.by_name(rel).with_context(|| format!("{} not in zip", rel))?;
+    let mut f = archive
+        .by_name(rel)
+        .with_context(|| format!("{} not in zip", rel))?;
     let mut buf = Vec::with_capacity(f.size() as usize);
     f.read_to_end(&mut buf)?;
     Ok(buf)
@@ -655,8 +653,7 @@ fn commit_one(install_dir: &Path, staged_dir: &Path, backup_dir: &Path, rel: &st
     let staged = long_path(&staged_dir.join(staged_name(rel)));
     if dest.exists() {
         let backup = long_path(&backup_dir.join(staged_name(rel)));
-        move_retry(&dest, &backup)
-            .with_context(|| format!("backup {} before overwrite", rel))?;
+        move_retry(&dest, &backup).with_context(|| format!("backup {} before overwrite", rel))?;
     }
     move_retry(&staged, &dest).with_context(|| format!("install {}", rel))?;
     Ok(())
@@ -829,8 +826,7 @@ fn repair_corrupt(
                 // Overwrite the corrupt file; backup left intact for rollback.
                 let dest = long_path(&install_dir.join(rel));
                 let staged = long_path(&staged_path);
-                move_retry(&staged, &dest)
-                    .with_context(|| format!("repair-install {}", rel))?;
+                move_retry(&staged, &dest).with_context(|| format!("repair-install {}", rel))?;
                 common::log::info(format!("repaired {}", rel));
                 Ok(())
             },
@@ -845,9 +841,8 @@ fn repair_corrupt(
 /// if anything is missing or corrupt (exit code 1 for scripts).
 pub fn verify_install(data_dir: &Path) -> Result<()> {
     let info_path = data_dir.join("installer_info.json");
-    let info_data = fs::read_to_string(&info_path).with_context(|| {
-        format!("read {} - is this product installed?", info_path.display())
-    })?;
+    let info_data = fs::read_to_string(&info_path)
+        .with_context(|| format!("read {} - is this product installed?", info_path.display()))?;
     let info: common::models::InstallInfo =
         serde_json::from_str(&info_data).context("parse installer_info.json")?;
 
@@ -1024,8 +1019,16 @@ mod tests {
         let corrupt = find_corrupt(&app, &manifest, &["foo.txt".to_string()]);
         assert_eq!(corrupt, vec!["foo.txt".to_string()]);
 
-        repair_corrupt(&zip, PayloadKind::Full, &manifest, &staged, &backup, &app, &corrupt)
-            .unwrap();
+        repair_corrupt(
+            &zip,
+            PayloadKind::Full,
+            &manifest,
+            &staged,
+            &backup,
+            &app,
+            &corrupt,
+        )
+        .unwrap();
 
         assert!(find_corrupt(&app, &manifest, &["foo.txt".to_string()]).is_empty());
         assert_eq!(fs::read(app.join("foo.txt")).unwrap(), good);
@@ -1035,4 +1038,3 @@ mod tests {
         blake3::hash(b).to_hex().to_string()
     }
 }
-

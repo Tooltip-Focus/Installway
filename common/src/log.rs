@@ -98,7 +98,10 @@ fn iso_utc(t: SystemTime) -> String {
     let h = tod / 3600;
     let m = (tod % 3600) / 60;
     let s = tod % 60;
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, mo, d, h, m, s, ms)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        y, mo, d, h, m, s, ms
+    )
 }
 
 fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {

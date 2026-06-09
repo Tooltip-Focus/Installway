@@ -12,8 +12,8 @@
 use anyhow::{Context, Result, bail};
 use std::cell::RefCell;
 use std::path::Path;
-use windows::Win32::Foundation::{BOOL, HMODULE, TRUE};
 use windows::Win32::Foundation::FreeLibrary;
+use windows::Win32::Foundation::{BOOL, HMODULE, TRUE};
 use windows::Win32::System::LibraryLoader::{
     BeginUpdateResourceW, EndUpdateResourceW, EnumResourceNamesW, FindResourceW,
     LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE, LoadLibraryExW, LoadResource,
@@ -104,12 +104,7 @@ unsafe fn enum_resource_names(hmod: HMODULE, rt: u16) -> Vec<ResName> {
     }
     FOUND.with(|f| f.borrow_mut().clear());
 
-    unsafe extern "system" fn cb(
-        _hmod: HMODULE,
-        _ty: PCWSTR,
-        name: PCWSTR,
-        _l: isize,
-    ) -> BOOL {
+    unsafe extern "system" fn cb(_hmod: HMODULE, _ty: PCWSTR, name: PCWSTR, _l: isize) -> BOOL {
         let v = name.0 as usize;
         // IS_INTRESOURCE: high word zero → integer id; else pointer to a wide string.
         if v >> 16 == 0 {
@@ -128,14 +123,8 @@ unsafe fn enum_resource_names(hmod: HMODULE, rt: u16) -> Vec<ResName> {
         TRUE
     }
 
-    let _ = unsafe {
-        EnumResourceNamesW(
-            Some(hmod),
-            PCWSTR(rt as usize as *const u16),
-            Some(cb),
-            0,
-        )
-    };
+    let _ =
+        unsafe { EnumResourceNamesW(Some(hmod), PCWSTR(rt as usize as *const u16), Some(cb), 0) };
     FOUND.with(|f| f.borrow().clone())
 }
 
@@ -174,7 +163,10 @@ pub fn embed_icons(target: &Path, icons: &ExeIcons) -> Result<()> {
         let h = BeginUpdateResourceW(PCWSTR(wide.as_ptr()), false)
             .with_context(|| format!("BeginUpdateResource {}", target.display()))?;
         if h.is_invalid() {
-            bail!("BeginUpdateResource invalid handle for {}", target.display());
+            bail!(
+                "BeginUpdateResource invalid handle for {}",
+                target.display()
+            );
         }
 
         // RT_ICON first, then RT_GROUP_ICON (group references the icons).

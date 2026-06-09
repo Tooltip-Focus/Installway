@@ -16,8 +16,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
+
+      # Global formatting gate (mirrors the .githooks/pre-commit check).
+      - name: Format check
+        run: cargo fmt --all --check
 
       - name: Build
         run: cargo build --workspace --locked

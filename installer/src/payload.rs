@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result, bail};
 use common::models::{InstallerPayload, SignedPayload};
-use ed25519_dalek::{Signature, VerifyingKey, Verifier};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 include!(concat!(env!("OUT_DIR"), "/pub_key.rs"));
 
@@ -66,7 +66,9 @@ pub fn load_and_verify() -> Result<LoadedPayload> {
     }
 
     // Verify BLAKE3 of the payload, over the mmap (not copied).
-    let actual_hash = blake3::hash(&map[zip_off..zip_off + zip_len]).to_hex().to_string();
+    let actual_hash = blake3::hash(&map[zip_off..zip_off + zip_len])
+        .to_hex()
+        .to_string();
     if actual_hash != payload.payload_blake3 {
         bail!(
             "payload hash mismatch: manifest declared {} but overlay hashes to {}",
@@ -112,7 +114,11 @@ fn pe_overlay_offset(data: &[u8]) -> Result<usize> {
         end = end.max(ptr_raw.saturating_add(size_raw));
     }
     if end == 0 || end > data.len() {
-        bail!("computed overlay offset {} invalid (file {})", end, data.len());
+        bail!(
+            "computed overlay offset {} invalid (file {})",
+            end,
+            data.len()
+        );
     }
     Ok(end)
 }
