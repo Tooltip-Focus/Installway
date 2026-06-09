@@ -37,9 +37,17 @@ pub struct PackCli {
     #[arg(long, value_name = "FILE.toml")]
     pub config: Option<PathBuf>,
 
-    /// Product name (key).
+    /// Product display name (ARP "DisplayName", version-info ProductName, UI
+    /// text, shortcut label). The human-facing name.
     #[arg(short, long)]
     pub product: Option<String>,
+
+    /// Registry-safe internal id, distinct from the display `--product`. Drives
+    /// the HKCU Uninstall key, association ProgIDs, the per-user data folder and
+    /// upgrade detection. Must match `^[A-Za-z][A-Za-z0-9._-]{0,49}$`; keep it
+    /// stable across versions.
+    #[arg(long)]
+    pub product_id: Option<String>,
 
     /// Publisher / vendor name. Used for the per-user uninstall data folder
     /// %LOCALAPPDATA%\<publisher>\Uninstall\<product> and the Add/Remove
@@ -135,6 +143,7 @@ pub struct PackCli {
 #[serde(deny_unknown_fields)]
 pub struct PackFile {
     pub product: Option<String>,
+    pub product_id: Option<String>,
     pub publisher: Option<String>,
     pub to_version: Option<String>,
     pub input: Option<PathBuf>,
@@ -167,6 +176,7 @@ pub struct PackFile {
 #[derive(Debug, Clone)]
 pub struct PackArgs {
     pub product: String,
+    pub product_id: String,
     pub publisher: String,
     pub to_version: String,
     pub input: PathBuf,
@@ -206,6 +216,7 @@ impl PackArgs {
 
         Ok(PackArgs {
             product: cli.product.or(file.product).with_context(|| req("product"))?,
+            product_id: cli.product_id.or(file.product_id).with_context(|| req("product-id"))?,
             publisher: cli.publisher.or(file.publisher).with_context(|| req("publisher"))?,
             to_version: cli.to_version.or(file.to_version).with_context(|| req("to-version"))?,
             input: cli.input.or(file.input).with_context(|| req("input"))?,
@@ -245,6 +256,7 @@ mod tests {
         PackCli {
             config: None,
             product: None,
+            product_id: None,
             publisher: None,
             to_version: None,
             input: None,
@@ -270,6 +282,7 @@ mod tests {
 
     const SAMPLE: &str = "\
 product = 'myapp'
+product_id = 'myapp'
 publisher = 'Acme'
 to_version = '1.0'
 input = 'build/myapp'
@@ -295,6 +308,7 @@ force_reinstall = true
         cli.config = Some(cfg);
         let r = PackArgs::resolve(cli).unwrap();
         assert_eq!(r.product, "myapp");
+        assert_eq!(r.product_id, "myapp");
         assert_eq!(r.publisher, "Acme");
         assert_eq!(r.assoc, vec![".myx:Doc".to_string()]);
         assert_eq!(r.min_installer_version, "1.0.0"); // default, absent in file

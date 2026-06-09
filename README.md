@@ -73,10 +73,10 @@ cargo build --release -p installer_builder
 
 # 3. pack a full installer
 .\target\release\installer_builder.exe pack `
-    --product   myapp --publisher "My Company" --to-version 1.0 `
-    --input     .\build\myapp-1.0 --exe myapp.exe `
-    --priv-key  .\keys\priv.key --pub-key .\keys\pub.key `
-    --out       .\dist\setup-myapp-1.0.exe
+    --product    "My App" --product-id myapp --publisher "My Company" --to-version 1.0 `
+    --input      .\build\myapp-1.0 --exe myapp.exe `
+    --priv-key   .\keys\priv.key --pub-key .\keys\pub.key `
+    --out        .\dist\setup-myapp-1.0.exe
 ```
 
 Patch installers, config files, packaging options (license, icon,

@@ -18,6 +18,7 @@ pub(crate) fn sample_payload(view: &str) -> common::models::InstallerPayload {
     InstallerPayload {
         kind: if is_patch { PayloadKind::Patch } else { PayloadKind::Full },
         product: "Sample App".to_string(),
+        product_id: "SampleApp".to_string(),
         publisher: "Acme Corp".to_string(),
         from_version: is_patch.then(|| "1.1.0".to_string()),
         to_version: "1.2.0".to_string(),

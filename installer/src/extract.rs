@@ -113,11 +113,12 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
     let manifest = &ctx.payload.manifest;
 
     // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
+    // Named by product_id (filesystem-safe, stable across versions).
     common::log::init(common::log::log_path_installer_temp(
-        &ctx.payload.product,
+        &ctx.payload.product_id,
         std::process::id(),
     ));
-    common::log::prune_temp_logs(&ctx.payload.product, 14);
+    common::log::prune_temp_logs(&ctx.payload.product_id, 14);
     let started = std::time::Instant::now();
     common::log::info(format!(
         "install start: product={} version={} kind={:?} install_dir={}",
@@ -744,7 +745,7 @@ fn recover_if_interrupted(temp_dir: &Path, install_dir: &Path) {
 /// Per-user data dir for this payload (where version.json / manifest / info /
 /// uninstall.exe / log live). `None` only if %LOCALAPPDATA% can't be resolved.
 fn data_dir_of(payload: &InstallerPayload) -> Option<PathBuf> {
-    common::paths::uninstall_dir(&payload.publisher, &payload.product)
+    common::paths::uninstall_dir(&payload.publisher, &payload.product_id)
 }
 
 /// Read the recorded installed version from `version.json` in the data dir.

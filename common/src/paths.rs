@@ -12,14 +12,16 @@
 
 use std::path::PathBuf;
 
-/// Folder holding `uninstall.exe` + install metadata for one product.
-/// `None` only if `%LOCALAPPDATA%` can't be resolved.
-pub fn uninstall_dir(publisher: &str, product: &str) -> Option<PathBuf> {
+/// Folder holding `uninstall.exe` + install metadata for one product, keyed by
+/// the registry-safe `product_id` (stable across versions). `None` only if
+/// `%LOCALAPPDATA%` can't be resolved. `sanitize_component` stays as
+/// defense-in-depth — a validated id passes through unchanged.
+pub fn uninstall_dir(publisher: &str, product_id: &str) -> Option<PathBuf> {
     let base = dirs::data_local_dir()?;
     Some(
         base.join(sanitize_component(publisher))
             .join("Uninstall")
-            .join(sanitize_component(product)),
+            .join(sanitize_component(product_id)),
     )
 }
 

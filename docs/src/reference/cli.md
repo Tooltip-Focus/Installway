@@ -23,7 +23,8 @@ Required fields are checked after merging. See [Config file](../building/config.
 
 | Option | Required | Meaning |
 |---|---|---|
-| `--product <NAME>` | yes | Product name / key. |
+| `--product <NAME>` | yes | Display name (ARP DisplayName, version-info, UI, shortcut label). |
+| `--product-id <ID>` | yes | Registry-safe internal id (HKCU Uninstall key, ProgIDs, data folder, upgrade detection). `^[A-Za-z][A-Za-z0-9._-]{0,49}$`; keep stable across versions. |
 | `--publisher <NAME>` | yes | Vendor name (ARP field + uninstall data folder). Must not be empty. |
 | `--to-version <VER>` | yes | New version; also parsed `a.b.c.d` for version-info. |
 | `--input <DIR>` | yes | Source dir of the new version's files. |

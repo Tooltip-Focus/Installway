@@ -9,7 +9,8 @@ rejected** as a typo guard. Booleans are `true`/`false`; `assoc` is an array.
 
 ```toml
 # pack.toml
-product    = "myapp"
+product    = "My App"        # display name
+product_id = "myapp"         # registry-safe id, stable across versions
 publisher  = "My Company"
 to_version = "1.0"
 input      = "build/myapp-1.0"
@@ -55,8 +56,9 @@ Run it:
 
 ## Required keys
 
-Via CLI **or** file: `product`, `publisher`, `to_version`, `input`, `exe`,
-`priv_key`, `out`. A missing one fails with a message naming it.
+Via CLI **or** file: `product`, `product_id`, `publisher`, `to_version`,
+`input`, `exe`, `priv_key`, `out`. A missing one fails with a message naming it.
+An invalid `product_id` (see [Full installer](full.md)) also fails the build.
 
 ## Merge rules
 

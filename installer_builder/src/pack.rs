@@ -42,6 +42,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
     if args.publisher.trim().is_empty() {
         bail!("--publisher must not be empty");
     }
+    validate_product_id(&args.product_id)?;
 
     println!("Mode: {}", if is_patch { "PATCH" } else { "FULL" });
 
@@ -86,11 +87,12 @@ pub fn run(args: &PackArgs) -> Result<()> {
         None => None,
     };
 
-    let associations = parse_assocs(&args.assoc, &args.product)?;
+    let associations = parse_assocs(&args.assoc, &args.product_id)?;
 
     let payload = InstallerPayload {
         kind: if is_patch { PayloadKind::Patch } else { PayloadKind::Full },
         product: args.product.clone(),
+        product_id: args.product_id.clone(),
         publisher: args.publisher.clone(),
         from_version: args.from_version.clone(),
         to_version: args.to_version.clone(),
@@ -620,9 +622,29 @@ fn find_workspace_root() -> Result<PathBuf> {
     }
 }
 
+/// Validate the registry-safe internal id: starts with an ASCII letter, then
+/// ASCII alphanumerics / `.` / `-` / `_`, length 1..=50. Keeps it usable as an
+/// HKCU subkey name and an association ProgID prefix.
+fn validate_product_id(id: &str) -> Result<()> {
+    let ok_len = (1..=50).contains(&id.len());
+    let mut chars = id.chars();
+    let ok_first = chars.next().is_some_and(|c| c.is_ascii_alphabetic());
+    let ok_rest = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if ok_len && ok_first && ok_rest {
+        Ok(())
+    } else {
+        bail!(
+            "invalid --product-id '{}': must be 1-50 chars, start with an ASCII \
+             letter, and contain only ASCII letters, digits, '.', '-' or '_' \
+             (registry- and ProgID-safe)",
+            id
+        );
+    }
+}
+
 /// Parse `--assoc ".ext:Description"` entries into `FileAssoc`s.
 /// Extension is normalized to a leading dot; description may contain colons.
-fn parse_assocs(raw: &[String], product: &str) -> Result<Vec<FileAssoc>> {
+fn parse_assocs(raw: &[String], product_id: &str) -> Result<Vec<FileAssoc>> {
     let mut out = Vec::with_capacity(raw.len());
     for s in raw {
         let (ext, desc) = s
@@ -633,7 +655,7 @@ fn parse_assocs(raw: &[String], product: &str) -> Result<Vec<FileAssoc>> {
             bail!("bad --assoc '{}': empty extension", s);
         }
         let description = desc.trim().to_string();
-        let progid = common::assoc::progid_for(product, &ext);
+        let progid = common::assoc::progid_for(product_id, &ext);
         println!("Association: {} -> {} ({})", ext, progid, description);
         out.push(FileAssoc { ext, description });
     }
@@ -672,6 +694,25 @@ mod tests {
     fn parse_assocs_rejects_bad() {
         assert!(parse_assocs(&["noColon".to_string()], "P").is_err());
         assert!(parse_assocs(&[":nodesc".to_string()], "P").is_err()); // empty ext
+    }
+
+    #[test]
+    fn product_id_validation() {
+        for ok in ["MyApp", "Acme.App", "a-b_c", "App2", "x"] {
+            assert!(validate_product_id(ok).is_ok(), "should accept {ok}");
+        }
+        for bad in [
+            "",            // empty
+            "1abc",        // starts with digit
+            "_app",        // starts with non-letter
+            "my app",      // space
+            "a/b",         // slash
+            "app:1",       // colon
+            "café",        // non-ASCII
+            &"a".repeat(51), // too long
+        ] {
+            assert!(validate_product_id(bad).is_err(), "should reject {bad:?}");
+        }
     }
 
     #[test]

@@ -16,12 +16,14 @@
 
 use crate::models::FileAssoc;
 
-/// Deterministic ProgID for a (product, extension) pair, e.g.
-/// `("My App", ".myx") -> "MyApp.myx"`.
-pub fn progid_for(product: &str, ext: &str) -> String {
-    let prod: String = product
+/// Deterministic ProgID for a (product_id, extension) pair, e.g.
+/// `("MyApp", ".myx") -> "MyApp.myx"`. `product_id` is the registry-safe id
+/// (validated at build time); the filter stays as defense-in-depth and to keep
+/// pre-split records (which passed the display name here) resolving the same.
+pub fn progid_for(product_id: &str, ext: &str) -> String {
+    let prod: String = product_id
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
         .collect();
     let e = ext.trim_start_matches('.');
     format!("{}.{}", prod, e)
@@ -46,13 +48,13 @@ pub fn stale(prior: &[FileAssoc], current: &[FileAssoc]) -> Vec<FileAssoc> {
         .collect()
 }
 
-pub fn register(product: &str, exe_path: &str, assocs: &[FileAssoc]) {
+pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc]) {
     if assocs.is_empty() {
         return;
     }
     for a in assocs {
         let ext = normalize_ext(&a.ext);
-        let progid = progid_for(product, &ext);
+        let progid = progid_for(product_id, &ext);
 
         // ProgID class
         if let Some(h) = create_key(&format!(r"Software\Classes\{}", progid)) {
@@ -80,13 +82,13 @@ pub fn register(product: &str, exe_path: &str, assocs: &[FileAssoc]) {
     notify_assoc_changed();
 }
 
-pub fn unregister(product: &str, assocs: &[FileAssoc]) {
+pub fn unregister(product_id: &str, assocs: &[FileAssoc]) {
     if assocs.is_empty() {
         return;
     }
     for a in assocs {
         let ext = normalize_ext(&a.ext);
-        let progid = progid_for(product, &ext);
+        let progid = progid_for(product_id, &ext);
 
         // Only clear the extension default if it still points at us.
         if read_default(&format!(r"Software\Classes\{}", ext)).as_deref() == Some(progid.as_str())

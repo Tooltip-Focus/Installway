@@ -9,7 +9,8 @@ You enter patch mode by giving both `--from-version` and `--from-dir`:
 
 ```pwsh
 .\target\release\installer_builder.exe pack `
-    --product      myapp `
+    --product      "My App" `
+    --product-id   myapp `
     --publisher    "My Company" `
     --from-version 1.0 --from-dir .\build\myapp-1.0 `
     --to-version   1.1 --input    .\build\myapp-1.1 `

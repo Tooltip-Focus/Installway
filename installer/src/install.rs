@@ -18,8 +18,9 @@ pub fn finalize(
     payload: &InstallerPayload,
     uninstaller_bytes: &[u8],
 ) -> Result<()> {
-    // Fall back to the app dir only if %LOCALAPPDATA% can't be resolved.
-    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product)
+    // Data dir is keyed by the registry-safe product_id (stable across
+    // versions). Fall back to the app dir only if %LOCALAPPDATA% can't resolve.
+    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product_id)
         .unwrap_or_else(|| install_dir.to_path_buf());
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("create uninstall data dir {}", data_dir.display()))?;
@@ -40,9 +41,12 @@ pub fn finalize(
     common::utils::write_atomic(&uninstaller_path, uninstaller_bytes)
         .with_context(|| format!("write {}", uninstaller_path.display()))?;
 
-    let key = registry_key_for(&payload.product);
+    // The HKCU Uninstall subkey IS the product_id (validated registry-safe at
+    // build time) — no on-the-fly sanitization of the display name.
+    let key = payload.product_id.clone();
     let info = InstallInfo {
         product: payload.product.clone(),
+        product_id: payload.product_id.clone(),
         publisher: payload.publisher.clone(),
         version: payload.to_version.clone(),
         install_dir: install_dir.to_string_lossy().into_owned(),
@@ -66,16 +70,18 @@ pub fn finalize(
     // Runs unconditionally (even if the new set is empty or there's no exe).
     let stale = common::assoc::stale(&prior_assocs, &payload.associations);
     if !stale.is_empty() {
-        common::assoc::unregister(&payload.product, &stale);
+        common::assoc::unregister(&payload.product_id, &stale);
     }
     if !payload.manifest.exe.is_empty() {
         let target = install_dir.join(&payload.manifest.exe);
+        // Shortcut label is the display name.
         create_shortcuts(&payload.product, install_dir, &target);
 
         if !payload.associations.is_empty() {
-            // Normalize separators so the registry command reads cleanly.
+            // ProgIDs are keyed by product_id. Normalize separators so the
+            // registry command reads cleanly.
             let exe_str = target.to_string_lossy().replace('/', "\\");
-            common::assoc::register(&payload.product, &exe_str, &payload.associations);
+            common::assoc::register(&payload.product_id, &exe_str, &payload.associations);
         }
     }
 
@@ -136,14 +142,6 @@ pub fn create_shortcuts(product: &str, install_dir: &Path, target: &Path) {
             )),
         }
     }
-}
-
-/// Sanitize product name for registry-key use.
-fn registry_key_for(product: &str) -> String {
-    product
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
-        .collect()
 }
 
 fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path) -> Result<()> {

@@ -7,7 +7,7 @@ points at the installed `manifest.exe` with `"%1"`.
 
 ```pwsh
 installer_builder.exe pack `
-    --product MyApp --publisher "My Company" --to-version 1.0 `
+    --product "MyApp" --product-id MyApp --publisher "My Company" --to-version 1.0 `
     --input .\build\myapp --exe myapp.exe `
     --assoc ".myx:MyApp Document" `
     --assoc ".myz:MyApp Archive" `
@@ -32,7 +32,7 @@ assoc = [".myx:MyApp Document", ".myz:MyApp Archive"]
 
 ## Keys written
 
-Per association (ProgID = `<sanitized-product>.<ext>`):
+Per association (ProgID = `<product-id>.<ext>`):
 
 ```text
 HKCU\Software\Classes\.myx                          (default) = MyApp.myx

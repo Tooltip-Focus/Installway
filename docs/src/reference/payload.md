@@ -30,7 +30,8 @@ parses `InstallerPayload` from them — avoiding any serializer-determinism trap
 | Field | Type | Notes |
 |---|---|---|
 | `kind` | `Full` \| `Patch` | |
-| `product` | `String` | |
+| `product` | `String` | display name (ARP DisplayName, version-info, UI, shortcut) |
+| `product_id` | `String` | registry-safe id: HKCU Uninstall key, ProgIDs, data folder, upgrade detection |
 | `publisher` | `String` | uninstall data folder + ARP "Publisher" |
 | `from_version` | `Option<String>` | set for patches; pins the target version |
 | `to_version` | `String` | |
@@ -79,8 +80,11 @@ struct PatchInfo {
 ## `InstallInfo`
 
 Persisted to `<install_dir>\installer_info.json` by the installer and read by
-the uninstaller: `product`, `publisher`, `version`, `install_dir`,
-`installed_at_unix`, `registry_key`, `exe`, and the `associations` to remove.
+the uninstaller: `product`, `product_id`, `publisher`, `version`,
+`install_dir`, `installed_at_unix`, `registry_key` (equal to `product_id`),
+`exe`, and the `associations` to remove. Records written before the
+product/id split have no `product_id`; readers fall back to `registry_key` and
+a sanitized `product`.
 
 ## Backward compatibility
 

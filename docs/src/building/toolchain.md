@@ -29,7 +29,7 @@ uninstaller:
 
 ```pwsh
 .\target\release\installer_builder.exe pack `
-    --product   myapp --publisher "My Company" --to-version 1.0 `
+    --product   "My App" --product-id myapp --publisher "My Company" --to-version 1.0 `
     --input     .\build\myapp-1.0 --exe myapp.exe `
     --priv-key  .\keys\priv.key `
     --pub-key   .\keys\pub.key `
@@ -102,7 +102,7 @@ kit\
 
 ```pwsh
 .\installer_builder.exe pack `
-    --product   myapp --publisher "My Company" --to-version 1.0 `
+    --product   "My App" --product-id myapp --publisher "My Company" --to-version 1.0 `
     --input     .\files --exe myapp.exe `
     --installer-stub .\installer.exe `
     --uninstaller    .\uninstall.exe `

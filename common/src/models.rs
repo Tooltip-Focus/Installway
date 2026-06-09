@@ -42,10 +42,19 @@ pub enum PayloadKind {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InstallerPayload {
     pub kind: PayloadKind,
+    /// Human-facing display name: ARP `DisplayName`, version-info ProductName,
+    /// installer/uninstaller UI text, and the shortcut label.
     pub product: String,
+    /// Registry-safe internal identifier, distinct from the display `product`.
+    /// Drives the HKCU Uninstall key, association ProgIDs, the per-user data
+    /// folder (`%LOCALAPPDATA%\<publisher>\Uninstall\<product_id>`) and upgrade
+    /// detection. Validated at build time. `#[serde(default)]` so payloads
+    /// predating the split still parse (empty → fall back to a sanitized
+    /// `product`).
+    #[serde(default)]
+    pub product_id: String,
     /// Publisher / vendor name. Used for the per-user uninstall data folder
-    /// (`%LOCALAPPDATA%\<publisher>\Uninstall\<product>`) and the Add/Remove
-    /// Programs "Publisher" field. Mandatory at build time.
+    /// and the Add/Remove Programs "Publisher" field. Mandatory at build time.
     #[serde(default)]
     pub publisher: String,
     pub from_version: Option<String>,
@@ -110,6 +119,11 @@ pub struct SignedPayload {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InstallInfo {
     pub product: String,
+    /// Registry-safe internal id (see `InstallerPayload::product_id`). Empty on
+    /// records written before the split — readers fall back to `registry_key` /
+    /// a sanitized `product`.
+    #[serde(default)]
+    pub product_id: String,
     #[serde(default)]
     pub publisher: String,
     pub version: String,
@@ -139,6 +153,7 @@ mod tests {
         }"#;
         let p: InstallerPayload = serde_json::from_str(j).unwrap();
         assert_eq!(p.publisher, "");
+        assert_eq!(p.product_id, "");
         assert!(!p.force_reinstall);
         assert!(!p.upgrade_minimal_ui);
         assert!(p.associations.is_empty());
@@ -154,6 +169,7 @@ mod tests {
         }"#;
         let i: InstallInfo = serde_json::from_str(j).unwrap();
         assert_eq!(i.publisher, "");
+        assert_eq!(i.product_id, "");
         assert!(i.associations.is_empty());
     }
 
@@ -162,6 +178,7 @@ mod tests {
         let p = InstallerPayload {
             kind: PayloadKind::Patch,
             product: "P".into(),
+            product_id: "P_id".into(),
             publisher: "Pub".into(),
             from_version: Some("1.0".into()),
             to_version: "1.1".into(),
@@ -187,6 +204,7 @@ mod tests {
         let s = serde_json::to_string(&p).unwrap();
         let back: InstallerPayload = serde_json::from_str(&s).unwrap();
         assert_eq!(back.publisher, "Pub");
+        assert_eq!(back.product_id, "P_id");
         assert!(back.force_reinstall);
         assert!(back.skip_license);
         assert!(!back.skip_path);

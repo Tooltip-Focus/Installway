@@ -4,7 +4,7 @@
 per-user data dir (mirroring InstallShield's "Installation Information" folder):
 
 ```text
-%LOCALAPPDATA%\<publisher>\Uninstall\<product>\
+%LOCALAPPDATA%\<publisher>\Uninstall\<product-id>\
     uninstall.exe
     installer_info.json        (holds the real install_dir + associations)
     installer_manifest.json

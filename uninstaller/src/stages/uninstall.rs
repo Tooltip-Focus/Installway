@@ -17,13 +17,12 @@ use std::sync::Arc;
 const DETACHED_PROCESS: u32 = 0x00000008;
 
 pub fn run(silent: bool) -> Result<()> {
-    // We run from the data dir (%LOCALAPPDATA%\<publisher>\Uninstall\<product>),
-    // NOT the application dir. The real app dir comes from installer_info.json.
+    // Runs from the data dir, not the app dir; the real app dir comes from
+    // installer_info.json.
     let data_dir = cleanup::self_dir()?;
 
-    // Uninstall log lives in %TEMP% so it survives the rmdir of both dirs.
-    // Name it by product (the data-dir folder name is the sanitized product)
-    // so support can tell which app this log is for.
+    // Log in %TEMP% so it survives the rmdir of both dirs. Hint = data-dir
+    // folder name (the product_id).
     let product_hint = data_dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -32,7 +31,6 @@ pub fn run(silent: bool) -> Result<()> {
         &product_hint,
         std::process::id(),
     ));
-    // Self-clean: drop this product's stale %TEMP% logs (> 14 days).
     common::log::prune_temp_logs(&product_hint, 14);
 
     // If the metadata is gone, just remove leftovers quietly (no error dialog).
@@ -42,11 +40,7 @@ pub fn run(silent: bool) -> Result<()> {
             common::log::warn(format!(
                 "installer_info.json unreadable ({e:#}) - best-effort cleanup of leftovers"
             ));
-            let product = data_dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            spawn_finalize(None, &data_dir, &product)?;
+            spawn_finalize(None, &data_dir)?;
             return Ok(());
         }
     };
@@ -110,10 +104,16 @@ pub fn run(silent: bool) -> Result<()> {
                 cleanup::remove_one_payload(&p);
             }
 
-            // 2. Shortcuts + file associations
+            // 2. Shortcuts + file associations. ProgID keyed by product_id;
+            //    old records (no id) fall back to the display name.
             counter.step(&tr.get("uninstall.removing_shortcuts"));
             cleanup::remove_shortcuts(&info_owned.product);
-            common::assoc::unregister(&info_owned.product, &info_owned.associations);
+            let assoc_id = if info_owned.product_id.is_empty() {
+                &info_owned.product
+            } else {
+                &info_owned.product_id
+            };
+            common::assoc::unregister(assoc_id, &info_owned.associations);
 
             // 3. App-dir state files (version.json, installer_manifest.json)
             counter.step(&tr.get("uninstall.removing_state"));
@@ -126,9 +126,9 @@ pub fn run(silent: bool) -> Result<()> {
             // 5. Registry - last so the entry stays visible until cleanup ran.
             cleanup::unregister(&info_owned.registry_key);
 
-            // 6. Finalize step deletes the app dir + the data dir (incl. us) + self.
-            common::log::info("spawning finalize step to delete app dir + data dir + self");
-            if let Err(e) = spawn_finalize(Some(&app_dir_owned), &data_dir_owned, &info_owned.product) {
+            // 6. Finalize: deletes app dir + data dir (incl. this exe) + itself.
+            common::log::info("spawning finalize step");
+            if let Err(e) = spawn_finalize(Some(&app_dir_owned), &data_dir_owned) {
                 common::log::error(format!("finalize spawn failed: {e:#}"));
                 ui::fatal(&tr.fmt("uninstall.spawn_failed", &[("err", &format!("{e:#}"))]));
             }
@@ -154,21 +154,26 @@ fn run_silent(
     let n = cleanup::remove_payload_files(app_dir, manifest);
     common::log::info(format!("removed {} payload files", n));
     cleanup::remove_shortcuts(&info.product);
-    common::assoc::unregister(&info.product, &info.associations);
+    let assoc_id = if info.product_id.is_empty() { &info.product } else { &info.product_id };
+    common::assoc::unregister(assoc_id, &info.associations);
     common::log::info("removed shortcuts + associations");
     let s = cleanup::remove_app_state_files(app_dir);
     common::log::info(format!("removed {} app state files", s));
     cleanup::remove_empty_subdirs(app_dir);
     cleanup::unregister(&info.registry_key);
     common::log::info(format!("unregistered HKCU Uninstall\\{}", info.registry_key));
-    spawn_finalize(Some(app_dir), data_dir, &info.product)
+    spawn_finalize(Some(app_dir), data_dir)
 }
 
-/// Spawn the temp-copy finalize step that deletes the app dir + data dir + itself.
-///
-/// `app_dir` is `None` when the installer metadata was unreadable; the finalize
-/// step will skip the app-dir removal in that case.
-fn spawn_finalize(app_dir: Option<&Path>, data_dir: &Path, product: &str) -> Result<()> {
+/// Spawn the %TEMP% finalize step that deletes the app dir, the data dir, and
+/// itself. `app_dir` is `None` when the metadata was unreadable (skips app-dir
+/// removal).
+fn spawn_finalize(app_dir: Option<&Path>, data_dir: &Path) -> Result<()> {
+    // Hint = data-dir folder name (the product_id), so finalize's log matches.
+    let product = data_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let self_exe = std::env::current_exe()?;
     let dest = staged_temp_path()?;
     // Retry past a transient AV scan of the freshly copied `.exe`; if this copy

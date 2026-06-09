@@ -69,7 +69,7 @@ fn run() -> Result<()> {
         attach_console();
         let data_dir = common::paths::uninstall_dir(
             &loaded.payload.publisher,
-            &loaded.payload.product,
+            &loaded.payload.product_id,
         )
         .context("resolve data dir")?;
         return extract::verify_install(&data_dir);
@@ -189,7 +189,7 @@ fn default_install_path(payload: &common::models::InstallerPayload) -> PathBuf {
 /// in the per-user data dir. `None` if never installed or the record is missing
 /// / empty.
 fn previous_install_dir(payload: &common::models::InstallerPayload) -> Option<PathBuf> {
-    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product)?;
+    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product_id)?;
     let text = std::fs::read_to_string(data_dir.join("installer_info.json")).ok()?;
     let info: common::models::InstallInfo = serde_json::from_str(&text).ok()?;
     if info.install_dir.trim().is_empty() {

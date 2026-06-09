@@ -9,7 +9,7 @@
 use crate::ui::{self, StepCounter, UninstallParams};
 use anyhow::Result;
 use std::fs;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -32,18 +32,14 @@ pub fn run(
         parent_pid
     ));
 
-    // `app_dir` (Option<PathBuf>) and `data_dir` (PathBuf) are moved directly
-    // into the closure — intermediate clones are no longer needed.
     let tr = crate::ui::tr();
     let params = UninstallParams {
         title: tr.fmt("uninstall.finalize_title", &[("product", &product)]),
         subtitle: tr.get("uninstall.finalize_subtitle"),
-        confirm_text: String::new(), // never shown - we auto-advance to Progress
+        confirm_text: String::new(), // never shown - auto-advances to Progress
         worker: Box::new(move |progress: Arc<dyn Fn(u64, u64, &str) + Send + Sync>| {
-
             let counter = StepCounter::new(4, progress);
             counter.step(&tr.get("uninstall.waiting"));
-            let tr = crate::ui::tr();
             // Wait for the uninstall step to exit so file locks release.
             if let Some(pid) = parent_pid {
                 wait_for_pid(pid, Duration::from_secs(10));
@@ -55,10 +51,9 @@ pub fn run(
                 common::utils::remove_dir_retry(dir);
             }
 
-            // Remove the data dir we were launched from (the running copy is
-            // the %TEMP% one, so the original is free to delete).
+            // Remove the data dir we launched from (we run from the %TEMP% copy).
             common::utils::remove_dir_retry(&data_dir);
-            // Best-effort: prune now-empty parent folders (Uninstall, publisher).
+            // Prune now-empty parent folders (Uninstall, publisher).
             if let Some(parent) = data_dir.parent() {
                 let _ = fs::remove_dir(parent); // "Uninstall"
                 if let Some(grand) = parent.parent() {

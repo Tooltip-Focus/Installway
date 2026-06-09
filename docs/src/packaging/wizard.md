@@ -14,7 +14,7 @@ With **both** skip flags, the wizard goes straight to Progress on launch.
 
 ```pwsh
 installer_builder.exe pack `
-    --product myapp --publisher "My Company" --to-version 1.0 `
+    --product "My App" --product-id myapp --publisher "My Company" --to-version 1.0 `
     --input .\build\myapp --exe myapp.exe `
     --skip-license --skip-path `
     --default-install-dir "%LOCALAPPDATA%\Programs\MyApp" `
@@ -39,7 +39,7 @@ All three are also [config-file](../building/config.md) keys
 
 ```pwsh
 installer_builder.exe pack `
-    --product myapp --publisher "My Company" --to-version 1.1 `
+    --product "My App" --product-id myapp --publisher "My Company" --to-version 1.1 `
     --input .\build\myapp-1.1 --exe myapp.exe `
     --upgrade-minimal-ui `
     --priv-key .\keys\priv.key --pub-key .\keys\pub.key `

@@ -11,7 +11,7 @@ lorem-ipsum placeholder.
 
 ```pwsh
 installer_builder.exe pack `
-    --product myapp --publisher "My Company" --to-version 1.0 `
+    --product "My App" --product-id myapp --publisher "My Company" --to-version 1.0 `
     --input .\build\myapp --exe myapp.exe `
     --license .\legal\EULA-myapp-en.txt `
     --priv-key .\keys\priv.key --pub-key .\keys\pub.key `
