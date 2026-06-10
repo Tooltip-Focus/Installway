@@ -30,3 +30,8 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      # End-to-end: build a keyed toolchain-free kit, pack an installer, verify it.
+      - name: Smoke test (toolchain-free pack + --verify)
+        shell: pwsh
+        run: ./scripts/smoke-test.ps1

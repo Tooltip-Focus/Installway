@@ -48,7 +48,10 @@ Supply each of these on the CLI or in a [config file](config.md):
    prebuilt kit), copies the stub to `--out`.
 5. Embeds the signed manifest, the icon-stamped uninstaller, and a version-info
    resource; appends the payload zip as a PE overlay.
-6. Prints the next step: the `signtool` command for Authenticode.
+6. **Self-verifies** — runs the produced installer's own `--verify`. If the stub
+   rejects the payload (e.g. a toolchain-free stub whose key doesn't match
+   `--priv-key`), the build fails here instead of shipping a broken installer.
+7. Prints the next step: the `signtool` command for Authenticode.
 
 ## Inspect the result
 

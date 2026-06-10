@@ -35,7 +35,9 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # from_version = "0.9"
 # from_dir     = "build/myapp-0.9"
 
-# toolchain-free mode (optional) — see the toolchain chapter
+# toolchain-free mode (optional) — see the toolchain chapter.
+# With these set, pub_key above is IGNORED: the stub carries its own baked-in
+# key, and priv_key must match it (pack self-verifies and fails if it doesn't).
 # installer_stub = "kit/installer.exe"
 # uninstaller    = "kit/uninstall.exe"
 

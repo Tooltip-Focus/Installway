@@ -114,10 +114,12 @@ Note what's **different** from toolchain mode:
 
 - `--installer-stub` and `--uninstaller` point at the prebuilt binaries. Passing
   them switches `pack` into toolchain-free mode — it never invokes `cargo`.
-- **`--pub-key` is not used.** The public key is already compiled into
-  `installer.exe`. The builder prints *"Toolchain-free mode: using prebuilt
-  binaries (no cargo build)"*.
-- `--priv-key` **must match** the public key baked into the supplied stub.
+- **`--pub-key` (and the `pub_key` config key) is ignored.** The public key is
+  already compiled into `installer.exe`; passing it does nothing and `pack`
+  warns. The builder prints *"Toolchain-free mode: using prebuilt binaries (no
+  cargo build)"*.
+- `--priv-key` **must match** the public key baked into the supplied stub
+  (`pack` checks this — see below).
 
 Patch builds work identically — add `--from-version` / `--from-dir`.
 
@@ -131,34 +133,53 @@ Patch builds work identically — add `--from-version` / `--from-dir`.
 
 ---
 
-## The one trap: the key must match the stub
+## The trap: the key must match the stub
 
-This is the failure mode unique to toolchain-free mode, so it's worth stating
-plainly.
+The single failure mode unique to toolchain-free mode.
 
 `--installer-stub installer.exe` has a **public key compiled in** (from when
-*you* built it in Step 1). `--priv-key priv.key` signs the payload. The stub
-verifies the signature against its baked-in public key **at install time**. If
-the private key in the kit does not pair with that baked-in public key:
+*you* built it in Step 1). `--priv-key priv.key` signs the payload, and the stub
+verifies the signature against its baked-in key at install time. If the private
+key doesn't pair with the stub's baked-in public key — or the stub was built
+**without** `INSTALLER_PUB_KEY` at all — the installer rejects its own payload:
 
-> The build **succeeds** and produces a setup `.exe`. But that installer
-> **rejects its own payload at runtime** — "bad signature" — and refuses to
-> install.
+```text
+installer was built without INSTALLER_PUB_KEY - refusing to install
+```
 
-There is no build-time check for this, because `pack` can't see inside the
-prebuilt stub. So:
+> **`pack` catches this at build time.** After producing the `.exe`, `pack` runs
+> its own `--verify` as a self-check. A keyless or mismatched stub **fails the
+> build** — you can't accidentally ship an installer that refuses itself:
+>
+> ```text
+> self-verify failed (... --verify exited 1). The produced installer rejects its
+> own payload — most likely the prebuilt stub's compiled-in public key does not
+> match --priv-key, or the stub was built without INSTALLER_PUB_KEY ...
+> ```
 
-- Keep `priv.key` and the `installer.exe` you ship in a kit **from the same
-  build** (Step 1 used that `pub.key` to bake the stub *and* you ship its paired
-  `priv.key`).
-- Re-issuing a stub with a new key means re-issuing the kit's `priv.key` too.
-- Always smoke-test a kit-built installer with `--verify` and a real install on
-  a throwaway folder before shipping.
+### Fixing it — bake the key into the kit's stub
+
+A common mistake is grabbing an `installer.exe` from a plain `cargo build`
+(which has **no** key) and pointing the kit at it. Rebuild the stub +
+uninstaller with your key, then drop them in the kit:
 
 ```pwsh
-# sanity check a kit-built installer before release
+$env:INSTALLER_PUB_KEY = (Get-Content .\keys\pub.key).Trim()
+cargo build --release -p installer -p uninstaller
+# copy target\release\installer.exe + uninstall.exe into the kit folder
+```
+
+Rules of thumb:
+
+- `priv.key` and the kit's `installer.exe` must come from the **same** `pub.key`
+  (Step 1 baked that `pub.key`; you ship its paired `priv.key`).
+- Re-issuing a stub with a new key means re-issuing the kit's `priv.key` too.
+
+You can still spot-check a built installer yourself — `--verify` prints text and
+sets the exit code (`0` ok), no dialog:
+
+```pwsh
 .\setup-myapp-1.0.exe --verify
-.\setup-myapp-1.0.exe --silent "C:\temp\smoke-test"
 ```
 
 ---

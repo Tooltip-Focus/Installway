@@ -56,6 +56,12 @@ pub fn run(args: &PackArgs) -> Result<()> {
     }
     let pub_key_hex: Option<String> = if prebuilt {
         println!("Toolchain-free mode: using prebuilt binaries (no cargo build)");
+        if args.pub_key.is_some() {
+            println!(
+                "warning: --pub-key is ignored in toolchain-free mode - the stub \
+                 (installer.exe) carries its own compiled-in key; --priv-key must match it"
+            );
+        }
         None
     } else {
         let p = args
@@ -248,12 +254,39 @@ pub fn run(args: &PackArgs) -> Result<()> {
         args.out.display()
     );
 
+    // Self-check: run the produced installer's own `--verify`. Catches a stub
+    // whose compiled-in public key doesn't match `--priv-key` (or a keyless
+    // stub) at build time, instead of shipping an installer that refuses its
+    // own payload at runtime.
+    self_verify(&args.out)?;
+
     println!();
     println!("DONE.");
     println!(
         "Next step (Authenticode): signtool sign /fd SHA256 /tr http://timestamp.digicert.com {}",
         args.out.display()
     );
+    Ok(())
+}
+
+/// Run `<out> --verify` and fail the build if it doesn't pass.
+fn self_verify(setup: &Path) -> Result<()> {
+    let status = std::process::Command::new(setup)
+        .arg("--verify")
+        .status()
+        .with_context(|| format!("run {} --verify", setup.display()))?;
+    if !status.success() {
+        bail!(
+            "self-verify failed ({} --verify exited {}). The produced installer rejects its \
+             own payload — most likely the prebuilt stub's compiled-in public key does not \
+             match --priv-key, or the stub (installer.exe) was built without INSTALLER_PUB_KEY. \
+             Rebuild installer.exe/uninstall.exe with INSTALLER_PUB_KEY set to the matching \
+             pub.key, or drop --installer-stub/--uninstaller to let pack build the stub.",
+            setup.display(),
+            status.code().unwrap_or(-1)
+        );
+    }
+    println!("Self-verify: OK");
     Ok(())
 }
 
