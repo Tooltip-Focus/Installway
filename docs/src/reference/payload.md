@@ -41,6 +41,7 @@ parses `InstallerPayload` from them — avoiding any serializer-determinism trap
 | `manifest` | `Manifest` | per-file table (below) |
 | `license_text` | `Option<String>` | EULA shown on the License page |
 | `associations` | `Vec<FileAssoc>` | file types to register under HKCU |
+| `registry` | `Vec<RegEntry>` | free-form HKCU [registry entries](../packaging/registry.md) (key/value are token templates) |
 | `force_reinstall` | `bool` | dev: rewrite all, remove orphans, skip from-check |
 | `skip_license` / `skip_path` | `bool` | trim the wizard |
 | `default_install_dir` | `Option<String>` | proposed path; `%VAR%` tokens expanded |
@@ -82,9 +83,13 @@ struct PatchInfo {
 Persisted to `<install_dir>\installer_info.json` by the installer and read by
 the uninstaller: `product`, `product_id`, `publisher`, `version`,
 `install_dir`, `installed_at_unix`, `registry_key` (equal to `product_id`),
-`exe`, and the `associations` to remove. Records written before the
-product/id split have no `product_id`; readers fall back to `registry_key` and
-a sanitized `product`.
+`exe`, the `associations`, and the resolved `registry` entries to remove.
+Records written before the product/id split have no `product_id`; readers fall
+back to `registry_key` and a sanitized `product`.
+
+In the payload, `registry` holds **token templates**; in `installer_info.json`
+it holds the **resolved** entries actually written, so the uninstaller matches
+and removes exactly those.
 
 ## Backward compatibility
 

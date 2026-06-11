@@ -90,6 +90,50 @@ pub struct InstallerPayload {
     /// uses the full wizard. Decided by this (the new installer's) payload.
     #[serde(default)]
     pub upgrade_minimal_ui: bool,
+    /// Free-form registry entries (HKCU) written at install and removed at
+    /// uninstall. Key/value strings are templates expanded at install time
+    /// (see the registry docs for the token list).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registry: Vec<RegEntry>,
+}
+
+/// Registry value type for a [`RegEntry`].
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegKind {
+    Sz,
+    ExpandSz,
+    Dword,
+    Qword,
+    MultiSz,
+    Binary,
+}
+
+/// A registry value's data. The variant is paired with a [`RegKind`]:
+/// `Text` for sz/expand_sz (and the hex string of binary), `Int` for
+/// dword/qword, `List` for multi_sz.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum RegValue {
+    Text(String),
+    Int(u64),
+    List(Vec<String>),
+}
+
+/// One free-form registry entry. In the payload the strings are templates; in
+/// `InstallInfo` they are the resolved values actually written (so the
+/// uninstaller can match + remove exactly what it wrote).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RegEntry {
+    /// Hive — `"HKCU"` only (the installer never elevates).
+    pub hive: String,
+    /// Subkey path under the hive, e.g. `Software\Acme\App`.
+    pub key: String,
+    /// Value name; empty = the key's `(Default)` value.
+    #[serde(default)]
+    pub name: String,
+    pub kind: RegKind,
+    pub value: RegValue,
 }
 
 /// One file-type association: extension + a human description.
@@ -137,6 +181,10 @@ pub struct InstallInfo {
     /// exactly these.
     #[serde(default)]
     pub associations: Vec<FileAssoc>,
+    /// Resolved registry entries written at install - the uninstaller removes
+    /// exactly these (anti-stomp by value).
+    #[serde(default)]
+    pub registry: Vec<RegEntry>,
 }
 
 #[cfg(test)]
@@ -203,11 +251,21 @@ mod tests {
             skip_path: false,
             default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),
             upgrade_minimal_ui: true,
+            registry: vec![RegEntry {
+                hive: "HKCU".into(),
+                key: r"Software\Acme\App".into(),
+                name: "Build".into(),
+                kind: RegKind::Dword,
+                value: RegValue::Int(42),
+            }],
         };
         let s = serde_json::to_string(&p).unwrap();
         let back: InstallerPayload = serde_json::from_str(&s).unwrap();
         assert_eq!(back.publisher, "Pub");
         assert_eq!(back.product_id, "P_id");
+        assert_eq!(back.registry.len(), 1);
+        assert_eq!(back.registry[0].kind, RegKind::Dword);
+        assert_eq!(back.registry[0].value, RegValue::Int(42));
         assert!(back.force_reinstall);
         assert!(back.skip_license);
         assert!(!back.skip_path);
