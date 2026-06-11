@@ -12,6 +12,7 @@
 //! required/timeout policy).
 
 use crate::models::PluginEntry;
+use crate::utils::wide;
 use anyhow::{Context, Result, bail};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -20,7 +21,6 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::core::{PCWSTR, s};
-use crate::utils::wide;
 
 /// ABI version this host speaks. Must match `INSTALLWAY_ABI_VERSION` in the SDK.
 const ABI_VERSION: u32 = 1;

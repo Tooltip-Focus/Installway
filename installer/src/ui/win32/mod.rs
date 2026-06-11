@@ -13,6 +13,7 @@ mod views;
 use crate::payload::LoadedPayload;
 use crate::ui::helpers;
 use anyhow::Result;
+use common::utils::wide;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -27,7 +28,6 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
-use common::utils::wide;
 
 pub(super) const BM_GETCHECK: u32 = 0x00F0;
 pub(super) const BM_SETCHECK: u32 = 0x00F1;

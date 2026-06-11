@@ -3,10 +3,10 @@
 
 use anyhow::{Context, Result};
 use common::models::{FileAssoc, InstallInfo, InstallerPayload, PluginPhase};
+use common::utils::days_to_ymd;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use common::utils::days_to_ymd;
 
 /// Write the uninstaller + metadata to a per-user data folder outside the app
 /// directory and register the product under HKCU Uninstall.

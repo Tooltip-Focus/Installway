@@ -7,6 +7,7 @@
 //!
 //! Identical visual style as the installer (Segoe UI, banner strip, ~700×400).
 
+use common::utils::wide;
 use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -27,7 +28,6 @@ use windows::Win32::UI::Controls::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
-use common::utils::wide;
 
 const BS_PUSHBUTTON: u32 = 0x0;
 const BS_DEFPUSHBUTTON: u32 = 0x1;

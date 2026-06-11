@@ -11,13 +11,13 @@ use super::{
 };
 use crate::ui::helpers::{self};
 use common::models::{InstallerPayload, PayloadKind};
+use common::utils::wide;
 use std::path::PathBuf;
 use windows::Win32::Foundation::{HINSTANCE, HWND};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
-use common::utils::wide;
 
 const BS_PUSHBUTTON: u32 = 0x0;
 const BS_DEFPUSHBUTTON: u32 = 0x1;

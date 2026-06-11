@@ -8,12 +8,12 @@
 //! before init - those calls become no-ops. Every write is `flush`ed
 //! immediately so a crashed install still leaves a complete log.
 
+use crate::utils;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::utils;
 
 static LOG: OnceLock<Logger> = OnceLock::new();
 
@@ -134,8 +134,8 @@ pub fn log_path_uninstall_temp(product: &str, pid: u32) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, UNIX_EPOCH};
     use crate::utils::days_to_ymd;
+    use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
     fn days_to_ymd_known() {

@@ -24,6 +24,7 @@ use crate::ui::helpers::{
     set_dlg_text, set_progress,
 };
 use anyhow::Result;
+use common::utils::wide;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -40,7 +41,6 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
-use common::utils::wide;
 
 const ID_ICON: usize = 1;
 const ID_TITLE: usize = 2;

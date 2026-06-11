@@ -3,7 +3,8 @@
 
 //! Shared Win32 helpers used by both installer UIs (full wizard + minimal updater).
 
-use std::ffi::{OsString};
+use common::utils::wide;
+use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -22,7 +23,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_SETFONT,
 };
 use windows::core::PCWSTR;
-use common::utils::wide;
 
 /// App-defined window messages posted from the worker thread to the UI thread.
 pub const WM_APP_PROGRESS: u32 = WM_APP + 1;

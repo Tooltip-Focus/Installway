@@ -9,6 +9,7 @@
 //! their other values).
 
 use crate::models::{RegEntry, RegKind, RegValue};
+use crate::utils::wide;
 use std::collections::HashSet;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD, REG_EXPAND_SZ,
@@ -17,7 +18,6 @@ use windows::Win32::System::Registry::{
     RegQueryValueExW, RegSetValueExW,
 };
 use windows::core::PCWSTR;
-use crate::utils::wide;
 
 fn is_hkcu(e: &RegEntry) -> bool {
     e.hive.eq_ignore_ascii_case("HKCU")
