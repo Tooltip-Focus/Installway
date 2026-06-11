@@ -13,6 +13,7 @@ mod views;
 use crate::payload::LoadedPayload;
 use crate::ui::helpers;
 use anyhow::Result;
+use common::utils::wide;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -185,7 +186,7 @@ unsafe fn create_window(
         let banner_brush = CreateSolidBrush(COLORREF(ACCENT_LIGHT));
         let card_brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
 
-        let title = helpers::wide(&tr().fmt(
+        let title = wide(&tr().fmt(
             "install.window_title",
             &[
                 ("product", &payload.product),
@@ -472,8 +473,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 /// Modal message box with the localized caption.
 pub(super) unsafe fn message_box(hwnd: HWND, text: &str, style: MESSAGEBOX_STYLE) {
-    let t = helpers::wide(text);
-    let c = helpers::wide(&tr().get("install.msg_caption"));
+    let t = wide(text);
+    let c = wide(&tr().get("install.msg_caption"));
     unsafe {
         MessageBoxW(Some(hwnd), PCWSTR(t.as_ptr()), PCWSTR(c.as_ptr()), style);
     }

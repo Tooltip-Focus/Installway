@@ -12,6 +12,7 @@
 //! required/timeout policy).
 
 use crate::models::PluginEntry;
+use crate::utils::wide;
 use anyhow::{Context, Result, bail};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -227,13 +228,6 @@ fn write_log(level: &str, msg: &str) {
         let _ = writeln!(f, "{level:<5} [plugin] {msg}");
         let _ = f.flush();
     }
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
 
 fn wide_to_string(ptr: *const u16) -> String {

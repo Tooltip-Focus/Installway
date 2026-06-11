@@ -7,6 +7,7 @@
 //!
 //! Identical visual style as the installer (Segoe UI, banner strip, ~700×400).
 
+use common::utils::wide;
 use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -598,13 +599,6 @@ unsafe fn center(hwnd: HWND) {
     unsafe {
         let _ = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     }
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
 
 pub fn fatal(msg: &str) {

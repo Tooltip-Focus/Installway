@@ -9,8 +9,9 @@ use super::{
     ID_HEADER, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_LICENSE_EDIT, ID_NEXT_BTN, ID_PATH_EDIT,
     ID_PATH_LABEL, ID_PROGRESS, ID_STATUS, ID_SUBHEADER, PAD, STATE, WIN_H, WIN_W, tr,
 };
-use crate::ui::helpers::{self, wide};
+use crate::ui::helpers::{self};
 use common::models::{InstallerPayload, PayloadKind};
+use common::utils::wide;
 use std::path::PathBuf;
 use windows::Win32::Foundation::{HINSTANCE, HWND};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;

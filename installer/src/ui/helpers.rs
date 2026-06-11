@@ -3,7 +3,8 @@
 
 //! Shared Win32 helpers used by both installer UIs (full wizard + minimal updater).
 
-use std::ffi::{OsStr, OsString};
+use common::utils::wide;
+use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -28,18 +29,10 @@ pub const WM_APP_PROGRESS: u32 = WM_APP + 1;
 pub const WM_APP_DONE: u32 = WM_APP + 2;
 pub const WM_APP_ERROR: u32 = WM_APP + 3;
 
-/// Null-terminated UTF-16 from a `&str`, for Win32 `W` APIs.
-pub fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-
 /// Register the progress-bar common control class.
 pub fn init_progress_class() {
     let icc = INITCOMMONCONTROLSEX {
-        dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+        dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
         dwICC: ICC_PROGRESS_CLASS,
     };
     let _ = unsafe { InitCommonControlsEx(&icc) };
@@ -61,7 +54,7 @@ pub fn create_font(name: &str, height: i32, weight: i32) -> HFONT {
             OUT_DEFAULT_PRECIS,
             CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY,
-            ((DEFAULT_PITCH.0 as u32) | ((FF_DONTCARE.0 as u32) << 4)) as u32,
+            (DEFAULT_PITCH.0 as u32) | ((FF_DONTCARE.0 as u32) << 4),
             PCWSTR(name_w.as_ptr()),
         )
     }

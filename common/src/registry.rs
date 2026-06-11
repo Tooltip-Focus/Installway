@@ -9,6 +9,7 @@
 //! their other values).
 
 use crate::models::{RegEntry, RegKind, RegValue};
+use crate::utils::wide;
 use std::collections::HashSet;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD, REG_EXPAND_SZ,
@@ -150,10 +151,6 @@ fn hexv(c: u8) -> Option<u8> {
 }
 
 // ---- Win32 registry helpers (HKCU) --------------------------------------
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
 
 /// Value-name pointer: `(Default)` (null) for an empty name.
 fn name_ptr(name_w: &[u16], name: &str) -> PCWSTR {

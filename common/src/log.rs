@@ -8,6 +8,7 @@
 //! before init - those calls become no-ops. Every write is `flush`ed
 //! immediately so a crashed install still leaves a complete log.
 
+use crate::utils;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -94,7 +95,7 @@ fn iso_utc(t: SystemTime) -> String {
     let ms = dur.subsec_millis();
     let days = secs.div_euclid(86_400);
     let tod = secs.rem_euclid(86_400) as u32;
-    let (y, mo, d) = days_to_ymd(days);
+    let (y, mo, d) = utils::days_to_ymd(days);
     let h = tod / 3600;
     let m = (tod % 3600) / 60;
     let s = tod % 60;
@@ -102,21 +103,6 @@ fn iso_utc(t: SystemTime) -> String {
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
         y, mo, d, h, m, s, ms
     )
-}
-
-fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
-    // Howard Hinnant's civil_from_days.
-    days += 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let doe = (days - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m as u32, d as u32)
 }
 
 #[allow(dead_code)]
@@ -148,6 +134,7 @@ pub fn log_path_uninstall_temp(product: &str, pid: u32) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::days_to_ymd;
     use std::time::{Duration, UNIX_EPOCH};
 
     #[test]

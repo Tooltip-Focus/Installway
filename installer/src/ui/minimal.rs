@@ -21,9 +21,10 @@ use crate::extract::{InstallCtx, install};
 use crate::payload::LoadedPayload;
 use crate::ui::helpers::{
     self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, create_font, own_icon, post, scale_progress,
-    set_dlg_text, set_progress, wide,
+    set_dlg_text, set_progress,
 };
 use anyhow::Result;
+use common::utils::wide;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
