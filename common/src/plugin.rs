@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::core::{PCWSTR, s};
+use crate::utils::wide;
 
 /// ABI version this host speaks. Must match `INSTALLWAY_ABI_VERSION` in the SDK.
 const ABI_VERSION: u32 = 1;
@@ -227,13 +228,6 @@ fn write_log(level: &str, msg: &str) {
         let _ = writeln!(f, "{level:<5} [plugin] {msg}");
         let _ = f.flush();
     }
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
 
 fn wide_to_string(ptr: *const u16) -> String {

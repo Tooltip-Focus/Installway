@@ -21,7 +21,7 @@ use crate::extract::{InstallCtx, install};
 use crate::payload::LoadedPayload;
 use crate::ui::helpers::{
     self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, create_font, own_icon, post, scale_progress,
-    set_dlg_text, set_progress, wide,
+    set_dlg_text, set_progress,
 };
 use anyhow::Result;
 use std::cell::RefCell;
@@ -40,6 +40,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
+use common::utils::wide;
 
 const ID_ICON: usize = 1;
 const ID_TITLE: usize = 2;

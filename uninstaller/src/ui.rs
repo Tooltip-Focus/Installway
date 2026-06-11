@@ -27,6 +27,7 @@ use windows::Win32::UI::Controls::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
+use common::utils::wide;
 
 const BS_PUSHBUTTON: u32 = 0x0;
 const BS_DEFPUSHBUTTON: u32 = 0x1;
@@ -598,13 +599,6 @@ unsafe fn center(hwnd: HWND) {
     unsafe {
         let _ = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     }
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
 }
 
 pub fn fatal(msg: &str) {

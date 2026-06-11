@@ -17,6 +17,7 @@ use windows::Win32::System::Registry::{
     RegQueryValueExW, RegSetValueExW,
 };
 use windows::core::PCWSTR;
+use crate::utils::wide;
 
 fn is_hkcu(e: &RegEntry) -> bool {
     e.hive.eq_ignore_ascii_case("HKCU")
@@ -150,10 +151,6 @@ fn hexv(c: u8) -> Option<u8> {
 }
 
 // ---- Win32 registry helpers (HKCU) --------------------------------------
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
 
 /// Value-name pointer: `(Default)` (null) for an empty name.
 fn name_ptr(name_w: &[u16], name: &str) -> PCWSTR {
