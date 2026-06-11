@@ -19,13 +19,30 @@ use std::sync::atomic::AtomicBool;
 const EXIT_VERSION_MISMATCH: i32 = 10;
 
 fn main() {
+    // Diagnostic / headless modes report errors as text on the parent console
+    // (+ a non-zero exit code) instead of a modal dialog, so CI and scripted
+    // callers get a parseable result. Interactive (wizard / minimal) keeps the
+    // modal.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let console_mode = args.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "--verify" | "--verify-install" | "--silent" | "/S"
+        )
+    });
+
     if let Err(e) = run() {
         let code = if e.downcast_ref::<extract::VersionMismatch>().is_some() {
             EXIT_VERSION_MISMATCH
         } else {
             1
         };
-        report_fatal(&format!("{e:#}"));
+        if console_mode {
+            attach_console();
+            eprintln!("Error: {e:#}");
+        } else {
+            report_fatal(&format!("{e:#}"));
+        }
         std::process::exit(code);
     }
 }
