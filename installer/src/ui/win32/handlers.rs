@@ -179,7 +179,12 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
             push_error(hwnd_isize, &format!("{e}"));
             return;
         }
-        if let Err(e) = install_mod::finalize(&pb, &loaded.payload, &loaded.uninstaller_bytes) {
+        if let Err(e) = install_mod::finalize(
+            &pb,
+            &loaded.payload,
+            &loaded.uninstaller_bytes,
+            loaded.zip(),
+        ) {
             push_error(hwnd_isize, &format!("finalize: {e}"));
             return;
         }

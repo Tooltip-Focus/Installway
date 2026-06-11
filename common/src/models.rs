@@ -95,6 +95,9 @@ pub struct InstallerPayload {
     /// (see the registry docs for the token list).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registry: Vec<RegEntry>,
+    /// Native DLL plugins bundled in the payload zip, run at install.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<PluginEntry>,
 }
 
 /// Registry value type for a [`RegEntry`].
@@ -185,6 +188,38 @@ pub struct InstallInfo {
     /// exactly these (anti-stomp by value).
     #[serde(default)]
     pub registry: Vec<RegEntry>,
+    /// Plugins recorded at install - the uninstaller runs their `down`.
+    #[serde(default)]
+    pub plugins: Vec<PluginEntry>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// When a [`PluginEntry`] runs at install.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginPhase {
+    /// Before any file is staged/committed. A required failure aborts cleanly.
+    PreInstall,
+    /// After the install is finalized (files in place, product registered).
+    PostInstall,
+}
+
+/// A native DLL plugin (migration-style `up`/`down`). The DLL lives in the
+/// signed payload zip at `file` and is copied to the per-user data dir for the
+/// uninstall `down`. `blake3` is verified before the DLL is loaded.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PluginEntry {
+    pub name: String,
+    /// In-zip / data-dir-relative path, e.g. `plugins/<name>.dll`.
+    pub file: String,
+    pub blake3: String,
+    pub phase: PluginPhase,
+    /// A required plugin's `up` failure fails the install. Default `true`.
+    #[serde(default = "default_true")]
+    pub required: bool,
 }
 
 #[cfg(test)]
@@ -258,6 +293,13 @@ mod tests {
                 kind: RegKind::Dword,
                 value: RegValue::Int(42),
             }],
+            plugins: vec![PluginEntry {
+                name: "p1".into(),
+                file: "plugins/p1.dll".into(),
+                blake3: "abc".into(),
+                phase: PluginPhase::PreInstall,
+                required: true,
+            }],
         };
         let s = serde_json::to_string(&p).unwrap();
         let back: InstallerPayload = serde_json::from_str(&s).unwrap();
@@ -266,6 +308,9 @@ mod tests {
         assert_eq!(back.registry.len(), 1);
         assert_eq!(back.registry[0].kind, RegKind::Dword);
         assert_eq!(back.registry[0].value, RegValue::Int(42));
+        assert_eq!(back.plugins.len(), 1);
+        assert_eq!(back.plugins[0].phase, PluginPhase::PreInstall);
+        assert!(back.plugins[0].required);
         assert!(back.force_reinstall);
         assert!(back.skip_license);
         assert!(!back.skip_path);

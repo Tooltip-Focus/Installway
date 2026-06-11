@@ -71,6 +71,21 @@ fn run() -> Result<()> {
     // in any error messages. Then normalise the NSIS-style `/S` silent flag to
     // `--silent` in-place (only for indices ≥ 1 to leave the binary name alone).
     let mut argv: Vec<String> = std::env::args().collect();
+
+    // Plugin-host child: `--run-plugin <dll> <up|down> <ctx.json>`. Runs before
+    // clap so the raw args aren't rejected; exits with the plugin's code.
+    if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
+        let code = match (argv.get(idx + 1), argv.get(idx + 2), argv.get(idx + 3)) {
+            (Some(dll), Some(func), Some(ctx)) => common::plugin::host_main(
+                std::path::Path::new(dll),
+                func,
+                std::path::Path::new(ctx),
+            ),
+            _ => 2,
+        };
+        std::process::exit(code);
+    }
+
     for arg in argv.iter_mut().skip(1) {
         if arg == "/S" {
             *arg = "--silent".to_string();

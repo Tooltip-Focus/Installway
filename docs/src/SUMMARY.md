@@ -19,6 +19,7 @@
 - [License, icon & version info](packaging/branding.md)
 - [File associations](packaging/associations.md)
 - [Registry keys](packaging/registry.md)
+- [Plugins (custom DLLs)](packaging/plugins.md)
 - [Trimming the wizard](packaging/wizard.md)
 - [Signing (Authenticode)](packaging/signing.md)
 

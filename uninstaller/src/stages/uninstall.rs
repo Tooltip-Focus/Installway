@@ -97,6 +97,9 @@ pub fn run(silent: bool) -> Result<()> {
             let counter = StepCounter::new(total_steps, progress);
             let tr = ui::tr();
 
+            // 0. Plugins: each `down` (reverse order), before files are removed.
+            run_down_plugins(&info_owned, &data_dir_owned);
+
             // 1. Payload files - robust removal (retry locks, then reboot-delete).
             for rel in manifest_owned.files.keys() {
                 let p = app_dir_owned.join(rel);
@@ -154,6 +157,7 @@ fn run_silent(
     info: &common::models::InstallInfo,
     manifest: &common::models::Manifest,
 ) -> Result<()> {
+    run_down_plugins(info, data_dir);
     let n = cleanup::remove_payload_files(app_dir, manifest);
     common::log::info(format!("removed {} payload files", n));
     cleanup::remove_shortcuts(&info.product);
@@ -176,6 +180,45 @@ fn run_silent(
         info.registry_key
     ));
     spawn_finalize(Some(app_dir), data_dir)
+}
+
+/// Run each plugin's `down` (reverse install order) in isolated child
+/// processes, from the data dir. Best-effort: failures are logged, never block
+/// the uninstall.
+fn run_down_plugins(info: &common::models::InstallInfo, data_dir: &Path) {
+    if info.plugins.is_empty() {
+        return;
+    }
+    let items: Vec<_> = info
+        .plugins
+        .iter()
+        .rev()
+        .map(|p| (p.clone(), data_dir.join(&p.file)))
+        .collect();
+    let ctx = common::plugin::PluginCtx {
+        install_dir: info.install_dir.clone(),
+        product: info.product.clone(),
+        product_id: info.product_id.clone(),
+        version: info.version.clone(),
+        exe: Path::new(&info.install_dir)
+            .join(&info.exe)
+            .to_string_lossy()
+            .replace('/', "\\"),
+        log_path: common::log::current_path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    let ctx_path = match common::plugin::write_ctx(&ctx) {
+        Ok(p) => p,
+        Err(e) => {
+            common::log::warn(format!("plugin context: {e:#}"));
+            return;
+        }
+    };
+    if let Ok(self_exe) = std::env::current_exe() {
+        let _ = common::plugin::run_each(&self_exe, &ctx_path, &items, "down", false);
+    }
+    let _ = std::fs::remove_file(&ctx_path);
 }
 
 /// Spawn the %TEMP% finalize step that deletes the app dir, the data dir, and

@@ -71,6 +71,25 @@ pub fn run(args: &PackArgs) -> Result<()> {
         Some(load_pub_key_hex(p)?)
     };
 
+    // Plugins: read each DLL for its hash + in-zip name; the bytes are bundled
+    // into the payload zip by build_full/build_patch.
+    let mut plugin_entries: Vec<common::models::PluginEntry> = Vec::new();
+    let mut plugin_files: Vec<(String, PathBuf)> = Vec::new();
+    for p in &args.plugins {
+        let in_zip = format!("plugins/{}.dll", p.name);
+        let hash = common::utils::file_blake3(&p.src)
+            .with_context(|| format!("read plugin dll {}", p.src.display()))?;
+        println!("Plugin: {} ({:?}) <- {}", p.name, p.phase, p.src.display());
+        plugin_files.push((in_zip.clone(), p.src.clone()));
+        plugin_entries.push(common::models::PluginEntry {
+            name: p.name.clone(),
+            file: in_zip,
+            blake3: hash,
+            phase: p.phase,
+            required: p.required,
+        });
+    }
+
     let zip_bytes;
     let manifest;
     if is_patch {
@@ -78,9 +97,16 @@ pub fn run(args: &PackArgs) -> Result<()> {
             .from_dir
             .as_ref()
             .context("patch mode requires --from-dir")?;
-        (zip_bytes, manifest) = build_patch(&args.input, from_dir, &args.exe, &args.to_version)?;
+        (zip_bytes, manifest) = build_patch(
+            &args.input,
+            from_dir,
+            &args.exe,
+            &args.to_version,
+            &plugin_files,
+        )?;
     } else {
-        (zip_bytes, manifest) = build_full(&args.input, &args.exe, &args.to_version)?;
+        (zip_bytes, manifest) =
+            build_full(&args.input, &args.exe, &args.to_version, &plugin_files)?;
     }
 
     let license_text = match &args.license {
@@ -126,6 +152,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         default_install_dir: args.default_install_dir.clone(),
         upgrade_minimal_ui: args.upgrade_minimal_ui,
         registry: args.registry.clone(),
+        plugins: plugin_entries,
     };
 
     let payload_json = serde_json::to_string(&payload).context("serialize payload")?;
@@ -330,7 +357,12 @@ fn check_case_collisions(files: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn build_full(input: &Path, exe: &str, version: &str) -> Result<(Vec<u8>, Manifest)> {
+fn build_full(
+    input: &Path,
+    exe: &str,
+    version: &str,
+    plugins: &[(String, PathBuf)],
+) -> Result<(Vec<u8>, Manifest)> {
     println!("Scanning {}", input.display());
     let files = collect_files(input)?;
     check_case_collisions(&files)?;
@@ -363,7 +395,7 @@ fn build_full(input: &Path, exe: &str, version: &str) -> Result<(Vec<u8>, Manife
         .map(|(rel, entry, _)| (rel, entry))
         .collect();
 
-    let zip_bytes = write_zip(input, &files, &HashMap::new())?;
+    let zip_bytes = write_zip(input, &files, &HashMap::new(), plugins)?;
 
     let manifest = Manifest {
         version: version.to_string(),
@@ -381,6 +413,7 @@ fn build_patch(
     old_input: &Path,
     exe: &str,
     version: &str,
+    plugins: &[(String, PathBuf)],
 ) -> Result<(Vec<u8>, Manifest)> {
     // Warn up front if hdiffz is missing: patching still works but ships full
     // files instead of HDiffPatch deltas.
@@ -524,7 +557,7 @@ fn build_patch(
         entries.insert(w.rel, w.entry);
     }
 
-    let zip_bytes = write_zip(new_input, &full_paths, &patch_paths)?;
+    let zip_bytes = write_zip(new_input, &full_paths, &patch_paths, plugins)?;
 
     remove_dir_retry(&temp_patches);
 
@@ -589,15 +622,19 @@ fn write_zip(
     input: &Path,
     full_paths: &[String],
     patch_paths: &HashMap<String, PathBuf>,
+    extra: &[(String, PathBuf)],
 ) -> Result<Vec<u8>> {
     // (entry_name_in_zip, source_path_on_disk) for every file to pack.
-    let mut jobs: Vec<(String, PathBuf)> = Vec::with_capacity(full_paths.len() + patch_paths.len());
+    let mut jobs: Vec<(String, PathBuf)> =
+        Vec::with_capacity(full_paths.len() + patch_paths.len() + extra.len());
     for rel in full_paths {
         jobs.push((format!("{}{}", FULL_PREFIX, rel), input.join(rel)));
     }
     for (rel, patch_path) in patch_paths {
         jobs.push((patch_entry_name(rel), patch_path.clone()));
     }
+    // Extra verbatim entries (e.g. `plugins/<name>.dll`), already named.
+    jobs.extend(extra.iter().cloned());
 
     // PHASE 1 (parallel): read + compress each file into its own mini-zip.
     let minis: Vec<Vec<u8>> = jobs

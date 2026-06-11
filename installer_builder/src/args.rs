@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use common::models::{RegEntry, RegKind, RegValue};
+use common::models::{PluginPhase, RegEntry, RegKind, RegValue};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -153,6 +153,31 @@ pub struct RegFileEntry {
     pub value: toml::Value,
 }
 
+/// One `[[plugin]]` table from the config file. Converted + validated into a
+/// [`ResolvedPlugin`] by [`build_plugins`].
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PluginFileEntry {
+    pub name: String,
+    pub dll: PathBuf,
+    pub phase: String,
+    #[serde(default = "default_true")]
+    pub required: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// A validated plugin: its source DLL path + parsed phase.
+#[derive(Debug, Clone)]
+pub struct ResolvedPlugin {
+    pub name: String,
+    pub src: PathBuf,
+    pub phase: PluginPhase,
+    pub required: bool,
+}
+
 /// `pack` options as read from a TOML file. Flat keys matching the CLI long
 /// names (snake_case). Unknown keys are rejected to catch typos.
 #[derive(Deserialize, Debug, Default)]
@@ -189,6 +214,9 @@ pub struct PackFile {
     /// Free-form registry entries (config-file only).
     #[serde(default)]
     pub registry: Vec<RegFileEntry>,
+    /// Native DLL plugins (config-file only). `[[plugin]]` tables.
+    #[serde(default, rename = "plugin")]
+    pub plugins: Vec<PluginFileEntry>,
 }
 
 /// Fully resolved `pack` options consumed by `pack::run`. CLI > TOML > default.
@@ -217,6 +245,7 @@ pub struct PackArgs {
     pub out: PathBuf,
     pub reuse_stub: bool,
     pub registry: Vec<RegEntry>,
+    pub plugins: Vec<ResolvedPlugin>,
 }
 
 impl PackArgs {
@@ -284,8 +313,46 @@ impl PackArgs {
             upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
             reuse_stub: cli.reuse_stub || file.reuse_stub,
             registry: build_registry(file.registry)?,
+            plugins: build_plugins(file.plugins)?,
         })
     }
+}
+
+/// Convert + validate `[[plugin]]` entries. Names must be safe filename
+/// components and unique; phase is `pre-install` or `post-install`.
+fn build_plugins(raw: Vec<PluginFileEntry>) -> Result<Vec<ResolvedPlugin>> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut seen = std::collections::HashSet::new();
+    for (i, p) in raw.into_iter().enumerate() {
+        let n = i + 1;
+        let name = p.name.trim().to_string();
+        if name.is_empty() {
+            bail!("plugin #{n}: empty name");
+        }
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            bail!("plugin #{n} ('{name}'): name must be ASCII letters, digits, '-' or '_'");
+        }
+        if !seen.insert(name.to_ascii_lowercase()) {
+            bail!("plugin #{n}: duplicate name '{name}'");
+        }
+        let phase = match p.phase.to_ascii_lowercase().replace('_', "-").as_str() {
+            "pre-install" => PluginPhase::PreInstall,
+            "post-install" => PluginPhase::PostInstall,
+            other => bail!(
+                "plugin #{n} ('{name}'): unknown phase '{other}' (pre-install | post-install)"
+            ),
+        };
+        out.push(ResolvedPlugin {
+            name,
+            src: p.dll,
+            phase,
+            required: p.required,
+        });
+    }
+    Ok(out)
 }
 
 /// Convert + validate `[[registry]]` entries. HKCU only; type/value must agree;
@@ -501,6 +568,39 @@ force_reinstall = true
         assert!(
             resolve_with("\n[[registry]]\nhive='HKCU'\nkey='K'\ntype='binary'\nvalue='XY'\n")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn plugins_parsed_and_validated() {
+        let r = resolve_with(
+            "\n[[plugin]]\nname='do-x'\ndll='plugins/x.dll'\nphase='pre-install'\n\
+             [[plugin]]\nname='do_y'\ndll='plugins/y.dll'\nphase='post_install'\nrequired=false\n",
+        )
+        .unwrap();
+        assert_eq!(r.plugins.len(), 2);
+        assert_eq!(r.plugins[0].name, "do-x");
+        assert_eq!(r.plugins[0].phase, PluginPhase::PreInstall);
+        assert!(r.plugins[0].required);
+        assert_eq!(r.plugins[1].phase, PluginPhase::PostInstall);
+        assert!(!r.plugins[1].required);
+    }
+
+    #[test]
+    fn plugins_reject_bad() {
+        // unknown phase
+        assert!(resolve_with("\n[[plugin]]\nname='a'\ndll='a.dll'\nphase='nope'\n").is_err());
+        // illegal name
+        assert!(
+            resolve_with("\n[[plugin]]\nname='a b'\ndll='a.dll'\nphase='pre-install'\n").is_err()
+        );
+        // duplicate (case-insensitive)
+        assert!(
+            resolve_with(
+                "\n[[plugin]]\nname='a'\ndll='a.dll'\nphase='pre-install'\n\
+                 [[plugin]]\nname='A'\ndll='b.dll'\nphase='pre-install'\n"
+            )
+            .is_err()
         );
     }
 }

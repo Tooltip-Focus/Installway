@@ -251,9 +251,12 @@ fn spawn_worker(
         if let Err(e) = install(ctx) {
             return post_err(hwnd_isize, &format!("{e}"));
         }
-        if let Err(e) =
-            crate::install::finalize(&install_dir, &loaded.payload, &loaded.uninstaller_bytes)
-        {
+        if let Err(e) = crate::install::finalize(
+            &install_dir,
+            &loaded.payload,
+            &loaded.uninstaller_bytes,
+            loaded.zip(),
+        ) {
             return post_err(hwnd_isize, &format!("finalize: {e}"));
         }
         if launch_flag && !loaded.payload.manifest.exe.is_empty() {

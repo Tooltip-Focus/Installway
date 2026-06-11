@@ -45,5 +45,6 @@ pub(crate) fn sample_payload(view: &str) -> common::models::InstallerPayload {
         default_install_dir: None,
         upgrade_minimal_ui: false,
         registry: Vec::new(),
+        plugins: Vec::new(),
     }
 }

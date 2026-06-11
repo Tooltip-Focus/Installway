@@ -1,0 +1,15 @@
+# Example Installway plugin in Rust (compiles to a cdylib DLL).
+# Build:  cargo build --release   ->  target/release/example_plugin.dll
+[package]
+name = "example_plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+# Standalone (not part of the Installway workspace).
+[workspace]
+
+[profile.release]
+strip = true

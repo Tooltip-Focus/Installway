@@ -1,0 +1,15 @@
+# Example Installway plugin (Rust): silently uninstall a previous MSI.
+# Build:  cargo build --release   ->  target/release/uninstall_old_msi.dll
+[package]
+name = "uninstall_old_msi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+# Standalone (not part of the Installway workspace).
+[workspace]
+
+[profile.release]
+strip = true
