@@ -6,6 +6,7 @@ pub mod i18n;
 pub mod log;
 pub mod models;
 pub mod paths;
+pub mod plugin;
 pub mod registry;
 pub mod shortcuts;
 pub mod utils;

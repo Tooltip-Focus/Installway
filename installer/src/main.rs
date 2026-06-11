@@ -49,6 +49,21 @@ fn main() {
 
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Plugin-host child: `--run-plugin <dll> <up|down> <ctx.json>`. Loads the
+    // DLL, runs the action, exits with its code. Needs no payload.
+    if let Some(idx) = args.iter().position(|a| a == "--run-plugin") {
+        let code = match (args.get(idx + 1), args.get(idx + 2), args.get(idx + 3)) {
+            (Some(dll), Some(func), Some(ctx)) => common::plugin::host_main(
+                std::path::Path::new(dll),
+                func,
+                std::path::Path::new(ctx),
+            ),
+            _ => 2,
+        };
+        std::process::exit(code);
+    }
+
     let translator = common::i18n::Translator::detect(&args);
 
     // Dev-only: render a single UI view with sample data, no payload needed.
@@ -171,7 +186,12 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         on_progress: progress,
     };
     extract::install(ctx)?;
-    install::finalize(&install_dir, &loaded.payload, &loaded.uninstaller_bytes)?;
+    install::finalize(
+        &install_dir,
+        &loaded.payload,
+        &loaded.uninstaller_bytes,
+        loaded.zip(),
+    )?;
 
     if launch && !loaded.payload.manifest.exe.is_empty() {
         install::launch_product(&install_dir, &loaded.payload.manifest.exe)?;

@@ -1,0 +1,19 @@
+# Example Installway plugin (Rust): silently uninstall a previous InstallShield
+# product, found in the registry by DisplayName.
+# Build:  cargo build --release  ->  target/release/uninstall_old_is.dll
+[package]
+name = "uninstall_old_is"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+winreg = "0.52"
+
+# Standalone (not part of the Installway workspace).
+[workspace]
+
+[profile.release]
+strip = true

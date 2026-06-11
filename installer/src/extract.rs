@@ -178,6 +178,10 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
         })?;
     }
 
+    // Pre-install plugins run before any file is staged, so a required failure
+    // aborts cleanly (live install untouched).
+    run_zip_plugins(&ctx, common::models::PluginPhase::PreInstall)?;
+
     let temp_dir = ctx.install_dir.join(".installer_tmp");
 
     // Roll back a commit interrupted by a previous run before doing anything.
@@ -743,6 +747,63 @@ fn recover_if_interrupted(temp_dir: &Path, install_dir: &Path) {
 /// uninstall.exe / log live). `None` only if %LOCALAPPDATA% can't be resolved.
 fn data_dir_of(payload: &InstallerPayload) -> Option<PathBuf> {
     common::paths::uninstall_dir(&payload.publisher, &payload.product_id)
+}
+
+/// Extract the `phase` plugins from the payload zip to `%TEMP%`, run their `up`
+/// in isolated child processes, then clean up. Used for the pre-install phase.
+fn run_zip_plugins(ctx: &InstallCtx, phase: common::models::PluginPhase) -> Result<()> {
+    let plugins: Vec<common::models::PluginEntry> = ctx
+        .payload
+        .plugins
+        .iter()
+        .filter(|p| p.phase == phase)
+        .cloned()
+        .collect();
+    if plugins.is_empty() {
+        return Ok(());
+    }
+    let tmp = std::env::temp_dir().join(format!("iw-plugins-{}", std::process::id()));
+    fs::create_dir_all(&tmp)?;
+    let mut archive =
+        ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open payload zip for plugins")?;
+    let mut items = Vec::with_capacity(plugins.len());
+    for p in plugins {
+        let mut buf = Vec::new();
+        {
+            let mut f = archive
+                .by_name(&p.file)
+                .with_context(|| format!("plugin {} missing from payload", p.file))?;
+            f.read_to_end(&mut buf)?;
+        }
+        let dst = tmp.join(format!("{}.dll", p.name));
+        fs::write(&dst, &buf)?;
+        items.push((p, dst));
+    }
+    let pctx = plugin_ctx(ctx.payload, &ctx.install_dir);
+    let ctx_path = common::plugin::write_ctx(&pctx)?;
+    let self_exe = std::env::current_exe()?;
+    let res = common::plugin::run_each(&self_exe, &ctx_path, &items, "up", true);
+    let _ = fs::remove_file(&ctx_path);
+    let _ = fs::remove_dir_all(&tmp);
+    res
+}
+
+/// Build the plugin context from a payload + chosen install dir. Shared with
+/// the post-install (finalize) and uninstall paths.
+pub fn plugin_ctx(payload: &InstallerPayload, install_dir: &Path) -> common::plugin::PluginCtx {
+    common::plugin::PluginCtx {
+        install_dir: install_dir.to_string_lossy().into_owned(),
+        product: payload.product.clone(),
+        product_id: payload.product_id.clone(),
+        version: payload.to_version.clone(),
+        exe: install_dir
+            .join(&payload.manifest.exe)
+            .to_string_lossy()
+            .replace('/', "\\"),
+        log_path: common::log::current_path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }
 }
 
 /// Read the recorded installed version from `version.json` in the data dir.

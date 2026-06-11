@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use anyhow::{Context, Result};
-use common::models::{FileAssoc, InstallInfo, InstallerPayload};
+use common::models::{FileAssoc, InstallInfo, InstallerPayload, PluginPhase};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,6 +17,7 @@ pub fn finalize(
     install_dir: &Path,
     payload: &InstallerPayload,
     uninstaller_bytes: &[u8],
+    zip_bytes: &[u8],
 ) -> Result<()> {
     // Data dir is keyed by the registry-safe product_id (stable across
     // versions). Fall back to the app dir only if %LOCALAPPDATA% can't resolve.
@@ -64,7 +65,12 @@ pub fn finalize(
         exe: payload.manifest.exe.clone(),
         associations: payload.associations.clone(),
         registry: registry.clone(),
+        plugins: payload.plugins.clone(),
     };
+
+    // Extract the plugin DLLs into the data dir so the uninstaller (and the
+    // post-install phase below) can run them.
+    write_plugin_dlls(&data_dir, payload, zip_bytes)?;
 
     // Register the Add/Remove Programs entry. Uses the in-memory `info`, not
     // the json file, so the json can safely be written last.
@@ -119,12 +125,60 @@ pub fn finalize(
         &data_dir.join("installer_info.json"),
         serde_json::to_string_pretty(&info)?.as_bytes(),
     )?;
+    // Post-install plugins run last, from the data dir, with everything in
+    // place and recorded.
+    run_post_install_plugins(&data_dir, payload, install_dir)?;
+
     // Copy the live %TEMP% log next to the uninstaller for support.
     if let Some(src) = common::log::current_path() {
         let _ = fs::copy(&src, data_dir.join("install.log"));
     }
 
     Ok(())
+}
+
+/// Extract every plugin DLL from the payload zip into `<data_dir>/plugins/`.
+fn write_plugin_dlls(data_dir: &Path, payload: &InstallerPayload, zip_bytes: &[u8]) -> Result<()> {
+    if payload.plugins.is_empty() {
+        return Ok(());
+    }
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))
+        .context("open payload zip for plugins")?;
+    for p in &payload.plugins {
+        let mut buf = Vec::new();
+        {
+            let mut f = archive
+                .by_name(&p.file)
+                .with_context(|| format!("plugin {} missing from payload", p.file))?;
+            std::io::Read::read_to_end(&mut f, &mut buf)?;
+        }
+        // `p.file` is `plugins/<name>.dll`, relative to the data dir.
+        common::utils::write_atomic(&data_dir.join(&p.file), &buf)?;
+    }
+    Ok(())
+}
+
+/// Run the post-install plugins (from the data dir) in isolated child processes.
+fn run_post_install_plugins(
+    data_dir: &Path,
+    payload: &InstallerPayload,
+    install_dir: &Path,
+) -> Result<()> {
+    let items: Vec<_> = payload
+        .plugins
+        .iter()
+        .filter(|p| p.phase == PluginPhase::PostInstall)
+        .map(|p| (p.clone(), data_dir.join(&p.file)))
+        .collect();
+    if items.is_empty() {
+        return Ok(());
+    }
+    let pctx = crate::extract::plugin_ctx(payload, install_dir);
+    let ctx_path = common::plugin::write_ctx(&pctx)?;
+    let self_exe = std::env::current_exe()?;
+    let res = common::plugin::run_each(&self_exe, &ctx_path, &items, "up", true);
+    let _ = fs::remove_file(&ctx_path);
+    res
 }
 
 /// Resolve token templates in each registry entry against this install.
