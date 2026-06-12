@@ -31,6 +31,9 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # use the compact minimal UI for upgrades (first install still uses the wizard)
 # upgrade_minimal_ui = true
 
+# show the "uninstall complete" message box at the end of an interactive uninstall
+# show_uninstall_complete = true
+
 # patch mode (optional)
 # from_version = "0.9"
 # from_dir     = "build/myapp-0.9"

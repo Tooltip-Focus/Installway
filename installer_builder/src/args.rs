@@ -107,6 +107,11 @@ pub struct PackCli {
     #[arg(long)]
     pub upgrade_minimal_ui: bool,
 
+    /// Show the "uninstall complete" confirmation message box at the end of an
+    /// interactive uninstall. Off by default.
+    #[arg(long)]
+    pub show_uninstall_complete: bool,
+
     /// Default install dir the UI proposes (per-app). May contain `%VAR%` env
     /// tokens, e.g. `%LOCALAPPDATA%\Programs\MyApp` or `C:\Games\MyApp`.
     #[arg(long, value_name = "DIR")]
@@ -203,6 +208,8 @@ pub struct PackFile {
     pub skip_path: bool,
     #[serde(default)]
     pub upgrade_minimal_ui: bool,
+    #[serde(default)]
+    pub show_uninstall_complete: bool,
     pub default_install_dir: Option<String>,
     pub priv_key: Option<PathBuf>,
     pub pub_key: Option<PathBuf>,
@@ -237,6 +244,7 @@ pub struct PackArgs {
     pub skip_license: bool,
     pub skip_path: bool,
     pub upgrade_minimal_ui: bool,
+    pub show_uninstall_complete: bool,
     pub default_install_dir: Option<String>,
     pub priv_key: PathBuf,
     pub pub_key: Option<PathBuf>,
@@ -311,6 +319,7 @@ impl PackArgs {
             skip_license: cli.skip_license || file.skip_license,
             skip_path: cli.skip_path || file.skip_path,
             upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
+            show_uninstall_complete: cli.show_uninstall_complete || file.show_uninstall_complete,
             reuse_stub: cli.reuse_stub || file.reuse_stub,
             registry: build_registry(file.registry)?,
             plugins: build_plugins(file.plugins)?,
@@ -447,6 +456,7 @@ mod tests {
             skip_license: false,
             skip_path: false,
             upgrade_minimal_ui: false,
+            show_uninstall_complete: false,
             default_install_dir: None,
             priv_key: None,
             pub_key: None,

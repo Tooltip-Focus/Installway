@@ -609,7 +609,7 @@ pub fn fatal(msg: &str) {
             None,
             PCWSTR(t.as_ptr()),
             PCWSTR(c.as_ptr()),
-            MB_OK | MB_ICONERROR,
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
         );
     }
 }
@@ -623,7 +623,7 @@ pub fn info(msg: &str, caption: &str) {
             None,
             PCWSTR(t.as_ptr()),
             PCWSTR(c.as_ptr()),
-            MB_OK | MB_ICONINFORMATION,
+            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
         );
     }
 }

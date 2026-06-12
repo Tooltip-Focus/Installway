@@ -56,6 +56,14 @@ enum Cmd {
         /// PID of the uninstall process to wait for before deleting anything.
         #[arg(long)]
         parent_pid: Option<u32>,
+
+        /// Product display name for the "uninstall complete" message box.
+        #[arg(long)]
+        display_name: Option<String>,
+
+        /// Show the "uninstall complete" message box after cleanup finishes.
+        #[arg(long)]
+        show_complete: bool,
     },
 }
 
@@ -107,7 +115,16 @@ fn run() -> Result<()> {
             data_dir,
             product,
             parent_pid,
-        }) => stages::finalize::run(app_dir, data_dir, product, parent_pid),
+            display_name,
+            show_complete,
+        }) => stages::finalize::run(
+            app_dir,
+            data_dir,
+            product,
+            parent_pid,
+            display_name,
+            show_complete,
+        ),
         None => stages::uninstall::run(cli.silent),
     }
 }
