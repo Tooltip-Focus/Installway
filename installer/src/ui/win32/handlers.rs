@@ -6,8 +6,8 @@
 //! back to the UI thread.
 
 use super::{
-    BM_GETCHECK, ID_ACCEPT_CHK, ID_LAUNCH_CHK, ID_PATH_EDIT, ID_PROGRESS, ID_STATUS, PAYLOAD,
-    Phase, STATE, apply_phase, message_box, tr,
+    BM_GETCHECK, ID_ACCEPT_CHK, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_PATH_EDIT, ID_PATH_WARN,
+    ID_PATH_WARN_ICON, ID_PROGRESS, ID_STATUS, PAYLOAD, Phase, STATE, apply_phase, message_box, tr,
 };
 use crate::extract::{InstallCtx, install};
 use crate::install as install_mod;
@@ -15,14 +15,15 @@ use crate::ui::helpers::{
     self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, get_window_text, scale_progress,
     set_dlg_text, set_progress,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::BST_CHECKED;
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetDlgItem, MB_ICONWARNING, PostMessageW, SendMessageW, WM_CLOSE,
+    GetDlgItem, MB_ICONWARNING, PostMessageW, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_CLOSE,
 };
 
 pub(super) unsafe fn on_next(hwnd: HWND) {
@@ -78,8 +79,31 @@ pub(super) unsafe fn on_accept_toggle(hwnd: HWND) {
 pub(super) unsafe fn on_browse(hwnd: HWND) {
     unsafe {
         if let Some(picked) = pick_folder_com(hwnd) {
-            set_dlg_text(hwnd, ID_PATH_EDIT, &picked);
+            set_dlg_text(hwnd, ID_PATH_EDIT, &with_product_subdir(&picked));
         }
+    }
+}
+
+/// Append the product name as a subfolder to a browsed parent folder
+fn with_product_subdir(picked: &str) -> String {
+    let product = PAYLOAD.with(|p| {
+        p.borrow()
+            .as_ref()
+            .map(|p| p.product.trim().to_string())
+            .unwrap_or_default()
+    });
+    if product.is_empty() {
+        return picked.to_string();
+    }
+    let pb = PathBuf::from(picked);
+    let already = pb
+        .file_name()
+        .map(|n| n.eq_ignore_ascii_case(product.as_str()))
+        .unwrap_or(false);
+    if already {
+        picked.to_string()
+    } else {
+        pb.join(&product).to_string_lossy().into_owned()
     }
 }
 
@@ -122,11 +146,51 @@ unsafe fn pick_folder_com(hwnd: HWND) -> Option<String> {
     }
 }
 
+/// True when `path` is an existing directory that already holds entries. A
+/// missing path (the installer will create it) or an empty folder is safe.
+fn dir_has_entries(path: &str) -> bool {
+    let p = path.trim();
+    if p.is_empty() {
+        return false;
+    }
+    std::fs::read_dir(Path::new(p))
+        .map(|mut it| it.next().is_some())
+        .unwrap_or(false)
+}
+
+/// Re-evaluate the chosen folder: show/hide the non-empty warning and
+/// enable/disable the Install button accordingly. Called when entering the
+/// Choose page and on every edit of the path field.
+pub(super) unsafe fn update_path_warning(hwnd: HWND) {
+    let edit = unsafe { GetDlgItem(Some(hwnd), ID_PATH_EDIT as i32).unwrap_or_default() };
+    let path = unsafe { get_window_text(edit) };
+    let danger = dir_has_entries(&path);
+
+    let warn = unsafe { GetDlgItem(Some(hwnd), ID_PATH_WARN as i32).unwrap_or_default() };
+    let warn_icon = unsafe { GetDlgItem(Some(hwnd), ID_PATH_WARN_ICON as i32).unwrap_or_default() };
+    let install_btn = unsafe { GetDlgItem(Some(hwnd), ID_INSTALL_BTN as i32).unwrap_or_default() };
+    if danger {
+        unsafe { set_dlg_text(hwnd, ID_PATH_WARN, &tr().get("install.path_not_empty")) };
+    }
+    unsafe {
+        let vis = if danger { SW_SHOW } else { SW_HIDE };
+        let _ = ShowWindow(warn, vis);
+        let _ = ShowWindow(warn_icon, vis);
+        let _ = EnableWindow(install_btn, !danger);
+    }
+}
+
 pub(super) unsafe fn on_install(hwnd: HWND) {
     let edit = unsafe { GetDlgItem(Some(hwnd), ID_PATH_EDIT as i32).unwrap_or_default() };
     let path = unsafe { get_window_text(edit) };
     if path.trim().is_empty() {
         unsafe { message_box(hwnd, &tr().get("install.err_no_path"), MB_ICONWARNING) };
+        return;
+    }
+    // Defensive: the Install button is disabled when the folder is non-empty,
+    // but a default-button keypress could still reach here.
+    if dir_has_entries(&path) {
+        unsafe { message_box(hwnd, &tr().get("install.path_not_empty"), MB_ICONWARNING) };
         return;
     }
     let pb = PathBuf::from(path.trim());

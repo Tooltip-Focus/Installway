@@ -48,6 +48,8 @@ pub(super) const ID_NEXT_BTN: usize = 1013;
 pub(super) const ID_BACK_BTN: usize = 1014;
 pub(super) const ID_LAUNCH_CHK: usize = 1015;
 pub(super) const ID_BANNER: usize = 1016;
+pub(super) const ID_PATH_WARN: usize = 1017;
+pub(super) const ID_PATH_WARN_ICON: usize = 1018;
 
 pub(super) const WIN_W: i32 = 700;
 pub(super) const WIN_H: i32 = 500;
@@ -335,6 +337,12 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     show(ID_PATH_LABEL, choose);
     show(ID_PATH_EDIT, choose);
     show(ID_BROWSE_BTN, choose);
+    // The non-empty-folder warning (icon + text) visibility + the Install
+    // button's enabled state are (re)computed below when entering Choose.
+    if !choose {
+        show(ID_PATH_WARN, false);
+        show(ID_PATH_WARN_ICON, false);
+    }
 
     show(ID_PROGRESS, prog);
     show(
@@ -351,6 +359,12 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
         phase == Phase::License || phase == Phase::Choose || phase == Phase::Progress,
     );
     show(ID_CLOSE_BTN, phase == Phase::Done || phase == Phase::Error);
+
+    // Entering Choose: evaluate the destination folder so the warning + the
+    // Install button's enabled state reflect the current path right away.
+    if phase == Phase::Choose {
+        unsafe { handlers::update_path_warning(hwnd) };
+    }
 
     // With no Choose page, the License "Next" is really the install trigger.
     if phase == Phase::License {
@@ -396,6 +410,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let banner = GetDlgItem(Some(hwnd), ID_BANNER as i32).unwrap_or_default();
             let header = GetDlgItem(Some(hwnd), ID_HEADER as i32).unwrap_or_default();
             let sub = GetDlgItem(Some(hwnd), ID_SUBHEADER as i32).unwrap_or_default();
+            let warn = GetDlgItem(Some(hwnd), ID_PATH_WARN as i32).unwrap_or_default();
             let _ = SetBkMode(hdc, TRANSPARENT);
             if ctrl == banner || ctrl == header || ctrl == sub {
                 SetTextColor(hdc, COLORREF(0x00333333));
@@ -403,6 +418,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     s.borrow()
                         .as_ref()
                         .map(|st| st.borrow().banner_brush.0 as isize)
+                        .unwrap_or(0)
+                }));
+            }
+            if ctrl == warn {
+                // Red (0x00BBGGRR)
+                SetTextColor(hdc, COLORREF(0x000000C0));
+                return LRESULT(STATE.with(|s| {
+                    s.borrow()
+                        .as_ref()
+                        .map(|st| st.borrow().card_brush.0 as isize)
                         .unwrap_or(0)
                 }));
             }
@@ -415,6 +440,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         },
         WM_COMMAND => unsafe {
             let id = (wparam.0 & 0xFFFF) as usize;
+            let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+            // Re-check the destination as the user edits the path field.
+            if id == ID_PATH_EDIT && code == EN_CHANGE {
+                handlers::update_path_warning(hwnd);
+            }
             match id {
                 ID_BROWSE_BTN => handlers::on_browse(hwnd),
                 ID_INSTALL_BTN => handlers::on_install(hwnd),
