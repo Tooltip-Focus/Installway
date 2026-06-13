@@ -10,13 +10,56 @@ mod proc;
 mod ui;
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use clap::Parser;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// Exit code for a patch run against the wrong installed version. Distinct from
 /// generic failure (1) so a launcher can tell the two apart.
 const EXIT_VERSION_MISMATCH: i32 = 10;
+
+#[derive(Parser)]
+#[command(
+    name = "installer",
+    disable_help_flag = true,
+    disable_version_flag = true
+)]
+struct Cli {
+    /// Target install directory (optional; used with `--silent` / `--minimal`).
+    /// Falls back to `INSTALLWAY_PATH`, then the per-app default.
+    install_dir: Option<String>,
+
+    /// Silent (non-interactive) install. Also accepted as `/S`.
+    #[arg(long)]
+    silent: bool,
+
+    /// Compact auto-update UI (icon + progress only). Also accepted as `/minimal`.
+    #[arg(long)]
+    minimal: bool,
+
+    /// Launch the product after a successful install.
+    #[arg(long)]
+    launch: bool,
+
+    /// Verify the embedded payload + signature, print a summary, and exit.
+    #[arg(long)]
+    verify: bool,
+
+    /// Re-hash the installed files against the recorded manifest, then exit.
+    #[arg(long = "verify-install")]
+    verify_install: bool,
+
+    /// Override the UI language (2-letter ISO code, e.g. `fr`).
+    #[arg(long)]
+    lang: Option<String>,
+
+    /// Dev-only: render one UI view with sample data, no payload needed
+    /// (`license` | `choose` | `progress` | `done` | `error` | `minimal`).
+    #[cfg(debug_assertions)]
+    #[arg(long)]
+    preview: Option<String>,
+}
 
 fn main() {
     // Diagnostic / headless modes report errors as text on the parent console
@@ -48,29 +91,42 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Full argv (incl. argv[0]) so clap can name itself in any diagnostics.
+    let mut argv: Vec<String> = std::env::args().collect();
 
-    // Plugin-host child: `--run-plugin <dll> <up|down> <ctx.json>`. Loads the
-    // DLL, runs the action, exits with its code. Needs no payload.
-    if let Some(idx) = args.iter().position(|a| a == "--run-plugin") {
-        let code = match (args.get(idx + 1), args.get(idx + 2), args.get(idx + 3)) {
-            (Some(dll), Some(func), Some(ctx)) => common::plugin::host_main(
-                std::path::Path::new(dll),
-                func,
-                std::path::Path::new(ctx),
-            ),
+    // Plugin-host child: `--run-plugin <dll> <up|down> <ctx.json>`. Handled
+    // before clap (its trailing paths aren't declared flags); exits with the
+    // plugin's code. Needs no payload.
+    if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
+        let code = match (argv.get(idx + 1), argv.get(idx + 2), argv.get(idx + 3)) {
+            (Some(dll), Some(func), Some(ctx)) => {
+                common::plugin::host_main(Path::new(dll), func, Path::new(ctx))
+            }
             _ => 2,
         };
         std::process::exit(code);
     }
 
-    let translator = common::i18n::Translator::detect(&args);
+    for a in argv.iter_mut().skip(1) {
+        match a.as_str() {
+            "/S" => *a = "--silent".to_string(),
+            "/minimal" => *a = "--minimal".to_string(),
+            _ => {}
+        }
+    }
+
+    let cli = Cli::parse_from(&argv);
+
+    // `--lang` wins; otherwise env (`INSTALLWAY_LANG`) then OS locale.
+    let translator = match &cli.lang {
+        Some(code) => common::i18n::Translator::for_lang(code),
+        None => common::i18n::Translator::detect(&[]),
+    };
 
     // Dev-only: render a single UI view with sample data, no payload needed.
-    // e.g. `installer --preview minimal`, `--preview license`, `--preview progress`.
+    // e.g. `installer --preview minimal`, `--preview license`.
     #[cfg(debug_assertions)]
-    if let Some(idx) = args.iter().position(|a| a == "--preview") {
-        let view = args.get(idx + 1).map(|s| s.as_str()).unwrap_or("license");
+    if let Some(view) = cli.preview.as_deref() {
         return if view == "minimal" {
             ui::minimal::preview(translator)
         } else {
@@ -79,36 +135,24 @@ fn run() -> Result<()> {
     }
 
     let loaded = payload::load_and_verify()?;
-    let launch = args.iter().any(|a| a == "--launch");
+    let launch = cli.launch;
 
     // Compact auto-start update UI (app-triggered self-update): no license,
     // path picker or buttons - just icon + progress.
-    if let Some(idx) = args
-        .iter()
-        .position(|a| a == "--minimal" || a == "/minimal")
-    {
-        let path = path_arg(&args, idx)
-            .or_else(|| std::env::var("INSTALLWAY_PATH").ok())
-            .unwrap_or_else(|| {
-                default_install_path(&loaded.payload)
-                    .to_string_lossy()
-                    .into_owned()
-            });
-        return ui::minimal::run(loaded, PathBuf::from(path), launch, translator);
+    if cli.minimal {
+        // Path resolved before `loaded` is moved into the UI: CLI positional,
+        // then `INSTALLWAY_PATH`, then the per-app default.
+        let path = resolve_install_path(cli.install_dir.as_deref(), &loaded.payload);
+        return ui::minimal::run(loaded, path, launch, translator);
     }
 
-    if let Some(idx) = args.iter().position(|a| a == "--silent" || a == "/S") {
-        let path = path_arg(&args, idx)
-            .or_else(|| std::env::var("INSTALLWAY_PATH").ok())
-            .unwrap_or_else(|| {
-                default_install_path(&loaded.payload)
-                    .to_string_lossy()
-                    .into_owned()
-            });
-        return run_silent(&loaded, PathBuf::from(path), launch);
+    if cli.silent {
+        let path = resolve_install_path(cli.install_dir.as_deref(), &loaded.payload);
+        return run_silent(&loaded, path, launch);
     }
+
     // Diagnostic: re-hash installed files against the manifest in the data dir.
-    if args.iter().any(|a| a == "--verify-install") {
+    if cli.verify_install {
         attach_console();
         let data_dir =
             common::paths::uninstall_dir(&loaded.payload.publisher, &loaded.payload.product_id)
@@ -116,7 +160,7 @@ fn run() -> Result<()> {
         return extract::verify_install(&data_dir);
     }
 
-    if args.iter().any(|a| a == "--verify") {
+    if cli.verify {
         attach_console();
         let license = match &loaded.payload.license_text {
             Some(t) => format!("custom ({} bytes)", t.len()),
@@ -201,11 +245,19 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
     Ok(())
 }
 
-/// The value right after a flag, unless it's another flag.
-fn path_arg(args: &[String], flag_idx: usize) -> Option<String> {
-    args.get(flag_idx + 1)
-        .filter(|s| !s.starts_with("--") && !s.starts_with('/'))
-        .cloned()
+/// Resolve the target dir for headless / compact modes: explicit CLI value,
+/// then `INSTALLWAY_PATH`, then the per-app default.
+fn resolve_install_path(
+    cli_path: Option<&str>,
+    payload: &common::models::InstallerPayload,
+) -> PathBuf {
+    if let Some(p) = cli_path {
+        return PathBuf::from(p);
+    }
+    if let Ok(p) = std::env::var("INSTALLWAY_PATH") {
+        return PathBuf::from(p);
+    }
+    default_install_path(payload)
 }
 
 fn default_install_path(payload: &common::models::InstallerPayload) -> PathBuf {
