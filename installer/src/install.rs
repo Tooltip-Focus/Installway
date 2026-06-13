@@ -67,6 +67,7 @@ pub fn finalize(
         associations: payload.associations.clone(),
         registry: registry.clone(),
         plugins: payload.plugins.clone(),
+        show_uninstall_complete: payload.show_uninstall_complete,
     };
 
     // Extract the plugin DLLs into the data dir so the uninstaller (and the

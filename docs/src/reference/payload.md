@@ -46,6 +46,7 @@ parses `InstallerPayload` from them — avoiding any serializer-determinism trap
 | `skip_license` / `skip_path` | `bool` | trim the wizard |
 | `default_install_dir` | `Option<String>` | proposed path; `%VAR%` tokens expanded |
 | `upgrade_minimal_ui` | `bool` | upgrades use the minimal UI; first install always uses the wizard |
+| `show_uninstall_complete` | `bool` | show the "uninstall complete" message box at the end (off by default) |
 
 ## `Manifest` / `FileEntry` / `PatchInfo`
 

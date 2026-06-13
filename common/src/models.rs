@@ -98,6 +98,10 @@ pub struct InstallerPayload {
     /// Native DLL plugins bundled in the payload zip, run at install.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginEntry>,
+    /// Show the "uninstall complete" confirmation message box at the end of an
+    /// interactive uninstall. Off by default; enable per-app at build time.
+    #[serde(default)]
+    pub show_uninstall_complete: bool,
 }
 
 /// Registry value type for a [`RegEntry`].
@@ -191,6 +195,10 @@ pub struct InstallInfo {
     /// Plugins recorded at install - the uninstaller runs their `down`.
     #[serde(default)]
     pub plugins: Vec<PluginEntry>,
+    /// Show the "uninstall complete" confirmation message box at the end of an
+    /// interactive uninstall. Off by default; set per-app at build time.
+    #[serde(default)]
+    pub show_uninstall_complete: bool,
 }
 
 fn default_true() -> bool {
@@ -239,6 +247,7 @@ mod tests {
         assert_eq!(p.product_id, "");
         assert!(!p.force_reinstall);
         assert!(!p.upgrade_minimal_ui);
+        assert!(!p.show_uninstall_complete);
         assert!(p.associations.is_empty());
         assert!(p.license_text.is_none());
         assert_eq!(p.kind, PayloadKind::Full);
@@ -300,6 +309,7 @@ mod tests {
                 phase: PluginPhase::PreInstall,
                 required: true,
             }],
+            show_uninstall_complete: true,
         };
         let s = serde_json::to_string(&p).unwrap();
         let back: InstallerPayload = serde_json::from_str(&s).unwrap();
@@ -319,6 +329,7 @@ mod tests {
             Some(r"%LOCALAPPDATA%\Programs\P")
         );
         assert!(back.upgrade_minimal_ui);
+        assert!(back.show_uninstall_complete);
         assert_eq!(back.associations.len(), 1);
         assert_eq!(back.from_version.as_deref(), Some("1.0"));
     }

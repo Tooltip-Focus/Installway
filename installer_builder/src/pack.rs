@@ -151,6 +151,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         skip_path: args.skip_path,
         default_install_dir: args.default_install_dir.clone(),
         upgrade_minimal_ui: args.upgrade_minimal_ui,
+        show_uninstall_complete: args.show_uninstall_complete,
         registry: args.registry.clone(),
         plugins: plugin_entries,
     };

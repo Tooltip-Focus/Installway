@@ -40,7 +40,7 @@ pub fn run(silent: bool) -> Result<()> {
             common::log::warn(format!(
                 "installer_info.json unreadable ({e:#}) - best-effort cleanup of leftovers"
             ));
-            spawn_finalize(None, &data_dir)?;
+            spawn_finalize(None, &data_dir, None, false)?;
             return Ok(());
         }
     };
@@ -133,8 +133,16 @@ pub fn run(silent: bool) -> Result<()> {
             cleanup::unregister(&info_owned.registry_key);
 
             // 6. Finalize: deletes app dir + data dir (incl. this exe) + itself.
+            //    The "uninstall complete" message box (when enabled) is shown by
+            //    finalize at the very end, so it appears after this window and the
+            //    finalize progress window are gone - not racing behind them.
             common::log::info("spawning finalize step");
-            if let Err(e) = spawn_finalize(Some(&app_dir_owned), &data_dir_owned) {
+            if let Err(e) = spawn_finalize(
+                Some(&app_dir_owned),
+                &data_dir_owned,
+                Some(&info_owned.product),
+                info_owned.show_uninstall_complete,
+            ) {
                 common::log::error(format!("finalize spawn failed: {e:#}"));
                 ui::fatal(&tr.fmt("uninstall.spawn_failed", &[("err", &format!("{e:#}"))]));
             }
@@ -142,12 +150,7 @@ pub fn run(silent: bool) -> Result<()> {
         auto_start: false,
     };
 
-    if ui::run(params) {
-        ui::info(
-            &tr.fmt("uninstall.complete_message", &[("product", &info.product)]),
-            &tr.get("uninstall.complete_caption"),
-        );
-    }
+    ui::run(params);
     Ok(())
 }
 
@@ -179,7 +182,8 @@ fn run_silent(
         "unregistered HKCU Uninstall\\{}",
         info.registry_key
     ));
-    spawn_finalize(Some(app_dir), data_dir)
+    // Silent uninstall: never show the completion box.
+    spawn_finalize(Some(app_dir), data_dir, None, false)
 }
 
 /// Run each plugin's `down` (reverse install order) in isolated child
@@ -223,8 +227,14 @@ fn run_down_plugins(info: &common::models::InstallInfo, data_dir: &Path) {
 
 /// Spawn the %TEMP% finalize step that deletes the app dir, the data dir, and
 /// itself. `app_dir` is `None` when the metadata was unreadable (skips app-dir
-/// removal).
-fn spawn_finalize(app_dir: Option<&Path>, data_dir: &Path) -> Result<()> {
+/// removal). `display_name` + `show_complete` drive the optional "uninstall
+/// complete" message box finalize shows at the very end.
+fn spawn_finalize(
+    app_dir: Option<&Path>,
+    data_dir: &Path,
+    display_name: Option<&str>,
+    show_complete: bool,
+) -> Result<()> {
     // Hint = data-dir folder name (the product_id), so finalize's log matches.
     let product = data_dir
         .file_name()
@@ -247,6 +257,12 @@ fn spawn_finalize(app_dir: Option<&Path>, data_dir: &Path) -> Result<()> {
         .arg(std::process::id().to_string());
     if let Some(dir) = app_dir {
         cmd.arg("--app-dir").arg(dir);
+    }
+    // Show the completion box only when enabled and we have a display name.
+    if show_complete {
+        if let Some(name) = display_name {
+            cmd.arg("--display-name").arg(name).arg("--show-complete");
+        }
     }
     cmd.creation_flags(DETACHED_PROCESS)
         .spawn()

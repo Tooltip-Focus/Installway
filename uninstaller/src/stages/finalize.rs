@@ -19,6 +19,8 @@ pub fn run(
     data_dir: PathBuf,
     product: String,
     parent_pid: Option<u32>,
+    display_name: Option<String>,
+    show_complete: bool,
 ) -> Result<()> {
     // Continue the uninstall step's log file (keyed by its PID) so the whole
     // uninstall is in one %TEMP% file for support.
@@ -77,6 +79,18 @@ pub fn run(
     };
 
     let _ = ui::run(params);
+
+    // Completion box last: the finalize window (and the earlier uninstall window)
+    // are gone by now, so it shows on top instead of racing behind them.
+    if show_complete {
+        if let Some(name) = display_name {
+            let tr = ui::tr();
+            ui::info(
+                &tr.fmt("uninstall.complete_message", &[("product", &name)]),
+                &tr.get("uninstall.complete_caption"),
+            );
+        }
+    }
     Ok(())
 }
 
