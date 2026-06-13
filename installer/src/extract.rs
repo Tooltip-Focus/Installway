@@ -629,9 +629,9 @@ fn run_hdiff(old: &Path, patch: &Path, out: &Path) -> bool {
 }
 
 fn hash_file(path: &Path) -> Result<String> {
-    let mut f = File::open(path)?;
+    // Memory-map + SIMD hash: zero-copy, full-throughput
     let mut hasher = blake3::Hasher::new();
-    std::io::copy(&mut f, &mut hasher)?;
+    hasher.update_mmap(path)?;
     Ok(hasher.finalize().to_hex().to_string())
 }
 
