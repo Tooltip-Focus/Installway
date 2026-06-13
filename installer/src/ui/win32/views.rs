@@ -7,13 +7,14 @@
 use super::{
     BANNER_H, ID_ACCEPT_CHK, ID_BACK_BTN, ID_BANNER, ID_BROWSE_BTN, ID_CANCEL_BTN, ID_CLOSE_BTN,
     ID_HEADER, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_LICENSE_EDIT, ID_NEXT_BTN, ID_PATH_EDIT,
-    ID_PATH_LABEL, ID_PROGRESS, ID_STATUS, ID_SUBHEADER, PAD, STATE, WIN_H, WIN_W, tr,
+    ID_PATH_LABEL, ID_PATH_WARN, ID_PATH_WARN_ICON, ID_PROGRESS, ID_STATUS, ID_SUBHEADER, PAD,
+    STATE, WIN_H, WIN_W, tr,
 };
 use crate::ui::helpers::{self};
 use common::models::{InstallerPayload, PayloadKind};
 use common::utils::wide;
 use std::path::PathBuf;
-use windows::Win32::Foundation::{HINSTANCE, HWND};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -22,6 +23,10 @@ use windows::core::{PCWSTR, w};
 const BS_PUSHBUTTON: u32 = 0x0;
 const BS_DEFPUSHBUTTON: u32 = 0x1;
 const BS_AUTOCHECKBOX: u32 = 0x3;
+const SS_ICON: u32 = 0x0003;
+const SS_CENTERIMAGE: u32 = 0x0200;
+const SS_REALSIZECONTROL: u32 = 0x0040;
+const STM_SETICON: u32 = 0x0170;
 const ES_READONLY: u32 = 0x0800;
 const ES_MULTILINE: u32 = 0x0004;
 const ES_LEFT: u32 = 0x0000;
@@ -226,7 +231,66 @@ unsafe fn build_choose(hwnd: HWND, hinst: HINSTANCE, default_path: &PathBuf) {
             Some(hinst),
             None,
         );
+        // Non-empty-folder warning, below the path row. Hidden until the chosen
+        // folder is found to already contain files.
+        let warn_y = BANNER_H + PAD + 72;
+        const ICON_SZ: i32 = 20;
+        let icon = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!(""),
+            WS_CHILD | WINDOW_STYLE(SS_ICON | SS_REALSIZECONTROL),
+            PAD,
+            warn_y,
+            ICON_SZ,
+            ICON_SZ,
+            Some(hwnd),
+            Some(HMENU(ID_PATH_WARN_ICON as *mut _)),
+            Some(hinst),
+            None,
+        );
+        if let Ok(h) = icon {
+            if let Some(hicon) = stock_warning_icon() {
+                SendMessageW(
+                    h,
+                    STM_SETICON,
+                    Some(WPARAM(hicon.0 as usize)),
+                    Some(LPARAM(0)),
+                );
+            }
+        }
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!(""),
+            WS_CHILD | WINDOW_STYLE(SS_CENTERIMAGE),
+            PAD + ICON_SZ + 8,
+            warn_y,
+            WIN_W - PAD * 2 - ICON_SZ - 8,
+            ICON_SZ,
+            Some(hwnd),
+            Some(HMENU(ID_PATH_WARN as *mut _)),
+            Some(hinst),
+            None,
+        );
     }
+}
+
+/// The shell's stock warning icon (small/16px), themed for the running Windows
+/// version - flatter than the legacy `IDI_WARNING` triangle. Leaked for the
+/// process lifetime (one handle); the OS reclaims it at exit.
+unsafe fn stock_warning_icon() -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
+    use windows::Win32::UI::Shell::{
+        SHGSI_ICON, SHGSI_SMALLICON, SHGetStockIconInfo, SHSTOCKICONINFO, SIID_WARNING,
+    };
+    let mut sii = SHSTOCKICONINFO {
+        cbSize: std::mem::size_of::<SHSTOCKICONINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        SHGetStockIconInfo(SIID_WARNING, SHGSI_ICON | SHGSI_SMALLICON, &mut sii).ok()?;
+    }
+    Some(sii.hIcon)
 }
 
 /// Progress view: progress bar + status label.
@@ -379,6 +443,7 @@ unsafe fn apply_fonts(hwnd: HWND) {
             for id in [
                 ID_PATH_LABEL,
                 ID_PATH_EDIT,
+                ID_PATH_WARN,
                 ID_BROWSE_BTN,
                 ID_INSTALL_BTN,
                 ID_CANCEL_BTN,
