@@ -19,8 +19,6 @@ need formatting. Enable it once per clone:
 git config core.hooksPath .githooks
 ```
 
-(On Unix, also `chmod +x .githooks/pre-commit` after checkout.)
-
 The hook is the fast local mirror of the global CI check.
 
 ## Build & test
