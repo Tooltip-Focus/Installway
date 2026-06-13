@@ -32,10 +32,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::thread;
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT,
-    SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    InvalidateRect, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
@@ -71,6 +71,8 @@ struct State {
     font_body: HFONT,
     bg: HBRUSH,
     hicon: HICON,
+    /// Current monitor DPI (96 = 100%); updated on `WM_DPICHANGED`.
+    dpi: i32,
 }
 
 thread_local! {
@@ -163,6 +165,7 @@ unsafe fn build_window(payload: &common::models::InstallerPayload) -> Result<Win
         font_body: create_font("Segoe UI", 15, FW_NORMAL.0 as i32),
         bg: unsafe { CreateSolidBrush(COLORREF(0x00FFFFFF)) },
         hicon,
+        dpi: 96,
     }));
     let cancel = state.borrow().cancel.clone();
     let prog = state.borrow().prog.clone();
@@ -205,8 +208,19 @@ unsafe fn build_window(payload: &common::models::InstallerPayload) -> Result<Win
     }
 
     unsafe {
+        // Scale to the monitor this window opened on (per-monitor DPI aware).
+        let dpi = helpers::dpi_for(hwnd);
+        rebuild_fonts(dpi);
+        let (sw, sh) = helpers::window_size_for_client(
+            helpers::scale(WIN_W, dpi),
+            helpers::scale(WIN_H, dpi),
+            style,
+            WINDOW_EX_STYLE(0),
+        );
+        let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
         helpers::center(hwnd);
         build_controls(hwnd, payload);
+        relayout(hwnd, dpi);
         let _ = ShowWindow(hwnd, SW_SHOW);
     }
 
@@ -274,6 +288,62 @@ fn post_err(hwnd_isize: isize, msg: &str) {
         }
     });
     post(hwnd_isize, WM_APP_ERROR);
+}
+
+/// Recreate the two fonts at the given DPI and store them (deleting the old).
+unsafe fn rebuild_fonts(dpi: i32) {
+    STATE.with(|s| {
+        if let Some(st) = s.borrow().as_ref() {
+            let mut st = st.borrow_mut();
+            unsafe {
+                let _ = DeleteObject(st.font_title.into());
+                let _ = DeleteObject(st.font_body.into());
+            }
+            st.font_title = create_font(
+                "Segoe UI Semibold",
+                helpers::scale(20, dpi),
+                FW_SEMIBOLD.0 as i32,
+            );
+            st.font_body = create_font("Segoe UI", helpers::scale(15, dpi), FW_NORMAL.0 as i32);
+            st.dpi = dpi;
+        }
+    });
+}
+
+/// Reposition + resize every control for `dpi` (96-dpi base, scaled). Run after
+/// creation and on each `WM_DPICHANGED`. Identity at 96 dpi.
+unsafe fn relayout(hwnd: HWND, dpi: i32) {
+    let s = |v: i32| helpers::scale(v, dpi);
+    let col_w = WIN_W - COL_X - PAD;
+    let items: &[(usize, i32, i32, i32, i32)] = &[
+        (ID_ICON, PAD, PAD, ICON_SZ, ICON_SZ),
+        (ID_TITLE, COL_X, PAD, col_w, 26),
+        (ID_SUB, COL_X, PAD + 28, col_w, 20),
+        (ID_PROGRESS, COL_X, PAD + 56, col_w, 18),
+        (ID_STATUS, COL_X, PAD + 80, col_w, 20),
+    ];
+    unsafe {
+        for &(id, x, y, w, h) in items {
+            let ctrl = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
+            if !ctrl.is_invalid() {
+                let _ = MoveWindow(ctrl, s(x), s(y), s(w), s(h), true);
+            }
+        }
+    }
+}
+
+/// (Re)apply the stored fonts to the text controls.
+unsafe fn apply_fonts(hwnd: HWND) {
+    STATE.with(|s| {
+        if let Some(st) = s.borrow().as_ref() {
+            let st = st.borrow();
+            unsafe {
+                helpers::set_font(hwnd, ID_TITLE, st.font_title);
+                helpers::set_font(hwnd, ID_SUB, st.font_body);
+                helpers::set_font(hwnd, ID_STATUS, st.font_body);
+            }
+        }
+    });
 }
 
 unsafe fn build_controls(hwnd: HWND, payload: &common::models::InstallerPayload) {
@@ -390,6 +460,26 @@ unsafe fn build_controls(hwnd: HWND, payload: &common::models::InstallerPayload)
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_DPICHANGED => unsafe {
+            // Moved to a monitor of different scale: resize to the suggested
+            // rect, rebuild fonts + lay out at the new DPI, repaint.
+            let new_dpi = ((wparam.0 >> 16) & 0xFFFF) as i32;
+            let rc = &*(lparam.0 as *const RECT);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                rc.left,
+                rc.top,
+                rc.right - rc.left,
+                rc.bottom - rc.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            rebuild_fonts(new_dpi);
+            apply_fonts(hwnd);
+            relayout(hwnd, new_dpi);
+            let _ = InvalidateRect(Some(hwnd), None, true);
+            LRESULT(0)
+        },
         WM_CTLCOLORSTATIC => unsafe {
             let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
             let ctrl = HWND(lparam.0 as *mut _);

@@ -15,6 +15,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, PBM_SETPOS, PBM_SETRANGE32,
 };
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::ExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, DispatchMessageW, GetDlgItem, GetMessageW, GetSystemMetrics, GetWindowRect,
@@ -36,6 +37,19 @@ pub fn init_progress_class() {
         dwICC: ICC_PROGRESS_CLASS,
     };
     let _ = unsafe { InitCommonControlsEx(&icc) };
+}
+
+/// The DPI of the monitor `hwnd` is on (96 = 100% scale). Falls back to 96 if
+/// the query fails. Scales the fixed-pixel layout per monitor so a move between
+/// screens of different scale stays crisp (no bitmap stretch).
+pub unsafe fn dpi_for(hwnd: HWND) -> i32 {
+    let d = unsafe { GetDpiForWindow(hwnd) };
+    if d == 0 { 96 } else { d as i32 }
+}
+
+/// Scale a 96-dpi base measurement to the given DPI.
+pub fn scale(v: i32, dpi: i32) -> i32 {
+    v * dpi / 96
 }
 
 pub fn create_font(name: &str, height: i32, weight: i32) -> HFONT {

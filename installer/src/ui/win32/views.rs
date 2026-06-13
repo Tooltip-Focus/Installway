@@ -431,7 +431,77 @@ unsafe fn build_buttons(hwnd: HWND, hinst: HINSTANCE) {
     }
 }
 
-unsafe fn apply_fonts(hwnd: HWND) {
+/// Reposition + resize every control for the given DPI. The coordinates here
+/// are the single source of truth for the layout, in 96-dpi base units scaled
+/// by `dpi`. Called once after creation and again on every `WM_DPICHANGED`
+/// (move to a monitor of different scale). At 96 dpi this is identity, so
+/// 100%-scale behaviour is unchanged.
+pub(super) unsafe fn relayout(hwnd: HWND, dpi: i32) {
+    let s = |v: i32| helpers::scale(v, dpi);
+
+    let checkbox_y = WIN_H - 124;
+    let license_top = BANNER_H + PAD;
+    let license_h = checkbox_y - license_top - 24;
+    let btn_y = WIN_H - 84;
+    let warn_y = BANNER_H + PAD + 72;
+    const ICON_SZ: i32 = 20;
+
+    // (id, x, y, w, h) in 96-dpi base units - mirrors the build_* functions.
+    let items: &[(usize, i32, i32, i32, i32)] = &[
+        (ID_BANNER, 0, 0, WIN_W, BANNER_H),
+        (ID_HEADER, PAD, 16, WIN_W - PAD * 2, 28),
+        (ID_SUBHEADER, PAD, 46, WIN_W - PAD * 2, 20),
+        (
+            ID_LICENSE_EDIT,
+            PAD,
+            license_top,
+            WIN_W - PAD * 2,
+            license_h,
+        ),
+        (ID_ACCEPT_CHK, PAD, checkbox_y, WIN_W - PAD * 2, 22),
+        (ID_PATH_LABEL, PAD, BANNER_H + PAD + 8, WIN_W - PAD * 2, 20),
+        (
+            ID_PATH_EDIT,
+            PAD,
+            BANNER_H + PAD + 32,
+            WIN_W - PAD * 2 - 120,
+            28,
+        ),
+        (
+            ID_BROWSE_BTN,
+            WIN_W - PAD - 110,
+            BANNER_H + PAD + 32,
+            110,
+            28,
+        ),
+        (ID_PATH_WARN_ICON, PAD, warn_y, ICON_SZ, ICON_SZ),
+        (
+            ID_PATH_WARN,
+            PAD + ICON_SZ + 8,
+            warn_y,
+            WIN_W - PAD * 2 - ICON_SZ - 8,
+            ICON_SZ,
+        ),
+        (ID_PROGRESS, PAD, BANNER_H + PAD + 16, WIN_W - PAD * 2, 22),
+        (ID_STATUS, PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 48),
+        (ID_LAUNCH_CHK, PAD, WIN_H - 124, WIN_W - PAD * 2, 22),
+        (ID_BACK_BTN, PAD, btn_y, 100, 32),
+        (ID_NEXT_BTN, WIN_W - PAD - 240, btn_y, 110, 32),
+        (ID_INSTALL_BTN, WIN_W - PAD - 240, btn_y, 110, 32),
+        (ID_CANCEL_BTN, WIN_W - PAD - 120, btn_y, 120, 32),
+        (ID_CLOSE_BTN, WIN_W - PAD - 120, btn_y, 120, 32),
+    ];
+    unsafe {
+        for &(id, x, y, w, h) in items {
+            let ctrl = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
+            if !ctrl.is_invalid() {
+                let _ = MoveWindow(ctrl, s(x), s(y), s(w), s(h), true);
+            }
+        }
+    }
+}
+
+pub(super) unsafe fn apply_fonts(hwnd: HWND) {
     STATE.with(|s| {
         let Some(st) = s.borrow().as_ref().cloned() else {
             return;
