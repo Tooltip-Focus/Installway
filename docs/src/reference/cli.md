@@ -60,6 +60,7 @@ Required fields are checked after merging. See [Config file](../building/config.
 | `--upgrade-minimal-ui` | Use the compact minimal UI for upgrades (full or patch); first install still uses the wizard. |
 | `--min-installer-version <VER>` | Anti-rollback floor (default `1.0.0`). |
 | `--force-reinstall` | Dev: rewrite all files, remove orphans, skip from-check. |
+| `--purge-unknown-files` | Full installs: remove unknown/leftover files on upgrade/reinstall (known files still hash-skipped). Ignored for patches. |
 | `--config <FILE.toml>` | Read any of the above from a TOML file. |
 
 Free-form [registry keys](../packaging/registry.md) are config-file only

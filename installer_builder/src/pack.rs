@@ -147,6 +147,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         license_text,
         associations,
         force_reinstall: args.force_reinstall,
+        purge_unknown_files: args.purge_unknown_files,
         skip_license: args.skip_license,
         skip_path: args.skip_path,
         default_install_dir: args.default_install_dir.clone(),

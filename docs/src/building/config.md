@@ -44,6 +44,9 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # installer_stub = "kit/installer.exe"
 # uninstaller    = "kit/uninstall.exe"
 
+# remove unknown/leftover files on a Full install (upgrade/reinstall); patches ignore it
+# purge_unknown_files = true
+
 # dev (optional)
 # force_reinstall = true
 # reuse_stub      = true
@@ -78,8 +81,8 @@ An invalid `product_id` (see [Full installer](full.md)) also fails the build.
   default (or an error if required).
 - **`assoc` list**: a CLI `--assoc` list *replaces* the file's list when given
   (it does not merge).
-- **Booleans** (`force_reinstall`, `skip_license`, `skip_path`, `reuse_stub`):
-  either source can turn them on.
+- **Booleans** (`force_reinstall`, `purge_unknown_files`, `skip_license`,
+  `skip_path`, `reuse_stub`): either source can turn them on.
 - **`min_installer_version`**: defaults to `1.0.0` when set in neither.
 
 Next: [License, icon & version info](../packaging/branding.md).

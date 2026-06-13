@@ -286,9 +286,15 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
         }
     }
 
-    // force_reinstall: also remove existing files not in this build (clean
-    // slate). Backed up like any delete, so still rollback-safe.
-    if ctx.payload.force_reinstall {
+    // Clean slate: also remove existing files not in this build. Two triggers:
+    //   - `force_reinstall` (dev flag), or
+    //   - `purge_unknown_files` on a Full payload (opt-in at build time, so an
+    //     upgrade/reinstall from a full version drops leftover unknown files).
+    // Patches never purge: their manifest is incremental, so "unknown" files are
+    // expected. Removals are backed up like any delete, so still rollback-safe.
+    let purge_orphans = ctx.payload.force_reinstall
+        || (ctx.payload.purge_unknown_files && ctx.payload.kind == PayloadKind::Full);
+    if purge_orphans {
         if let Ok(existing) = common::utils::collect_files(&ctx.install_dir) {
             for rel in existing {
                 if rel.starts_with(".installer_tmp")
@@ -298,7 +304,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
                 {
                     continue;
                 }
-                common::log::info(format!("force_reinstall: removing orphan {}", rel));
+                common::log::info(format!("purge: removing unknown file {}", rel));
                 deleted.push(rel);
             }
         }
