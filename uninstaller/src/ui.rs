@@ -19,13 +19,14 @@ use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, REC
 use windows::Win32::Graphics::Gdi::{
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
     DEFAULT_PITCH, DeleteObject, FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH,
-    HFONT, OUT_DEFAULT_PRECIS, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    HFONT, InvalidateRect, OUT_DEFAULT_PRECIS, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, PBM_SETPOS, PBM_SETRANGE32,
     PROGRESS_CLASSW,
 };
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
 
@@ -67,6 +68,8 @@ struct State {
     banner_brush: HBRUSH,
     card_brush: HBRUSH,
     yes_clicked: bool,
+    /// Current monitor DPI (96 = 100%); updated on `WM_DPICHANGED`.
+    dpi: i32,
 }
 
 thread_local! {
@@ -136,6 +139,7 @@ pub fn run(params: UninstallParams) -> bool {
             banner_brush: CreateSolidBrush(COLORREF(BANNER_BG)),
             card_brush: CreateSolidBrush(COLORREF(0x00FFFFFF)),
             yes_clicked: false,
+            dpi: 96,
         }));
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
 
@@ -172,8 +176,23 @@ pub fn run(params: UninstallParams) -> bool {
             );
         }
 
+        // Scale to the monitor this window opened on (per-monitor DPI aware):
+        // resize, rebuild fonts, lay out at that DPI - so a move to a screen of
+        // different scale stays crisp instead of dropping/clipping controls.
+        let dpi = dpi_for(hwnd);
+        rebuild_fonts(dpi);
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            scale(WIN_W, dpi),
+            scale(WIN_H, dpi),
+            SWP_NOMOVE | SWP_NOZORDER,
+        );
         center(hwnd);
         build_controls(hwnd, &params);
+        relayout(hwnd, dpi);
         if params.auto_start {
             STATE.with(|s| {
                 if let Some(st) = s.borrow().as_ref() {
@@ -288,6 +307,80 @@ unsafe fn apply_font(hwnd: HWND, id: usize, font: HFONT) {
                 Some(WPARAM(font.0 as usize)),
                 Some(LPARAM(1)),
             );
+        }
+    }
+}
+
+/// Scale a 96-dpi base measurement to the given DPI.
+fn scale(v: i32, dpi: i32) -> i32 {
+    v * dpi / 96
+}
+
+/// The DPI of the monitor `hwnd` is on (96 = 100%). 96 fallback on failure.
+unsafe fn dpi_for(hwnd: HWND) -> i32 {
+    let d = unsafe { GetDpiForWindow(hwnd) };
+    if d == 0 { 96 } else { d as i32 }
+}
+
+/// Recreate both fonts at `dpi` (deleting the old) and store them.
+unsafe fn rebuild_fonts(dpi: i32) {
+    STATE.with(|s| {
+        if let Some(state) = s.borrow().as_ref() {
+            let mut st = state.borrow_mut();
+            unsafe {
+                let _ = DeleteObject(st.font_body.into());
+                let _ = DeleteObject(st.font_header.into());
+            }
+            st.font_body = create_font("Segoe UI", scale(16, dpi), FW_NORMAL.0 as i32);
+            st.font_header = create_font("Segoe UI Semibold", scale(22, dpi), FW_SEMIBOLD.0 as i32);
+            st.dpi = dpi;
+        }
+    });
+}
+
+/// (Re)apply the stored fonts to the controls.
+unsafe fn apply_fonts(hwnd: HWND) {
+    STATE.with(|s| {
+        if let Some(state) = s.borrow().as_ref() {
+            let st = state.borrow();
+            unsafe {
+                apply_font(hwnd, ID_HEADER, st.font_header);
+                for id in [
+                    ID_SUBHEADER,
+                    ID_CONFIRM_TEXT,
+                    ID_PROGRESS,
+                    ID_STATUS,
+                    ID_YES_BTN,
+                    ID_NO_BTN,
+                ] {
+                    apply_font(hwnd, id, st.font_body);
+                }
+            }
+        }
+    });
+}
+
+/// Reposition + resize every control for `dpi` (96-dpi base units, scaled).
+/// Run after creation and on each `WM_DPICHANGED`. Identity at 96 dpi.
+unsafe fn relayout(hwnd: HWND, dpi: i32) {
+    let s = |v: i32| scale(v, dpi);
+    let btn_y = WIN_H - 84;
+    let items: &[(usize, i32, i32, i32, i32)] = &[
+        (ID_BANNER, 0, 0, WIN_W, BANNER_H),
+        (ID_HEADER, PAD, 16, WIN_W - PAD * 2, 28),
+        (ID_SUBHEADER, PAD, 46, WIN_W - PAD * 2, 20),
+        (ID_CONFIRM_TEXT, PAD, BANNER_H + PAD, WIN_W - PAD * 2, 120),
+        (ID_PROGRESS, PAD, BANNER_H + PAD + 16, WIN_W - PAD * 2, 22),
+        (ID_STATUS, PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 48),
+        (ID_YES_BTN, WIN_W - PAD - 260, btn_y, 140, 32),
+        (ID_NO_BTN, WIN_W - PAD - 110, btn_y, 110, 32),
+    ];
+    unsafe {
+        for &(id, x, y, w, h) in items {
+            let ctrl = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
+            if !ctrl.is_invalid() {
+                let _ = MoveWindow(ctrl, s(x), s(y), s(w), s(h), true);
+            }
         }
     }
 }
@@ -475,6 +568,26 @@ unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_DPICHANGED => unsafe {
+            // Moved to a monitor of different scale: resize to the suggested
+            // rect, rebuild fonts + lay out at the new DPI, repaint.
+            let new_dpi = ((wparam.0 >> 16) & 0xFFFF) as i32;
+            let rc = &*(lparam.0 as *const RECT);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                rc.left,
+                rc.top,
+                rc.right - rc.left,
+                rc.bottom - rc.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            rebuild_fonts(new_dpi);
+            apply_fonts(hwnd);
+            relayout(hwnd, new_dpi);
+            let _ = InvalidateRect(Some(hwnd), None, true);
+            LRESULT(0)
+        },
         WM_CTLCOLORSTATIC => unsafe {
             let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
             let ctrl = HWND(lparam.0 as *mut _);

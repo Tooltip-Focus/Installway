@@ -19,10 +19,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT,
-    SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    InvalidateRect, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
@@ -85,6 +85,9 @@ pub(super) struct UiState {
     pub card_brush: HBRUSH,
     pub license_accepted: bool,
     pub chosen_path: Option<PathBuf>,
+    /// Current monitor DPI (96 = 100%); drives scaled layout + fonts, updated on
+    /// `WM_DPICHANGED`.
+    pub dpi: i32,
 }
 
 thread_local! {
@@ -212,6 +215,7 @@ unsafe fn create_window(
             card_brush,
             license_accepted: false,
             chosen_path: Some(default_path.clone()),
+            dpi: 96,
         }));
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
 
@@ -247,10 +251,48 @@ unsafe fn create_window(
             );
         }
 
+        // Scale to the monitor this window opened on (per-monitor DPI aware):
+        // resize the frame, rebuild fonts, then lay out controls at that DPI.
+        let dpi = helpers::dpi_for(hwnd);
+        rebuild_fonts(dpi);
+        let (sw, sh) = helpers::window_size_for_client(
+            helpers::scale(WIN_W, dpi),
+            helpers::scale(WIN_H, dpi),
+            style,
+            WINDOW_EX_STYLE(0),
+        );
+        let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
+
         helpers::center(hwnd);
         views::build_controls(hwnd, payload, default_path);
+        views::relayout(hwnd, dpi);
         Ok(hwnd)
     }
+}
+
+/// Recreate the three UI fonts at the given DPI and store them (deleting the
+/// old handles). Heights are the 96-dpi base sizes scaled by `dpi`.
+unsafe fn rebuild_fonts(dpi: i32) {
+    STATE.with(|s| {
+        if let Some(st) = s.borrow().as_ref() {
+            let mut st = st.borrow_mut();
+            unsafe {
+                let _ = DeleteObject(st.font_normal.into());
+                let _ = DeleteObject(st.font_bold.into());
+                let _ = DeleteObject(st.font_header.into());
+            }
+            st.font_normal =
+                helpers::create_font("Segoe UI", helpers::scale(16, dpi), FW_NORMAL.0 as i32);
+            st.font_bold =
+                helpers::create_font("Segoe UI", helpers::scale(16, dpi), FW_SEMIBOLD.0 as i32);
+            st.font_header = helpers::create_font(
+                "Segoe UI Semibold",
+                helpers::scale(22, dpi),
+                FW_SEMIBOLD.0 as i32,
+            );
+            st.dpi = dpi;
+        }
+    });
 }
 
 /// Dev-only: show the wizard jumped straight to one view with sample data, no
@@ -404,6 +446,28 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_DPICHANGED => unsafe {
+            // Moved to a monitor of different scale. lParam is the suggested new
+            // window rect; HIWORD(wParam) the new DPI. Resize to it, rebuild
+            // fonts + lay out controls at the new DPI, then repaint - keeps the
+            // wizard crisp instead of leaving controls mis-scaled / off-window.
+            let new_dpi = ((wparam.0 >> 16) & 0xFFFF) as i32;
+            let rc = &*(lparam.0 as *const RECT);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                rc.left,
+                rc.top,
+                rc.right - rc.left,
+                rc.bottom - rc.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            rebuild_fonts(new_dpi);
+            views::apply_fonts(hwnd);
+            views::relayout(hwnd, new_dpi);
+            let _ = InvalidateRect(Some(hwnd), None, true);
+            LRESULT(0)
+        },
         WM_CTLCOLORSTATIC => unsafe {
             let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
             let ctrl = HWND(lparam.0 as *mut _);
