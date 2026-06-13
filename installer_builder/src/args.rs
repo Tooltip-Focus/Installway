@@ -94,6 +94,12 @@ pub struct PackCli {
     #[arg(long)]
     pub force_reinstall: bool,
 
+    /// Remove unknown/leftover files (not in this build) on a Full install, so
+    /// an upgrade or reinstall from a full version leaves a clean directory.
+    /// Known files are still hash-skipped. Ignored for patch payloads.
+    #[arg(long)]
+    pub purge_unknown_files: bool,
+
     /// Hide the License page in the interactive installer.
     #[arg(long)]
     pub skip_license: bool,
@@ -198,6 +204,8 @@ pub struct PackFile {
     #[serde(default)]
     pub force_reinstall: bool,
     #[serde(default)]
+    pub purge_unknown_files: bool,
+    #[serde(default)]
     pub skip_license: bool,
     #[serde(default)]
     pub skip_path: bool,
@@ -234,6 +242,7 @@ pub struct PackArgs {
     pub assoc: Vec<String>,
     pub min_installer_version: String,
     pub force_reinstall: bool,
+    pub purge_unknown_files: bool,
     pub skip_license: bool,
     pub skip_path: bool,
     pub upgrade_minimal_ui: bool,
@@ -308,6 +317,7 @@ impl PackArgs {
                 .unwrap_or_else(|| "1.0.0".to_string()),
             // Boolean flags: either source can turn them on.
             force_reinstall: cli.force_reinstall || file.force_reinstall,
+            purge_unknown_files: cli.purge_unknown_files || file.purge_unknown_files,
             skip_license: cli.skip_license || file.skip_license,
             skip_path: cli.skip_path || file.skip_path,
             upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
@@ -444,6 +454,7 @@ mod tests {
             assoc: Vec::new(),
             min_installer_version: None,
             force_reinstall: false,
+            purge_unknown_files: false,
             skip_license: false,
             skip_path: false,
             upgrade_minimal_ui: false,

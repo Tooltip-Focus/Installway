@@ -74,6 +74,13 @@ pub struct InstallerPayload {
     /// (skip patch from-version check, rewrite all files, remove orphans).
     #[serde(default)]
     pub force_reinstall: bool,
+    /// Remove existing files not in this build's manifest (unknown / leftover
+    /// files) during a Full install. Opt-in at build time so an upgrade or
+    /// reinstall from a full version leaves a clean directory. Ignored for
+    /// patch payloads. Unlike [`force_reinstall`], known files are still
+    /// hash-skipped (not rewritten) and the version check is unaffected.
+    #[serde(default)]
+    pub purge_unknown_files: bool,
     /// Hide the License page in the interactive UI.
     #[serde(default)]
     pub skip_license: bool,
@@ -238,6 +245,7 @@ mod tests {
         assert_eq!(p.publisher, "");
         assert_eq!(p.product_id, "");
         assert!(!p.force_reinstall);
+        assert!(!p.purge_unknown_files);
         assert!(!p.upgrade_minimal_ui);
         assert!(p.associations.is_empty());
         assert!(p.license_text.is_none());
@@ -282,6 +290,7 @@ mod tests {
                 description: "X".into(),
             }],
             force_reinstall: true,
+            purge_unknown_files: true,
             skip_license: true,
             skip_path: false,
             default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),
@@ -312,6 +321,7 @@ mod tests {
         assert_eq!(back.plugins[0].phase, PluginPhase::PreInstall);
         assert!(back.plugins[0].required);
         assert!(back.force_reinstall);
+        assert!(back.purge_unknown_files);
         assert!(back.skip_license);
         assert!(!back.skip_path);
         assert_eq!(
