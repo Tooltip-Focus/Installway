@@ -62,19 +62,15 @@ struct Cli {
 }
 
 fn main() {
+    let cli = parse_args();
+
     // Diagnostic / headless modes report errors as text on the parent console
     // (+ a non-zero exit code) instead of a modal dialog, so CI and scripted
     // callers get a parseable result. Interactive (wizard / minimal) keeps the
     // modal.
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let console_mode = args.iter().any(|a| {
-        matches!(
-            a.as_str(),
-            "--verify" | "--verify-install" | "--silent" | "/S"
-        )
-    });
+    let console_mode = cli.silent || cli.verify || cli.verify_install;
 
-    if let Err(e) = run() {
+    if let Err(e) = run(cli) {
         let code = if e.downcast_ref::<extract::VersionMismatch>().is_some() {
             EXIT_VERSION_MISMATCH
         } else {
@@ -90,13 +86,16 @@ fn main() {
     }
 }
 
-fn run() -> Result<()> {
+/// Normalise flags and parse argv into [`Cli`].
+///
+/// `--run-plugin <dll> <up|down> <ctx.json>` is a plugin-host child: handled
+/// here, before clap (its trailing paths aren't declared flags), exiting with
+/// the plugin's code and needing no payload. `/S` and `/minimal` are rewritten
+/// to their `--` forms (clap doesn't parse `/`-prefixed flags).
+fn parse_args() -> Cli {
     // Full argv (incl. argv[0]) so clap can name itself in any diagnostics.
     let mut argv: Vec<String> = std::env::args().collect();
 
-    // Plugin-host child: `--run-plugin <dll> <up|down> <ctx.json>`. Handled
-    // before clap (its trailing paths aren't declared flags); exits with the
-    // plugin's code. Needs no payload.
     if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
         let code = match (argv.get(idx + 1), argv.get(idx + 2), argv.get(idx + 3)) {
             (Some(dll), Some(func), Some(ctx)) => {
@@ -115,8 +114,10 @@ fn run() -> Result<()> {
         }
     }
 
-    let cli = Cli::parse_from(&argv);
+    Cli::parse_from(&argv)
+}
 
+fn run(cli: Cli) -> Result<()> {
     // `--lang` wins; otherwise env (`INSTALLWAY_LANG`) then OS locale.
     let translator = match &cli.lang {
         Some(code) => common::i18n::Translator::for_lang(code),
