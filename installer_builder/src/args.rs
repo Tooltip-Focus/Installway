@@ -590,6 +590,14 @@ force_reinstall = true
             resolve_with("\n[[registry]]\nhive='HKCU'\nkey='K'\ntype='binary'\nvalue='XY'\n")
                 .is_err()
         );
+        // empty key
+        assert!(
+            resolve_with("\n[[registry]]\nhive='HKCU'\nkey=''\ntype='sz'\nvalue='x'\n").is_err()
+        );
+        // key starting with '\'
+        assert!(
+            resolve_with("\n[[registry]]\nhive='HKCU'\nkey='\\X'\ntype='sz'\nvalue='x'\n").is_err()
+        );
     }
 
     #[test]
