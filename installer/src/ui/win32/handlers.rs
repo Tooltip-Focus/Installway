@@ -6,19 +6,20 @@
 //! back to the UI thread.
 
 use super::{
-    BM_GETCHECK, ID_ACCEPT_CHK, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_PATH_EDIT, ID_PATH_WARN,
-    ID_PATH_WARN_ICON, ID_PROGRESS, ID_STATUS, PAYLOAD, Phase, STATE, apply_phase, message_box, tr,
+    BM_GETCHECK, ID_ACCEPT_CHK, ID_BACK_BTN, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_NEXT_BTN,
+    ID_PATH_EDIT, ID_PATH_WARN, ID_PATH_WARN_ICON, ID_PROGRESS, ID_STATUS, PAYLOAD, Phase, STATE,
+    WIZARD, apply_phase, message_box, tr,
 };
 use crate::extract::{InstallCtx, install};
 use crate::install as install_mod;
 use crate::ui::helpers::{
-    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, get_window_text, scale_progress,
-    set_dlg_text, set_progress,
+    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PLUGIN_STEP, WM_APP_PROGRESS, get_window_text,
+    scale_progress, set_dlg_text, set_progress,
 };
 use common::models::InstallDirRestriction;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::BST_CHECKED;
@@ -27,42 +28,168 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetDlgItem, MB_ICONWARNING, PostMessageW, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_CLOSE,
 };
 
-pub(super) unsafe fn on_next(hwnd: HWND) {
-    let phase = STATE.with(|s| {
+fn current_phase() -> Phase {
+    STATE.with(|s| {
         s.borrow()
             .as_ref()
             .map(|st| st.borrow().phase)
             .unwrap_or(Phase::License)
-    });
-    if phase == Phase::License {
-        let accepted = STATE.with(|s| {
-            s.borrow()
-                .as_ref()
-                .map(|st| st.borrow().license_accepted)
-                .unwrap_or(false)
-        });
-        if !accepted {
-            unsafe { message_box(hwnd, &tr().get("install.must_accept"), MB_ICONWARNING) };
-            return;
+    })
+}
+
+/// Stores the result of a background plugin-step query until the UI thread picks
+/// it up from `WM_APP_PLUGIN_STEP`.
+static QUERIED_STEP: Mutex<Option<super::plugin_pages::StepOutcome>> = Mutex::new(None);
+
+/// True while a background step query is running. Guards against a second
+/// dispatch before the first completes — the Choose-page primary button stays
+/// enabled until `WM_APP_PLUGIN_STEP` flips the phase, so a double-click would
+/// otherwise spawn two query threads racing on `QUERIED_STEP`.
+static QUERY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Whether the active wizard is the canned (preview) variant, which steps
+/// synchronously instead of dispatching a background query.
+fn wizard_is_canned() -> bool {
+    WIZARD.with(|w| w.borrow().as_ref().map(|z| z.is_canned()).unwrap_or(false))
+}
+
+/// Run a synchronous wizard transition `f` (if a wizard exists) and apply the
+/// resulting step.
+unsafe fn run_wizard_step(
+    hwnd: HWND,
+    f: impl FnOnce(&mut super::plugin_pages::Wizard, HWND) -> super::plugin_pages::Step,
+) {
+    let step = WIZARD.with(|w| w.borrow_mut().as_mut().map(|z| f(z, hwnd)));
+    if let Some(step) = step {
+        unsafe { act_step(hwnd, step) };
+    }
+}
+
+pub(super) unsafe fn on_next(hwnd: HWND) {
+    match current_phase() {
+        Phase::License => {
+            let accepted = STATE.with(|s| {
+                s.borrow()
+                    .as_ref()
+                    .map(|st| st.borrow().license_accepted)
+                    .unwrap_or(false)
+            });
+            if !accepted {
+                unsafe { message_box(hwnd, &tr().get("install.must_accept"), MB_ICONWARNING) };
+                return;
+            }
+            // Advance to the Choose page; or, when it is skipped, into the plugin
+            // wizard, or straight to install when there are no plugins.
+            if !super::skip_path() {
+                unsafe { apply_phase(hwnd, Phase::Choose) };
+            } else if super::has_plugin_pages() {
+                unsafe { begin_plugin_wizard(hwnd) };
+            } else {
+                unsafe { on_install(hwnd) };
+            }
         }
-        // No Choose page: "Next" installs straight away to the default path.
-        if super::skip_path() {
-            unsafe { on_install(hwnd) };
-        } else {
-            unsafe { apply_phase(hwnd, Phase::Choose) };
+        // Collect this page's answers, then query the next step (off UI thread).
+        Phase::Plugin => {
+            if wizard_is_canned() {
+                // Canned preview: synchronous path (no subprocess; instant).
+                unsafe { run_wizard_step(hwnd, |z, h| z.forward(h)) };
+            } else {
+                let ok = WIZARD.with(|w| {
+                    w.borrow_mut()
+                        .as_mut()
+                        .map(|z| unsafe { z.collect_page(hwnd) })
+                        .unwrap_or(true)
+                });
+                if ok {
+                    unsafe { dispatch_plugin_query(hwnd) };
+                }
+            }
         }
+        _ => {}
     }
 }
 
 pub(super) unsafe fn on_back(hwnd: HWND) {
-    let phase = STATE.with(|s| {
-        s.borrow()
-            .as_ref()
-            .map(|st| st.borrow().phase)
-            .unwrap_or(Phase::License)
+    match current_phase() {
+        Phase::Choose if !super::skip_license() => unsafe { apply_phase(hwnd, Phase::License) },
+        Phase::Plugin => unsafe { run_wizard_step(hwnd, |z, _| z.back()) },
+        _ => {}
+    }
+}
+
+/// Enter the plugin wizard (its first step). Canned (preview) path is
+/// synchronous; real plugins dispatch a background query.
+pub(super) unsafe fn begin_plugin_wizard(hwnd: HWND) {
+    if wizard_is_canned() {
+        unsafe { run_wizard_step(hwnd, |z, h| z.start(h)) };
+    } else {
+        unsafe { dispatch_plugin_query(hwnd) };
+    }
+}
+
+/// Spawn a background thread to run the next plugin-page query. Disables the
+/// nav buttons for the duration; re-enables them in `on_plugin_step`.
+unsafe fn dispatch_plugin_query(hwnd: HWND) {
+    let args = WIZARD.with(|w| w.borrow().as_ref().and_then(|z| z.step_args()));
+    let Some(args) = args else {
+        unsafe { act_step(hwnd, super::plugin_pages::Step::Install) };
+        return;
+    };
+    // Ignore a re-entrant dispatch while a query is already running.
+    if QUERY_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    unsafe { set_nav_enabled(hwnd, false) };
+    let hwnd_isize = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let outcome = super::plugin_pages::run_step_query(args);
+        *QUERIED_STEP.lock().unwrap() = Some(outcome);
+        helpers::post(hwnd_isize, WM_APP_PLUGIN_STEP);
     });
-    if phase == Phase::Choose && !super::skip_license() {
-        unsafe { apply_phase(hwnd, Phase::License) };
+}
+
+/// Enable/disable the wizard nav buttons (Next/Back and the Choose-page primary
+/// button, which is labeled "Next" while plugin pages are pending).
+unsafe fn set_nav_enabled(hwnd: HWND, on: bool) {
+    unsafe {
+        for id in [ID_NEXT_BTN, ID_BACK_BTN, ID_INSTALL_BTN] {
+            let h = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
+            let _ = EnableWindow(h, on);
+        }
+    }
+}
+
+/// Called on the UI thread when `WM_APP_PLUGIN_STEP` arrives.
+pub(super) unsafe fn on_plugin_step(hwnd: HWND) {
+    QUERY_IN_FLIGHT.store(false, Ordering::SeqCst);
+    let outcome = QUERIED_STEP.lock().unwrap().take();
+    let Some(outcome) = outcome else { return };
+    unsafe { set_nav_enabled(hwnd, true) };
+    let step = WIZARD.with(|w| {
+        w.borrow_mut()
+            .as_mut()
+            .map(|z| unsafe { z.apply_step_outcome(hwnd, outcome) })
+    });
+    if let Some(step) = step {
+        unsafe { act_step(hwnd, step) };
+    }
+}
+
+/// Apply a wizard transition. Runs after the `WIZARD` borrow is released, so it
+/// may re-borrow it (e.g. `apply_phase` reads the current slot).
+unsafe fn act_step(hwnd: HWND, step: super::plugin_pages::Step) {
+    use super::plugin_pages::Step;
+    match step {
+        Step::Show => unsafe { apply_phase(hwnd, Phase::Plugin) },
+        Step::Install => unsafe { commit_install(hwnd) },
+        Step::Stay => {}
+        Step::Exit => unsafe {
+            if !super::skip_path() {
+                apply_phase(hwnd, Phase::Choose);
+            } else if !super::skip_license() {
+                apply_phase(hwnd, Phase::License);
+            }
+        },
     }
 }
 
@@ -226,12 +353,16 @@ pub(super) unsafe fn update_path_warning(hwnd: HWND) {
     }
 }
 
-pub(super) unsafe fn on_install(hwnd: HWND) {
+/// Read the path edit, validate it, and store it as the chosen path. Returns the
+/// validated path, or `None` (after warning the user) for an empty entry or a
+/// non-empty target folder. The edit holds the value even while hidden, so this
+/// works from a later plugin page too.
+unsafe fn validate_and_store_path(hwnd: HWND) -> Option<PathBuf> {
     let edit = unsafe { GetDlgItem(Some(hwnd), ID_PATH_EDIT as i32).unwrap_or_default() };
     let path = unsafe { get_window_text(edit) };
     if path.trim().is_empty() {
         unsafe { message_box(hwnd, &tr().get("install.err_no_path"), MB_ICONWARNING) };
-        return;
+        return None;
     }
     // Defensive: the Install button is disabled when the folder is non-empty,
     // but a default-button keypress could still reach here. See
@@ -243,15 +374,34 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
         &path,
     ) {
         unsafe { message_box(hwnd, &tr().get("install.path_not_empty"), MB_ICONWARNING) };
-        return;
+        return None;
     }
     let pb = PathBuf::from(path.trim());
-
     STATE.with(|s| {
         if let Some(st) = s.borrow().as_ref() {
             st.borrow_mut().chosen_path = Some(pb.clone());
         }
     });
+    Some(pb)
+}
+
+pub(super) unsafe fn on_install(hwnd: HWND) {
+    // Choose page with a plugin wizard pending: validate the path, then enter the
+    // wizard instead of installing now.
+    if matches!(current_phase(), Phase::Choose) && super::has_plugin_pages() {
+        if unsafe { validate_and_store_path(hwnd) }.is_some() {
+            unsafe { begin_plugin_wizard(hwnd) };
+        }
+        return;
+    }
+    unsafe { commit_install(hwnd) };
+}
+
+/// Validate the path and start the install worker, carrying the wizard's answers.
+unsafe fn commit_install(hwnd: HWND) {
+    let Some(pb) = (unsafe { validate_and_store_path(hwnd) }) else {
+        return;
+    };
 
     unsafe { apply_phase(hwnd, Phase::Progress) };
 
@@ -263,6 +413,9 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
     let Some((cancel, progress_shared)) = shared else {
         return; // STATE not initialized - nothing to do.
     };
+    // The wizard's collected answers, routed per plugin (empty with no wizard).
+    let plugin_inputs =
+        WIZARD.with(|w| w.borrow().as_ref().map(|z| z.inputs()).unwrap_or_default());
     let hwnd_isize = hwnd.0 as isize;
 
     thread::spawn(move || {
@@ -290,6 +443,7 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
             zip_bytes: loaded.zip(),
             cancel: cancel.clone(),
             on_progress: progress_cb,
+            plugin_inputs: plugin_inputs.clone(),
         };
         if let Err(e) = install(ctx) {
             push_error(hwnd_isize, &format!("{e}"));
@@ -300,6 +454,7 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
             &loaded.payload,
             &loaded.uninstaller_bytes,
             loaded.zip(),
+            &plugin_inputs,
         ) {
             push_error(hwnd_isize, &format!("finalize: {e}"));
             return;
@@ -316,7 +471,7 @@ pub(super) unsafe fn on_cancel(hwnd: HWND) {
             .unwrap_or(Phase::License)
     });
     match phase {
-        Phase::License | Phase::Choose => {
+        Phase::License | Phase::Choose | Phase::Plugin => {
             let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
         }
         Phase::Progress => {

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Manifest {
@@ -268,10 +268,11 @@ fn default_true() -> bool {
 }
 
 /// When a [`PluginEntry`] runs at install.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginPhase {
     /// Before any file is staged/committed. A required failure aborts cleanly.
+    #[default]
     PreInstall,
     /// After the install is finalized (files in place, product registered).
     PostInstall,
@@ -280,7 +281,7 @@ pub enum PluginPhase {
 /// A native DLL plugin (migration-style `up`/`down`). The DLL lives in the
 /// signed payload zip at `file` and is copied to the per-user data dir for the
 /// uninstall `down`. `blake3` is verified before the DLL is loaded.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct PluginEntry {
     pub name: String,
     /// In-zip / data-dir-relative path, e.g. `plugins/<name>.dll`.
@@ -290,7 +291,141 @@ pub struct PluginEntry {
     /// A required plugin's `up` failure fails the install. Default `true`.
     #[serde(default = "default_true")]
     pub required: bool,
+    /// Opt-in: this plugin contributes custom wizard pages. When set, the host
+    /// queries its `installway_pages` before showing the wizard.
+    #[serde(default)]
+    pub ui: bool,
 }
+
+// ---- Plugin custom wizard pages -----------------------------------------
+
+/// One step in a `ui = true` plugin's wizard flow. `installway_pages` is a pure
+/// step function: the host calls it with the answers so far (`ctx.inputs_json`)
+/// and the plugin returns the next [`PageStep`]. The installer renders pages with
+/// its own Win32 controls — the plugin never draws UI.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "step", rename_all = "snake_case")]
+pub enum PageStep {
+    /// Show this page next.
+    Page {
+        page: PluginPage,
+        /// Optional banner shown above the page (e.g. a validation error so the
+        /// plugin can re-ask).
+        #[serde(default)]
+        notice: String,
+        /// Allow the Back button on this page (when there's somewhere to go back
+        /// to). The plugin can set `false` to pin the user here.
+        #[serde(default = "default_true")]
+        back: bool,
+    },
+    /// No more pages — proceed to install.
+    Done,
+}
+
+/// One contributed wizard page.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PluginPage {
+    /// Unique within the contributing plugin; namespaces collected values
+    /// (`"<page_id>.<widget_id>"`).
+    pub id: String,
+    /// Banner title (final text — the plugin localizes it, the host renders it
+    /// verbatim).
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: String,
+    pub widgets: Vec<PluginWidget>,
+}
+
+/// One form control. `kind` is the serde tag; each maps to a built-in Win32
+/// control. Unknown kinds are rejected at parse — the host must be able to draw
+/// whatever it is handed.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PluginWidget {
+    /// Static read-only text; contributes no value.
+    Label {
+        #[serde(default)]
+        id: String,
+        text: String,
+    },
+    /// Free text entry. `password` masks the input, `number` restricts to digits,
+    /// `multiline` makes a taller box. Value is the typed string.
+    Text {
+        id: String,
+        #[serde(default)]
+        label: String,
+        #[serde(default)]
+        default: String,
+        #[serde(default)]
+        required: bool,
+        #[serde(default)]
+        placeholder: String,
+        #[serde(default)]
+        password: bool,
+        #[serde(default)]
+        number: bool,
+        #[serde(default)]
+        multiline: bool,
+    },
+    /// On/off; value is `"true"` / `"false"`.
+    Checkbox {
+        id: String,
+        #[serde(default)]
+        label: String,
+        #[serde(default)]
+        default: bool,
+    },
+    /// Pick one of `options`; value is the chosen option's `value`.
+    SingleChoice {
+        id: String,
+        #[serde(default)]
+        label: String,
+        options: Vec<ChoiceOption>,
+        #[serde(default)]
+        style: ChoiceStyle,
+        /// Option `value` selected initially; empty = first option.
+        #[serde(default)]
+        default: String,
+        #[serde(default = "default_true")]
+        required: bool,
+    },
+    /// Pick any number of `options` (a checkbox group). Value is the selected
+    /// option `value`s joined by `,` (empty when none).
+    MultiChoice {
+        id: String,
+        #[serde(default)]
+        label: String,
+        options: Vec<ChoiceOption>,
+        /// Option `value`s checked initially.
+        #[serde(default)]
+        default: Vec<String>,
+        /// Require at least one selection.
+        #[serde(default)]
+        required: bool,
+    },
+}
+
+/// One choice in a [`PluginWidget::SingleChoice`].
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ChoiceOption {
+    pub label: String,
+    pub value: String,
+}
+
+/// How a [`PluginWidget::SingleChoice`] is drawn.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChoiceStyle {
+    #[default]
+    Radio,
+    Combo,
+}
+
+/// Collected page answers, keyed `"<page_id>.<widget_id>"`. `BTreeMap` keeps a
+/// deterministic order (stable logs/tests). Serialized into `PluginCtx.inputs_json`.
+/// `MultiChoice` answers join selected values with `,`; option `value` strings must
+/// not themselves contain `,` (no escaping is applied).
+pub type PluginInputs = BTreeMap<String, String>;
 
 #[cfg(test)]
 mod tests {
@@ -382,6 +517,7 @@ mod tests {
                 blake3: "abc".into(),
                 phase: PluginPhase::PreInstall,
                 required: true,
+                ui: true,
             }],
             show_uninstall_complete: true,
         };
@@ -395,6 +531,7 @@ mod tests {
         assert_eq!(back.plugins.len(), 1);
         assert_eq!(back.plugins[0].phase, PluginPhase::PreInstall);
         assert!(back.plugins[0].required);
+        assert!(back.plugins[0].ui);
         assert!(back.force_reinstall);
         assert!(back.purge_unknown_files);
         assert!(back.skip_license);
@@ -414,5 +551,149 @@ mod tests {
         assert_eq!(back.shortcuts[0].dir, r"%DESKTOP%");
         assert_eq!(back.shortcuts[0].args, "--flag");
         assert_eq!(back.from_version.as_deref(), Some("1.0"));
+    }
+
+    #[test]
+    fn plugin_widgets_round_trip() {
+        let step = PageStep::Page {
+            notice: String::new(),
+            back: true,
+            page: PluginPage {
+                id: "main".into(),
+                title: "Pick".into(),
+                subtitle: String::new(),
+                widgets: vec![
+                    PluginWidget::Label {
+                        id: String::new(),
+                        text: "Hello".into(),
+                    },
+                    PluginWidget::Text {
+                        id: "email".into(),
+                        label: "Email".into(),
+                        default: String::new(),
+                        required: true,
+                        placeholder: "you@x".into(),
+                        password: false,
+                        number: false,
+                        multiline: false,
+                    },
+                    PluginWidget::Checkbox {
+                        id: "news".into(),
+                        label: "News".into(),
+                        default: false,
+                    },
+                    PluginWidget::SingleChoice {
+                        id: "country".into(),
+                        label: "Country".into(),
+                        options: vec![
+                            ChoiceOption {
+                                label: "France".into(),
+                                value: "FR".into(),
+                            },
+                            ChoiceOption {
+                                label: "DOM-TOM".into(),
+                                value: "DOM".into(),
+                            },
+                        ],
+                        style: ChoiceStyle::Combo,
+                        default: "FR".into(),
+                        required: true,
+                    },
+                    PluginWidget::MultiChoice {
+                        id: "addons".into(),
+                        label: "Add-ons".into(),
+                        options: vec![
+                            ChoiceOption {
+                                label: "Docs".into(),
+                                value: "docs".into(),
+                            },
+                            ChoiceOption {
+                                label: "Samples".into(),
+                                value: "samples".into(),
+                            },
+                        ],
+                        default: vec!["docs".into()],
+                        required: false,
+                    },
+                ],
+            },
+        };
+        let s = serde_json::to_string(&step).unwrap();
+        let back: PageStep = serde_json::from_str(&s).unwrap();
+        let PageStep::Page {
+            page,
+            back: allow_back,
+            ..
+        } = back
+        else {
+            panic!("expected page");
+        };
+        assert!(allow_back); // default
+        assert_eq!(page.widgets.len(), 5);
+        match &page.widgets[3] {
+            PluginWidget::SingleChoice { style, .. } => assert_eq!(*style, ChoiceStyle::Combo),
+            _ => panic!("expected single_choice"),
+        }
+        match &page.widgets[4] {
+            PluginWidget::MultiChoice { default, .. } => assert_eq!(default, &["docs"]),
+            _ => panic!("expected multi_choice"),
+        }
+    }
+
+    /// A hand-written step (as a plugin's `installway_pages` would emit) parses,
+    /// with `style`/`required`/`default`/`back` falling back correctly.
+    #[test]
+    fn page_step_parse() {
+        let j = r#"{
+          "step": "page",
+          "page": {
+            "id": "region",
+            "title": "Select your country",
+            "widgets": [
+              { "kind": "single_choice", "id": "country",
+                "options": [
+                  { "label": "France", "value": "FR" },
+                  { "label": "DOM-TOM", "value": "DOM" }
+                ] },
+              { "kind": "checkbox", "id": "accept", "label": "I agree" }
+            ]
+          }
+        }"#;
+        let PageStep::Page { page, back, notice } = serde_json::from_str(j).unwrap() else {
+            panic!("expected page");
+        };
+        assert_eq!(page.id, "region");
+        assert!(page.subtitle.is_empty());
+        assert!(back); // missing -> true
+        assert!(notice.is_empty());
+        match &page.widgets[0] {
+            PluginWidget::SingleChoice {
+                style,
+                required,
+                default,
+                options,
+                ..
+            } => {
+                assert_eq!(*style, ChoiceStyle::Radio); // missing -> default
+                assert!(*required); // missing -> true
+                assert!(default.is_empty());
+                assert_eq!(options.len(), 2);
+            }
+            _ => panic!("expected single_choice"),
+        }
+    }
+
+    #[test]
+    fn page_step_done_parses() {
+        let s: PageStep = serde_json::from_str(r#"{ "step": "done" }"#).unwrap();
+        assert!(matches!(s, PageStep::Done));
+    }
+
+    /// An unknown widget `kind` is rejected (the host must be able to render it).
+    #[test]
+    fn plugin_widget_unknown_kind_rejected() {
+        let j = r#"{ "step":"page", "page":{ "id":"p","title":"t",
+            "widgets":[{ "kind":"slider","id":"x" }] } }"#;
+        assert!(serde_json::from_str::<PageStep>(j).is_err());
     }
 }

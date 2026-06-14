@@ -107,6 +107,9 @@ pub struct InstallCtx<'a> {
     pub zip_bytes: &'a [u8],
     pub cancel: Arc<AtomicBool>,
     pub on_progress: common::ProgressFn,
+    /// Collected plugin-page answers, routed per plugin name. Empty when no UI
+    /// plugin contributed pages. Passed to each plugin's `up` via `inputs_json`.
+    pub plugin_inputs: common::plugin::InputsByPlugin,
 }
 
 pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
@@ -782,13 +785,15 @@ fn run_zip_plugins(ctx: &InstallCtx, phase: common::models::PluginPhase) -> Resu
         }
         let dst = tmp.join(format!("{}.dll", p.name));
         fs::write(&dst, &buf)?;
-        items.push((p, dst));
+        let inputs_json = match ctx.plugin_inputs.get(&p.name) {
+            Some(m) => serde_json::to_string(m)?,
+            None => String::new(),
+        };
+        items.push((p, dst, inputs_json));
     }
     let pctx = plugin_ctx(ctx.payload, &ctx.install_dir);
-    let ctx_path = common::plugin::write_ctx(&pctx)?;
     let self_exe = std::env::current_exe()?;
-    let res = common::plugin::run_each(&self_exe, &ctx_path, &items, "up", true);
-    let _ = fs::remove_file(&ctx_path);
+    let res = common::plugin::run_each(&self_exe, &pctx, &items, "up", true);
     let _ = fs::remove_dir_all(&tmp);
     res
 }
@@ -796,8 +801,11 @@ fn run_zip_plugins(ctx: &InstallCtx, phase: common::models::PluginPhase) -> Resu
 /// Build the plugin context from a payload + chosen install dir. Shared with
 /// the post-install (finalize) and uninstall paths.
 pub fn plugin_ctx(payload: &InstallerPayload, install_dir: &Path) -> common::plugin::PluginCtx {
+    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product_id)
+        .unwrap_or_else(|| install_dir.to_path_buf());
     common::plugin::PluginCtx {
         install_dir: install_dir.to_string_lossy().into_owned(),
+        data_dir: data_dir.to_string_lossy().into_owned(),
         product: payload.product.clone(),
         product_id: payload.product_id.clone(),
         version: payload.to_version.clone(),
@@ -808,7 +816,85 @@ pub fn plugin_ctx(payload: &InstallerPayload, install_dir: &Path) -> common::plu
         log_path: common::log::current_path()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
+        ..Default::default()
     }
+}
+
+/// Removes its temp dir on drop. Keeps the extracted `ui` plugin DLLs alive for
+/// the duration of the wizard.
+pub struct TempDirGuard(PathBuf);
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Everything the plugin-page wizard needs: the `ui = true` plugins (entry +
+/// extracted DLL, in config order), the base context, and this exe's path (to
+/// spawn the plugin host). The temp dir of DLLs lives as long as `tmp`.
+pub struct UiPlugins {
+    pub plugins: Vec<(common::models::PluginEntry, PathBuf)>,
+    pub base_ctx: common::plugin::PluginCtx,
+    pub self_exe: PathBuf,
+    pub tmp: TempDirGuard,
+}
+
+/// Extract every `ui = true` plugin DLL from the payload to a temp dir kept alive
+/// for the wizard. The wizard queries each plugin's `installway_pages` step by
+/// step. `install_dir` here is the default (pages describe choices, independent of
+/// the final folder — that reaches the plugin's `up` later). `None` when there are
+/// no UI plugins or extraction fails.
+pub fn extract_ui_plugins(
+    payload: &InstallerPayload,
+    install_dir: &Path,
+    self_exe: &Path,
+    zip_bytes: &[u8],
+) -> Option<UiPlugins> {
+    let ui: Vec<&common::models::PluginEntry> = payload.plugins.iter().filter(|p| p.ui).collect();
+    if ui.is_empty() {
+        return None;
+    }
+    let dir = std::env::temp_dir().join(format!("iw-plugin-ui-{}", std::process::id()));
+    if let Err(e) = fs::create_dir_all(&dir) {
+        common::log::warn(format!("plugin pages: temp dir failed: {e:#}"));
+        return None;
+    }
+    let tmp = TempDirGuard(dir.clone());
+    let mut archive = match ZipArchive::new(Cursor::new(zip_bytes)) {
+        Ok(a) => a,
+        Err(e) => {
+            common::log::warn(format!("plugin pages: open payload zip failed: {e:#}"));
+            return None;
+        }
+    };
+    let mut plugins = Vec::new();
+    for p in ui {
+        let dst = dir.join(format!("{}.dll", p.name));
+        let extracted = (|| -> Result<()> {
+            let mut buf = Vec::new();
+            let mut f = archive
+                .by_name(&p.file)
+                .with_context(|| format!("plugin {} missing from payload", p.file))?;
+            f.read_to_end(&mut buf)?;
+            fs::write(&dst, &buf)?;
+            Ok(())
+        })();
+        match extracted {
+            Ok(()) => plugins.push((p.clone(), dst)),
+            Err(e) => {
+                common::log::warn(format!("plugin '{}' pages: extract failed: {e:#}", p.name))
+            }
+        }
+    }
+    if plugins.is_empty() {
+        return None;
+    }
+    Some(UiPlugins {
+        plugins,
+        base_ctx: plugin_ctx(payload, install_dir),
+        self_exe: self_exe.to_path_buf(),
+        tmp,
+    })
 }
 
 /// Read the recorded installed version from `version.json` in the data dir.

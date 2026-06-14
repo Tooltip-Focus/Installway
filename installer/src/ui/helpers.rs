@@ -27,6 +27,8 @@ use windows::core::PCWSTR;
 pub const WM_APP_PROGRESS: u32 = WM_APP + 1;
 pub const WM_APP_DONE: u32 = WM_APP + 2;
 pub const WM_APP_ERROR: u32 = WM_APP + 3;
+/// Posted by the background plugin-step query thread when a result is ready.
+pub const WM_APP_PLUGIN_STEP: u32 = WM_APP + 4;
 
 /// Register the progress-bar common control class.
 pub fn init_progress_class() {

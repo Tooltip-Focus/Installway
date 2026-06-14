@@ -1,0 +1,16 @@
+# Example Installway plugin: contributes a wizard page (country picker)
+# and acts on the answer at install. Compiles to a cdylib DLL.
+# Build:  cargo build --release   ->  target/release/country_picker.dll
+[package]
+name = "country_picker"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+# Standalone (not part of the Installway workspace).
+[workspace]
+
+[profile.release]
+strip = true

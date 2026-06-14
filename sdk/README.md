@@ -7,18 +7,25 @@ run in an **isolated child process** at a chosen phase. See the full guide:
 
 ## The contract
 
-A plugin exports three C functions ([`installway_plugin.h`](installway_plugin.h)):
+A plugin exports these C functions ([`installway_plugin.h`](installway_plugin.h)):
 
 ```c
-uint32_t installway_abi_version(void);             // return INSTALLWAY_ABI_VERSION
-int32_t  installway_up(const InstallwayContext*);  // at install   (0 = ok)
+uint32_t installway_abi_version(void);              // return INSTALLWAY_ABI_VERSION
+int32_t  installway_up(const InstallwayContext*);   // at install   (0 = ok)
 int32_t  installway_down(const InstallwayContext*); // at uninstall (0 = ok)
+int32_t  installway_pages(const InstallwayContext*); // optional (custom pages)
 ```
 
 `up`/`down` are a migration pair: write `down` to reverse `up` when that's
 possible; otherwise make it a no-op (`return 0`). The host passes an
 `InstallwayContext` (install dir, product, product-id, version, exe path, and a
 `log` callback that writes to the install/uninstall log).
+
+**Custom wizard pages** are optional: a plugin marked `ui = true` also exports
+`installway_pages`, which describes form pages (the host renders them; the plugin
+never draws UI) and hands the answers back to `up` via `ctx->inputs_json`. See the
+[custom-pages guide](https://tooltip-focus.github.io/Installway/packaging/plugins.html#custom-wizard-pages-forms)
+and [`examples/country_picker/`](examples/country_picker).
 
 ## Examples (Rust)
 
@@ -29,6 +36,8 @@ examples are Rust `cdylib`s (each a standalone crate):
   previous MSI before the new install (`msiexec /x <code> /qn`).
 - [`examples/uninstall_installshield/`](examples/uninstall_installshield) — find
   a previous InstallShield product by name and run its uninstaller silently.
+- [`examples/country_picker/`](examples/country_picker) — contributes a
+  country-picker wizard page and acts on the choice at install.
 - [`examples/rust_plugin/`](examples/rust_plugin) — the bare minimal template.
 
 C/C++ authors use [`installway_plugin.h`](installway_plugin.h) directly; the
@@ -67,4 +76,5 @@ too (nothing to compile on the packaging machine).
   before loading.
 - Runs in a **child process** — a crash or hang can't take down or stall the
   install (killed past a timeout).
-- The host refuses a plugin whose `installway_abi_version()` doesn't match.
+- The host refuses a plugin whose `installway_abi_version()` is outside the
+  doesn't match `INSTALLWAY_ABI_VERSION`.

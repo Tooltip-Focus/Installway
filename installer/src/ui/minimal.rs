@@ -256,12 +256,18 @@ fn spawn_worker(
                 post(hwnd_isize, WM_APP_PROGRESS);
             })
         };
+        // Compact UI is non-interactive: plugin pages use their declared defaults.
+        let plugin_inputs = match crate::ui::headless_plugin_inputs(&loaded, &install_dir) {
+            Ok(m) => m,
+            Err(e) => return post_err(hwnd_isize, &format!("{e}")),
+        };
         let ctx = InstallCtx {
             install_dir: install_dir.clone(),
             payload: &loaded.payload,
             zip_bytes: loaded.zip(),
             cancel,
             on_progress: prog_cb,
+            plugin_inputs: plugin_inputs.clone(),
         };
         if let Err(e) = install(ctx) {
             return post_err(hwnd_isize, &format!("{e}"));
@@ -271,6 +277,7 @@ fn spawn_worker(
             &loaded.payload,
             &loaded.uninstaller_bytes,
             loaded.zip(),
+            &plugin_inputs,
         ) {
             return post_err(hwnd_isize, &format!("finalize: {e}"));
         }

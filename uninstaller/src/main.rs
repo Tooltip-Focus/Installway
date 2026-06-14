@@ -80,15 +80,14 @@ fn run() -> Result<()> {
     // `--silent` in-place (only for indices ≥ 1 to leave the binary name alone).
     let mut argv: Vec<String> = std::env::args().collect();
 
-    // Plugin-host child: `--run-plugin <dll> <up|down> <ctx.json>`. Runs before
-    // clap so the raw args aren't rejected; exits with the plugin's code.
+    // Plugin-host child: `--run-plugin <dll> <up|down>`. The context arrives on
+    // stdin. Runs before clap so the raw args aren't rejected; exits with the
+    // plugin's code.
     if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
-        let code = match (argv.get(idx + 1), argv.get(idx + 2), argv.get(idx + 3)) {
-            (Some(dll), Some(func), Some(ctx)) => common::plugin::host_main(
-                std::path::Path::new(dll),
-                func,
-                std::path::Path::new(ctx),
-            ),
+        let code = match (argv.get(idx + 1), argv.get(idx + 2)) {
+            (Some(dll), Some(func)) => {
+                common::plugin::host_main(std::path::Path::new(dll), func, None)
+            }
             _ => 2,
         };
         std::process::exit(code);

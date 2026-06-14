@@ -191,6 +191,9 @@ pub struct PluginFileEntry {
     pub phase: String,
     #[serde(default = "default_true")]
     pub required: bool,
+    /// Opt-in: this plugin contributes custom wizard pages.
+    #[serde(default)]
+    pub ui: bool,
 }
 
 fn default_true() -> bool {
@@ -204,6 +207,7 @@ pub struct ResolvedPlugin {
     pub src: PathBuf,
     pub phase: PluginPhase,
     pub required: bool,
+    pub ui: bool,
 }
 
 /// `pack` options as read from a TOML file. Flat keys matching the CLI long
@@ -413,6 +417,7 @@ fn build_plugins(raw: Vec<PluginFileEntry>) -> Result<Vec<ResolvedPlugin>> {
             src: p.dll,
             phase,
             required: p.required,
+            ui: p.ui,
         });
     }
     Ok(out)
@@ -684,15 +689,18 @@ force_reinstall = true
     fn plugins_parsed_and_validated() {
         let r = resolve_with(
             "\n[[plugin]]\nname='do-x'\ndll='plugins/x.dll'\nphase='pre-install'\n\
-             [[plugin]]\nname='do_y'\ndll='plugins/y.dll'\nphase='post_install'\nrequired=false\n",
+             [[plugin]]\nname='do_y'\ndll='plugins/y.dll'\nphase='post_install'\nrequired=false\n\
+             [[plugin]]\nname='ask'\ndll='plugins/ask.dll'\nphase='pre-install'\nui=true\n",
         )
         .unwrap();
-        assert_eq!(r.plugins.len(), 2);
+        assert_eq!(r.plugins.len(), 3);
         assert_eq!(r.plugins[0].name, "do-x");
         assert_eq!(r.plugins[0].phase, PluginPhase::PreInstall);
         assert!(r.plugins[0].required);
+        assert!(!r.plugins[0].ui); // defaults false
         assert_eq!(r.plugins[1].phase, PluginPhase::PostInstall);
         assert!(!r.plugins[1].required);
+        assert!(r.plugins[2].ui); // opt-in parsed
     }
 
     #[test]
