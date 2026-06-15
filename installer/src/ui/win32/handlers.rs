@@ -158,6 +158,16 @@ fn dir_has_entries(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the install must be blocked because the destination is a non-empty
+/// folder. The emptiness guard only applies to a fresh install where the user
+/// actually picks the folder (`skip_path` false). When the path is fixed
+/// (update/upgrade/patch over an existing install, or a build-time `skip_path`),
+/// the destination legitimately already holds the product's own files, so the
+/// check is skipped.
+fn should_block_nonempty(skip_path: bool, path: &str) -> bool {
+    !skip_path && dir_has_entries(path)
+}
+
 /// Re-evaluate the chosen folder: show/hide the non-empty warning and
 /// enable/disable the Install button accordingly. Called when entering the
 /// Choose page and on every edit of the path field.
@@ -188,8 +198,9 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
         return;
     }
     // Defensive: the Install button is disabled when the folder is non-empty,
-    // but a default-button keypress could still reach here.
-    if dir_has_entries(&path) {
+    // but a default-button keypress could still reach here. See
+    // `should_block_nonempty` for why the guard is skipped on a fixed path.
+    if should_block_nonempty(super::skip_path(), &path) {
         unsafe { message_box(hwnd, &tr().get("install.path_not_empty"), MB_ICONWARNING) };
         return;
     }
@@ -330,4 +341,56 @@ fn push_error(hwnd_isize: isize, msg: &str) {
         }
     });
     helpers::post(hwnd_isize, WM_APP_ERROR);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dir_has_entries, should_block_nonempty};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn dir_has_entries_false_for_missing_path() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        assert!(!dir_has_entries(&missing.to_string_lossy()));
+    }
+
+    #[test]
+    fn dir_has_entries_false_for_empty_or_blank() {
+        let dir = tempdir().unwrap();
+        assert!(!dir_has_entries(&dir.path().to_string_lossy()));
+        assert!(!dir_has_entries(""));
+        assert!(!dir_has_entries("   "));
+    }
+
+    #[test]
+    fn dir_has_entries_true_when_populated() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("file.txt"), b"x").unwrap();
+        assert!(dir_has_entries(&dir.path().to_string_lossy()));
+    }
+
+    #[test]
+    fn fresh_install_blocks_on_nonempty_folder() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("file.txt"), b"x").unwrap();
+        let path = dir.path().to_string_lossy();
+        // skip_path = false: the user picked this folder, it must be empty.
+        assert!(should_block_nonempty(false, &path));
+    }
+
+    #[test]
+    fn update_does_not_block_on_nonempty_folder() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("app.exe"), b"x").unwrap();
+        let path = dir.path().to_string_lossy();
+        assert!(!should_block_nonempty(true, &path));
+    }
+
+    #[test]
+    fn fresh_install_allows_empty_folder() {
+        let dir = tempdir().unwrap();
+        assert!(!should_block_nonempty(false, &dir.path().to_string_lossy()));
+    }
 }
