@@ -106,7 +106,7 @@ pub struct InstallCtx<'a> {
     pub payload: &'a InstallerPayload,
     pub zip_bytes: &'a [u8],
     pub cancel: Arc<AtomicBool>,
-    pub on_progress: Arc<dyn Fn(u64, u64, &str) + Send + Sync>,
+    pub on_progress: common::ProgressFn,
 }
 
 pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
@@ -233,15 +233,15 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
                 (ctx.on_progress)(done.load(Ordering::Relaxed), total_bytes, rel);
 
                 // Hash-skip if already correct (disabled in force_reinstall).
-                if dest.exists() && !ctx.payload.force_reinstall {
-                    if let Ok(h) = hash_file(&dest) {
-                        if h == entry.hash {
-                            common::log::info(format!("skip (hash match): {}", rel));
-                            done.fetch_add(entry.size, Ordering::Relaxed);
-                            (ctx.on_progress)(done.load(Ordering::Relaxed), total_bytes, rel);
-                            return Ok(None);
-                        }
-                    }
+                if dest.exists()
+                    && !ctx.payload.force_reinstall
+                    && let Ok(h) = hash_file(&dest)
+                    && h == entry.hash
+                {
+                    common::log::info(format!("skip (hash match): {}", rel));
+                    done.fetch_add(entry.size, Ordering::Relaxed);
+                    (ctx.on_progress)(done.load(Ordering::Relaxed), total_bytes, rel);
+                    return Ok(None);
                 }
 
                 let archive = archive
@@ -294,19 +294,17 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
     // expected. Removals are backed up like any delete, so still rollback-safe.
     let purge_orphans = ctx.payload.force_reinstall
         || (ctx.payload.purge_unknown_files && ctx.payload.kind == PayloadKind::Full);
-    if purge_orphans {
-        if let Ok(existing) = common::utils::collect_files(&ctx.install_dir) {
-            for rel in existing {
-                if rel.starts_with(".installer_tmp")
-                    || manifest.files.contains_key(&rel)
-                    || deleted.contains(&rel)
-                    || safe_rel(&rel).is_err()
-                {
-                    continue;
-                }
-                common::log::info(format!("purge: removing unknown file {}", rel));
-                deleted.push(rel);
+    if purge_orphans && let Ok(existing) = common::utils::collect_files(&ctx.install_dir) {
+        for rel in existing {
+            if rel.starts_with(".installer_tmp")
+                || manifest.files.contains_key(&rel)
+                || deleted.contains(&rel)
+                || safe_rel(&rel).is_err()
+            {
+                continue;
             }
+            common::log::info(format!("purge: removing unknown file {}", rel));
+            deleted.push(rel);
         }
     }
 
@@ -433,26 +431,25 @@ fn stage_file(
     staged_path: &Path,
 ) -> Result<()> {
     // Patch path: apply hdiff(old, patch) → staged_path.
-    if kind == PayloadKind::Patch {
-        if let Some(patch_info) = &entry.patch {
-            if old.exists() {
-                // The builder always writes `patch_info.file` already prefixed
-                // with `patches/` (see installer_builder::pack), so it can be
-                // used as the in-zip path as-is.
-                let patch_rel = &patch_info.file;
-                if let Ok(patch_bytes) = read_from_zip(archive, patch_rel) {
-                    let patch_tmp = staged_path.with_extension("patch");
-                    if fs::write(&patch_tmp, &patch_bytes).is_ok() {
-                        let ok = run_hdiff(old, &patch_tmp, staged_path);
-                        let _ = fs::remove_file(&patch_tmp);
-                        if ok && hash_file(staged_path).ok().as_deref() == Some(&entry.hash) {
-                            common::log::info(format!("staged (patch): {}", rel));
-                            return Ok(());
-                        }
-                        common::log::warn(format!("patch unusable, falling back to full: {}", rel));
-                        let _ = fs::remove_file(staged_path);
-                    }
+    if kind == PayloadKind::Patch
+        && let Some(patch_info) = &entry.patch
+        && old.exists()
+    {
+        // The builder always writes `patch_info.file` already prefixed
+        // with `patches/` (see installer_builder::pack), so it can be
+        // used as the in-zip path as-is.
+        let patch_rel = &patch_info.file;
+        if let Ok(patch_bytes) = read_from_zip(archive, patch_rel) {
+            let patch_tmp = staged_path.with_extension("patch");
+            if fs::write(&patch_tmp, &patch_bytes).is_ok() {
+                let ok = run_hdiff(old, &patch_tmp, staged_path);
+                let _ = fs::remove_file(&patch_tmp);
+                if ok && hash_file(staged_path).ok().as_deref() == Some(&entry.hash) {
+                    common::log::info(format!("staged (patch): {}", rel));
+                    return Ok(());
                 }
+                common::log::warn(format!("patch unusable, falling back to full: {}", rel));
+                let _ = fs::remove_file(staged_path);
             }
         }
     }
@@ -824,7 +821,7 @@ fn read_local_version(data_dir: &Path) -> Option<String> {
 }
 
 fn cleanup(temp_dir: &Path) {
-    let _ = common::utils::remove_dir_retry(temp_dir);
+    common::utils::remove_dir_retry(temp_dir);
 }
 
 /// Re-hash each committed file and return those that don't match the manifest
@@ -1003,7 +1000,7 @@ mod tests {
     fn io_msg_flags_disk_full() {
         let full = std::io::Error::from_raw_os_error(112);
         assert!(io_msg("writing", Path::new("x"), &full).contains("disk"));
-        let other = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let other = std::io::Error::other("boom");
         assert!(io_msg("writing", Path::new("x"), &other).contains("Failed"));
     }
 

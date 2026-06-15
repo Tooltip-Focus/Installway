@@ -230,14 +230,14 @@ fn expand_registry(
 /// logged so support can tell why a shortcut is missing.
 pub fn create_shortcuts(product: &str, install_dir: &Path, target: &Path) {
     for path in common::shortcuts::paths_for(product) {
-        if let Some(parent) = path.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                common::log::warn(format!(
-                    "shortcut: could not create folder {}: {e}",
-                    parent.display()
-                ));
-                continue;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            common::log::warn(format!(
+                "shortcut: could not create folder {}: {e}",
+                parent.display()
+            ));
+            continue;
         }
         match mslnk::ShellLink::new(target.to_string_lossy().as_ref()) {
             Ok(mut lnk) => {

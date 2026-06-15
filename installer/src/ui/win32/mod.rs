@@ -15,7 +15,7 @@ use crate::ui::helpers;
 use anyhow::Result;
 use common::utils::wide;
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -91,12 +91,12 @@ pub(super) struct UiState {
 }
 
 thread_local! {
-    pub(super) static STATE: RefCell<Option<Rc<RefCell<UiState>>>> = RefCell::new(None);
-    pub(super) static PAYLOAD: RefCell<Option<common::models::InstallerPayload>> = RefCell::new(None);
-    pub(super) static UNINSTALLER: RefCell<Option<Vec<u8>>> = RefCell::new(None);
-    pub(super) static LAUNCH_FLAG: RefCell<bool> = RefCell::new(false);
-    pub(super) static SKIP_LICENSE: RefCell<bool> = RefCell::new(false);
-    pub(super) static SKIP_PATH: RefCell<bool> = RefCell::new(false);
+    pub(super) static STATE: RefCell<Option<Rc<RefCell<UiState>>>> = const { RefCell::new(None) };
+    pub(super) static PAYLOAD: RefCell<Option<common::models::InstallerPayload>> = const { RefCell::new(None) };
+    pub(super) static UNINSTALLER: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    pub(super) static LAUNCH_FLAG: RefCell<bool> = const { RefCell::new(false) };
+    pub(super) static SKIP_LICENSE: RefCell<bool> = const { RefCell::new(false) };
+    pub(super) static SKIP_PATH: RefCell<bool> = const { RefCell::new(false) };
     static T: RefCell<common::i18n::Translator> = RefCell::new(common::i18n::Translator::default());
 }
 
@@ -161,7 +161,7 @@ pub fn run(
 /// phase.
 unsafe fn create_window(
     payload: &common::models::InstallerPayload,
-    default_path: &PathBuf,
+    default_path: &Path,
 ) -> Result<HWND> {
     unsafe {
         helpers::init_progress_class();
@@ -214,7 +214,7 @@ unsafe fn create_window(
             banner_brush,
             card_brush,
             license_accepted: false,
-            chosen_path: Some(default_path.clone()),
+            chosen_path: Some(default_path.to_path_buf()),
             dpi: 96,
         }));
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
@@ -321,12 +321,12 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
         match phase {
             Phase::Progress => {
                 STATE.with(|s| {
-                    if let Some(st) = s.borrow().as_ref() {
-                        if let Ok(mut p) = st.borrow().progress.lock() {
-                            p.done = 7_700_000;
-                            p.total = 12_345_678;
-                            p.name = "bin/app.exe".to_string();
-                        }
+                    if let Some(st) = s.borrow().as_ref()
+                        && let Ok(mut p) = st.borrow().progress.lock()
+                    {
+                        p.done = 7_700_000;
+                        p.total = 12_345_678;
+                        p.name = "bin/app.exe".to_string();
                     }
                 });
                 handlers::update_progress(hwnd);
@@ -495,15 +495,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         .unwrap_or(0)
                 }));
             }
-            return LRESULT(STATE.with(|s| {
+            LRESULT(STATE.with(|s| {
                 s.borrow()
                     .as_ref()
                     .map(|st| st.borrow().card_brush.0 as isize)
                     .unwrap_or(0)
-            }));
+            }))
         },
         WM_COMMAND => unsafe {
-            let id = (wparam.0 & 0xFFFF) as usize;
+            let id = wparam.0 & 0xFFFF;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
             // Re-check the destination as the user edits the path field.
             if id == ID_PATH_EDIT && code == EN_CHANGE {

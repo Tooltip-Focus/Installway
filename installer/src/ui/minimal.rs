@@ -76,7 +76,7 @@ struct State {
 }
 
 thread_local! {
-    static STATE: RefCell<Option<Rc<RefCell<State>>>> = RefCell::new(None);
+    static STATE: RefCell<Option<Rc<RefCell<State>>>> = const { RefCell::new(None) };
     static T: RefCell<common::i18n::Translator> = RefCell::new(common::i18n::Translator::default());
 }
 
@@ -245,7 +245,7 @@ fn spawn_worker(
             Ok(l) => l,
             Err(e) => return post_err(hwnd_isize, &format!("{e}")),
         };
-        let prog_cb: Arc<dyn Fn(u64, u64, &str) + Send + Sync> = {
+        let prog_cb: common::ProgressFn = {
             let prog = prog.clone();
             Arc::new(move |done, total, name| {
                 if let Ok(mut p) = prog.lock() {
@@ -366,7 +366,7 @@ unsafe fn build_controls(hwnd: HWND, payload: &common::models::InstallerPayload)
             WINDOW_EX_STYLE(0),
             w!("STATIC"),
             PCWSTR::null(),
-            WS_VISIBLE | WS_CHILD | WINDOW_STYLE(SS_ICON as u32),
+            WS_VISIBLE | WS_CHILD | WINDOW_STYLE(SS_ICON),
             PAD,
             PAD,
             ICON_SZ,
@@ -492,12 +492,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             } else {
                 SetTextColor(hdc, COLORREF(0x00202020));
             }
-            return LRESULT(STATE.with(|s| {
+            LRESULT(STATE.with(|s| {
                 s.borrow()
                     .as_ref()
                     .map(|st| st.borrow().bg.0 as isize)
                     .unwrap_or(0)
-            }));
+            }))
         },
         m if m == WM_APP_PROGRESS => unsafe {
             update_progress(hwnd);

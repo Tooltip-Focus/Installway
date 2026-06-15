@@ -128,7 +128,7 @@ fn u16_bytes(w: &[u16]) -> Vec<u8> {
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let b = s.as_bytes();

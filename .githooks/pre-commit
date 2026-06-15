@@ -1,21 +1,33 @@
 #!/bin/sh
-# rustfmt --check on staged Rust files. Blocks the commit if any need
-# formatting. Enable once per clone:
+# Pre-commit gate for staged Rust files. Enable once per clone:
 #
 #     git config core.hooksPath .githooks
 #
-# CI runs the global `cargo fmt --all --check`; this is the fast local mirror.
+# Checks:
+#   1. rustfmt --check - blocks unformatted code (fast local mirror of CI's
+#      `cargo fmt --all --check`).
+#   2. clippy -D warnings - any warning (unused import, clippy lint, ...) fails
+#      the commit. Clean code only; mirrors CI.
 
 files=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
 [ -z "$files" ] && exit 0
 
+# 1. Formatting.
 if ! command -v rustfmt >/dev/null 2>&1; then
     echo "pre-commit: rustfmt not found (install via rustup) - skipping fmt check" >&2
+elif ! echo "$files" | xargs rustfmt --edition 2024 --check >/dev/null 2>&1; then
+    echo "pre-commit: staged Rust files are not formatted. Run:" >&2
+    echo "    cargo fmt --all" >&2
+    exit 1
+fi
+
+# 2. Warnings are errors.
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found - skipping clippy check" >&2
     exit 0
 fi
 
-if ! echo "$files" | xargs rustfmt --edition 2024 --check >/dev/null 2>&1; then
-    echo "pre-commit: staged Rust files are not formatted. Run:" >&2
-    echo "    cargo fmt --all" >&2
+if ! cargo clippy --workspace --all-targets -- -D warnings; then
+    echo "pre-commit: clippy reported warnings (treated as errors). Fix before commit." >&2
     exit 1
 fi

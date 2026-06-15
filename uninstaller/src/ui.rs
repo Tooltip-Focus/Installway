@@ -9,8 +9,7 @@
 
 use common::utils::wide;
 use std::cell::RefCell;
-use std::ffi::OsStr;
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStringExt;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -73,7 +72,7 @@ struct State {
 }
 
 thread_local! {
-    static STATE: RefCell<Option<Rc<RefCell<State>>>> = RefCell::new(None);
+    static STATE: RefCell<Option<Rc<RefCell<State>>>> = const { RefCell::new(None) };
     static T: RefCell<common::i18n::Translator> = RefCell::new(common::i18n::Translator::default());
 }
 
@@ -90,7 +89,7 @@ pub struct UninstallParams {
     pub subtitle: String,
     pub confirm_text: String,
     /// Worker invoked after Yes; must call `progress` and finish.
-    pub worker: Box<dyn FnOnce(Arc<dyn Fn(u64, u64, &str) + Send + Sync>) + Send>,
+    pub worker: Worker,
     /// If true, the window skips the Confirm phase and starts the worker as
     /// soon as the message loop is running. Used by Stage 2 (no user choice).
     pub auto_start: bool,
@@ -206,9 +205,7 @@ pub fn run(params: UninstallParams) -> bool {
 
         let _ = ShowWindow(hwnd, SW_SHOW);
 
-        let mut worker_holder: Option<
-            Box<dyn FnOnce(Arc<dyn Fn(u64, u64, &str) + Send + Sync>) + Send>,
-        > = Some(params.worker);
+        let mut worker_holder: Option<Worker> = Some(params.worker);
         let hwnd_isize = hwnd.0 as isize;
 
         let mut msg = MSG::default();
@@ -225,16 +222,15 @@ pub fn run(params: UninstallParams) -> bool {
             });
             if started && let Some(w) = worker_holder.take() {
                 thread::spawn(move || {
-                    let progress: Arc<dyn Fn(u64, u64, &str) + Send + Sync> =
-                        Arc::new(move |done, total, name| {
-                            set_progress(done, total, name);
-                            let _ = PostMessageW(
-                                Some(HWND(hwnd_isize as *mut _)),
-                                WM_APP_PROGRESS,
-                                WPARAM(0),
-                                LPARAM(0),
-                            );
-                        });
+                    let progress: Progress = Arc::new(move |done, total, name| {
+                        set_progress(done, total, name);
+                        let _ = PostMessageW(
+                            Some(HWND(hwnd_isize as *mut _)),
+                            WM_APP_PROGRESS,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    });
                     w(progress);
                     let _ = PostMessageW(
                         Some(HWND(hwnd_isize as *mut _)),
@@ -291,7 +287,7 @@ fn create_font(name: &str, height: i32, weight: i32) -> HFONT {
             OUT_DEFAULT_PRECIS,
             CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY,
-            ((DEFAULT_PITCH.0 as u32) | ((FF_DONTCARE.0 as u32) << 4)) as u32,
+            (DEFAULT_PITCH.0 as u32) | ((FF_DONTCARE.0 as u32) << 4),
             PCWSTR(name_w.as_ptr()),
         )
     }
@@ -604,15 +600,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         .unwrap_or(0)
                 }));
             }
-            return LRESULT(STATE.with(|s| {
+            LRESULT(STATE.with(|s| {
                 s.borrow()
                     .as_ref()
                     .map(|st| st.borrow().card_brush.0 as isize)
                     .unwrap_or(0)
-            }));
+            }))
         },
         WM_COMMAND => unsafe {
-            let id = (wparam.0 & 0xFFFF) as usize;
+            let id = wparam.0 & 0xFFFF;
             match id {
                 ID_YES_BTN => {
                     STATE.with(|s| {
@@ -749,8 +745,11 @@ pub fn os_string_from_wide(buf: &[u16]) -> String {
         .into_owned()
 }
 
-/// Progress callback type alias.
-pub type Progress = Arc<dyn Fn(u64, u64, &str) + Send + Sync>;
+/// Progress callback type alias (shared installer/uninstaller shape).
+pub type Progress = common::ProgressFn;
+
+/// The uninstall worker: runs after Yes, driving `progress` to completion.
+pub type Worker = Box<dyn FnOnce(Progress) + Send>;
 
 /// Tracker counts as a convenience for stages that want a step-based bar.
 pub struct StepCounter {

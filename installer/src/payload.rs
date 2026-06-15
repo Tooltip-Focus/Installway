@@ -177,18 +177,18 @@ fn read_resource(id: u16) -> Result<Vec<u8>> {
     unsafe {
         let module = GetModuleHandleW(PCWSTR::null()).context("GetModuleHandle")?;
         let hres = FindResourceW(
-            Some(module.into()),
+            Some(module),
             PCWSTR(id as usize as *const u16),
             PCWSTR(RT_RCDATA as usize as *const u16),
         );
         if hres.is_invalid() {
             bail!("FindResource id={} failed (resource missing?)", id);
         }
-        let size = SizeofResource(Some(module.into()), hres);
+        let size = SizeofResource(Some(module), hres);
         if size == 0 {
             bail!("resource id={} has size 0", id);
         }
-        let hglobal = LoadResource(Some(module.into()), hres).context("LoadResource")?;
+        let hglobal = LoadResource(Some(module), hres).context("LoadResource")?;
         let ptr = LockResource(hglobal);
         if ptr.is_null() {
             bail!("LockResource id={} returned null", id);

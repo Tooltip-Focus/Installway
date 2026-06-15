@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 
 const DETACHED_PROCESS: u32 = 0x00000008;
 
@@ -93,7 +92,7 @@ pub fn run(silent: bool) -> Result<()> {
                 ("path", &info.install_dir),
             ],
         ),
-        worker: Box::new(move |progress: Arc<dyn Fn(u64, u64, &str) + Send + Sync>| {
+        worker: Box::new(move |progress: ui::Progress| {
             let counter = StepCounter::new(total_steps, progress);
             let tr = ui::tr();
 
@@ -259,10 +258,8 @@ fn spawn_finalize(
         cmd.arg("--app-dir").arg(dir);
     }
     // Show the completion box only when enabled and we have a display name.
-    if show_complete {
-        if let Some(name) = display_name {
-            cmd.arg("--display-name").arg(name).arg("--show-complete");
-        }
+    if show_complete && let Some(name) = display_name {
+        cmd.arg("--display-name").arg(name).arg("--show-complete");
     }
     cmd.creation_flags(DETACHED_PROCESS)
         .spawn()

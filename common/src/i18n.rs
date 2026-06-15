@@ -80,15 +80,15 @@ impl Translator {
     /// Detect from CLI args (`--lang <code>`), env (`INSTALLWAY_LANG`),
     /// then OS user locale, then default.
     pub fn detect(args: &[String]) -> Self {
-        if let Some(idx) = args.iter().position(|a| a == "--lang") {
-            if let Some(c) = args.get(idx + 1) {
-                return Self::for_lang(c);
-            }
+        if let Some(idx) = args.iter().position(|a| a == "--lang")
+            && let Some(c) = args.get(idx + 1)
+        {
+            return Self::for_lang(c);
         }
-        if let Ok(c) = std::env::var("INSTALLWAY_LANG") {
-            if !c.is_empty() {
-                return Self::for_lang(&c);
-            }
+        if let Ok(c) = std::env::var("INSTALLWAY_LANG")
+            && !c.is_empty()
+        {
+            return Self::for_lang(&c);
         }
         if let Some(c) = os_user_locale() {
             return Self::for_lang(&c);
@@ -106,10 +106,10 @@ impl Translator {
         if let Some(s) = t.get(self.lang).and_then(|m| m.get(key)) {
             return s.clone();
         }
-        if self.lang != DEFAULT_LANG {
-            if let Some(s) = t.get(DEFAULT_LANG).and_then(|m| m.get(key)) {
-                return s.clone();
-            }
+        if self.lang != DEFAULT_LANG
+            && let Some(s) = t.get(DEFAULT_LANG).and_then(|m| m.get(key))
+        {
+            return s.clone();
         }
         key.to_string()
     }

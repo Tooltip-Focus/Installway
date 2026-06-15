@@ -17,13 +17,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
       # Global formatting gate (mirrors the .githooks/pre-commit check).
       - name: Format check
         run: cargo fmt --all --check
+
+      # Any warning fails the build (mirrors the .githooks/pre-commit check).
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build
         run: cargo build --workspace --locked
