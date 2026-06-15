@@ -15,6 +15,14 @@ use std::process::Command;
 
 const DETACHED_PROCESS: u32 = 0x00000008;
 
+fn assoc_id(info: &common::models::InstallInfo) -> &str {
+    if info.product_id.is_empty() {
+        &info.product
+    } else {
+        &info.product_id
+    }
+}
+
 pub fn run(silent: bool) -> Result<()> {
     // Runs from the data dir, not the app dir; the real app dir comes from
     // installer_info.json.
@@ -110,12 +118,7 @@ pub fn run(silent: bool) -> Result<()> {
             //    old records (no id) fall back to the display name.
             counter.step(&tr.get("uninstall.removing_shortcuts"));
             cleanup::remove_shortcuts(&info_owned.product);
-            let assoc_id = if info_owned.product_id.is_empty() {
-                &info_owned.product
-            } else {
-                &info_owned.product_id
-            };
-            common::assoc::unregister(assoc_id, &info_owned.associations);
+            common::assoc::unregister(assoc_id(&info_owned), &info_owned.associations);
             for e in &info_owned.registry {
                 common::registry::remove_if_ours(e);
             }
@@ -163,12 +166,7 @@ fn run_silent(
     let n = cleanup::remove_payload_files(app_dir, manifest);
     common::log::info(format!("removed {} payload files", n));
     cleanup::remove_shortcuts(&info.product);
-    let assoc_id = if info.product_id.is_empty() {
-        &info.product
-    } else {
-        &info.product_id
-    };
-    common::assoc::unregister(assoc_id, &info.associations);
+    common::assoc::unregister(assoc_id(info), &info.associations);
     for e in &info.registry {
         common::registry::remove_if_ours(e);
     }
