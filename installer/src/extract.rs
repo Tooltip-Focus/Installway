@@ -398,6 +398,10 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
 
         // Verified - drop the journal so recovery won't fire.
         let _ = fs::remove_file(journal_path(&temp_dir));
+
+        if !deleted.is_empty() {
+            common::utils::prune_empty_dirs(&long_path(&ctx.install_dir));
+        }
     }
 
     // Installer metadata is written to the per-user data dir by

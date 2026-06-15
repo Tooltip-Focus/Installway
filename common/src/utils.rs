@@ -184,6 +184,18 @@ pub fn collect_files(root: &Path) -> Result<Vec<String>> {
     Ok(files)
 }
 
+pub fn prune_empty_dirs(root: &Path) {
+    for entry in WalkDir::new(root)
+        .contents_first(true)
+        .into_iter()
+        .flatten()
+    {
+        if entry.file_type().is_dir() && entry.path() != root {
+            let _ = fs::remove_dir(entry.path());
+        }
+    }
+}
+
 /// Invoke hdiffz.exe (must be next to the current exe) to produce a binary patch.
 pub fn generate_patch(old_file: &Path, new_file: &Path, out_file: &Path) -> Result<bool> {
     if let Some(parent) = out_file.parent() {
@@ -291,6 +303,24 @@ mod tests {
         let mut got = collect_files(d.path()).unwrap();
         got.sort();
         assert_eq!(got, vec!["a/b/c.txt".to_string(), "root.txt".to_string()]);
+    }
+
+    #[test]
+    fn prune_empty_dirs_removes_nested_keeps_nonempty_and_root() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        // Empty nested tree -> fully removed (parent emptied by child removal).
+        fs::create_dir_all(root.join("a").join("b").join("c")).unwrap();
+        // Sibling holding a file -> kept end to end.
+        fs::create_dir_all(root.join("keep")).unwrap();
+        fs::write(root.join("keep").join("f.txt"), b"x").unwrap();
+
+        prune_empty_dirs(root);
+
+        assert!(root.exists()); // root never removed
+        assert!(!root.join("a").exists()); // whole empty tree gone
+        assert!(root.join("keep").exists()); // non-empty dir kept
+        assert!(root.join("keep").join("f.txt").exists());
     }
 }
 

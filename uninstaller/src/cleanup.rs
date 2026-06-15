@@ -144,31 +144,10 @@ pub fn remove_shortcuts(product: &str) {
 }
 
 /// Recursively remove every empty subdirectory of `install_dir` (bottom-up).
-/// Leaves `install_dir` itself in place.
+/// Leaves `install_dir` itself in place. Shares one implementation with the
+/// installer's post-delete prune.
 pub fn remove_empty_subdirs(install_dir: &Path) {
-    let dirs = walk_dirs(install_dir);
-    for d in dirs.into_iter().rev() {
-        if d == install_dir {
-            continue;
-        }
-        let _ = fs::remove_dir(&d);
-    }
-}
-
-fn walk_dirs(root: &Path) -> Vec<PathBuf> {
-    let mut out = vec![root.to_path_buf()];
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = fs::read_dir(&d) else { continue };
-        for entry in rd.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                out.push(p.clone());
-                stack.push(p);
-            }
-        }
-    }
-    out
+    common::utils::prune_empty_dirs(install_dir);
 }
 
 pub fn unregister(key: &str) {
