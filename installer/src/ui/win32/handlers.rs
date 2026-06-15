@@ -232,7 +232,7 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
                 return;
             }
         };
-        let progress_cb: Arc<dyn Fn(u64, u64, &str) + Send + Sync> = {
+        let progress_cb: common::ProgressFn = {
             let progress_shared = progress_shared.clone();
             Arc::new(move |done, total, name| {
                 if let Ok(mut guard) = progress_shared.lock() {

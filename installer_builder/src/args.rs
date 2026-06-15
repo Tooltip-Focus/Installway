@@ -19,7 +19,7 @@ pub enum Command {
     /// Generate an Ed25519 signing keypair.
     Keygen(KeygenArgs),
     /// Build an installer .exe with an embedded payload.
-    Pack(PackCli),
+    Pack(Box<PackCli>),
 }
 
 #[derive(clap::Args, Debug)]
@@ -428,11 +428,11 @@ fn convert_reg_value(kind: RegKind, v: &toml::Value) -> Option<RegValue> {
             let n = v.as_integer()?;
             (0..=u32::MAX as i64)
                 .contains(&n)
-                .then(|| RegValue::Int(n as u64))
+                .then_some(RegValue::Int(n as u64))
         }
         RegKind::Qword => {
             let n = v.as_integer()?;
-            (n >= 0).then(|| RegValue::Int(n as u64))
+            (n >= 0).then_some(RegValue::Int(n as u64))
         }
         RegKind::MultiSz => {
             let arr = v.as_array()?;

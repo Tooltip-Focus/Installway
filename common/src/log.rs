@@ -131,28 +131,6 @@ pub fn log_path_uninstall_temp(product: &str, pid: u32) -> PathBuf {
     std::env::temp_dir().join(format!("{}-uninstall-{}.log", name, pid))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::utils::days_to_ymd;
-    use std::time::{Duration, UNIX_EPOCH};
-
-    #[test]
-    fn days_to_ymd_known() {
-        assert_eq!(days_to_ymd(0), (1970, 1, 1));
-        assert_eq!(days_to_ymd(31), (1970, 2, 1));
-        assert_eq!(days_to_ymd(365), (1971, 1, 1));
-        assert_eq!(days_to_ymd(59), (1970, 3, 1)); // 1970 not leap
-    }
-
-    #[test]
-    fn iso_utc_epoch_and_offset() {
-        assert_eq!(iso_utc(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
-        let t = UNIX_EPOCH + Duration::from_millis(1000 * 3661 + 42); // 01:01:01.042
-        assert_eq!(iso_utc(t), "1970-01-01T01:01:01.042Z");
-    }
-}
-
 /// Delete this product's `%TEMP%` install/uninstall logs older than
 /// `max_age_days`, so they don't accumulate over a machine's lifetime.
 /// Best-effort: any error (locked file, unreadable mtime) is ignored.
@@ -180,10 +158,32 @@ pub fn prune_temp_logs(product: &str, max_age_days: u64) {
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| now.duration_since(t).ok());
-        if let Some(age) = age {
-            if age > max_age {
-                let _ = std::fs::remove_file(entry.path());
-            }
+        if let Some(age) = age
+            && age > max_age
+        {
+            let _ = std::fs::remove_file(entry.path());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::days_to_ymd;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn days_to_ymd_known() {
+        assert_eq!(days_to_ymd(0), (1970, 1, 1));
+        assert_eq!(days_to_ymd(31), (1970, 2, 1));
+        assert_eq!(days_to_ymd(365), (1971, 1, 1));
+        assert_eq!(days_to_ymd(59), (1970, 3, 1)); // 1970 not leap
+    }
+
+    #[test]
+    fn iso_utc_epoch_and_offset() {
+        assert_eq!(iso_utc(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
+        let t = UNIX_EPOCH + Duration::from_millis(1000 * 3661 + 42); // 01:01:01.042
+        assert_eq!(iso_utc(t), "1970-01-01T01:01:01.042Z");
     }
 }

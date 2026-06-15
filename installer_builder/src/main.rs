@@ -16,7 +16,7 @@ fn main() -> Result<()> {
     match cli.command {
         args::Command::Keygen(a) => keygen::run(&a),
         args::Command::Pack(cli) => {
-            let cfg = args::PackArgs::resolve(cli)?;
+            let cfg = args::PackArgs::resolve(*cli)?;
             pack::run(&cfg)
         }
     }

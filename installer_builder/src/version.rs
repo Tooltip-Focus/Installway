@@ -30,7 +30,7 @@ fn parse_quad(v: &str) -> (u16, u16, u16, u16) {
 }
 
 fn pad32(b: &mut Vec<u8>) {
-    while b.len() % 4 != 0 {
+    while !b.len().is_multiple_of(4) {
         b.push(0);
     }
 }
@@ -170,7 +170,7 @@ pub fn embed(target: &Path, product: &str, publisher: &str, version: &str) -> Re
         UpdateResourceW(
             h,
             PCWSTR(RT_VERSION as usize as *const u16),
-            PCWSTR(1usize as *const u16), // resource id 1
+            PCWSTR(std::ptr::dangling::<u16>()), // resource id 1
             LANG_US_EN,
             Some(blob.as_ptr() as *const _),
             blob.len() as u32,

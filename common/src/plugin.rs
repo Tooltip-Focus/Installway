@@ -14,7 +14,6 @@
 use crate::models::PluginEntry;
 use crate::utils::wide;
 use anyhow::{Context, Result, bail};
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};

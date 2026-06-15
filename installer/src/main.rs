@@ -217,11 +217,10 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         install_dir.display()
     );
     let progress = Arc::new(|done: u64, total: u64, name: &str| {
-        if total > 0 {
-            let pct = (done * 100) / total;
+        if let Some(pct) = (done * 100).checked_div(total) {
             eprintln!("[{:>3}%] {}", pct, name);
         }
-    }) as Arc<dyn Fn(u64, u64, &str) + Send + Sync>;
+    }) as common::ProgressFn;
 
     let ctx = extract::InstallCtx {
         install_dir: install_dir.clone(),

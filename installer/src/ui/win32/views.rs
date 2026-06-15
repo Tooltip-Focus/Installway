@@ -13,7 +13,7 @@ use super::{
 use crate::ui::helpers::{self};
 use common::models::{InstallerPayload, PayloadKind};
 use common::utils::wide;
-use std::path::PathBuf;
+use std::path::Path;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
@@ -51,11 +51,7 @@ excepturi sint occaecati cupiditate non provident, similique sunt in culpa \
 qui officia deserunt mollitia animi, id est laborum et dolorum fuga.\r\n\r\n\
 By clicking 'I accept' you agree to be bound by the terms above.";
 
-pub(super) unsafe fn build_controls(
-    hwnd: HWND,
-    payload: &InstallerPayload,
-    default_path: &PathBuf,
-) {
+pub(super) unsafe fn build_controls(hwnd: HWND, payload: &InstallerPayload, default_path: &Path) {
     let hinst = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() }.0);
     unsafe {
         build_banner_header(hwnd, hinst, payload);
@@ -155,7 +151,7 @@ unsafe fn build_license(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerPayload
             WS_CHILD
                 | WS_CLIPSIBLINGS
                 | WS_VSCROLL
-                | WINDOW_STYLE((ES_MULTILINE | ES_READONLY | ES_LEFT) as u32),
+                | WINDOW_STYLE(ES_MULTILINE | ES_READONLY | ES_LEFT),
             PAD,
             license_top,
             WIN_W - PAD * 2,
@@ -183,7 +179,7 @@ unsafe fn build_license(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerPayload
 }
 
 /// Choose view: destination label + path edit + Browse button.
-unsafe fn build_choose(hwnd: HWND, hinst: HINSTANCE, default_path: &PathBuf) {
+unsafe fn build_choose(hwnd: HWND, hinst: HINSTANCE, default_path: &Path) {
     let tr = tr();
     let choose_label_w = wide(&tr.get("install.choose_label"));
     let browse_w = wide(&tr.get("install.browse"));
@@ -249,15 +245,15 @@ unsafe fn build_choose(hwnd: HWND, hinst: HINSTANCE, default_path: &PathBuf) {
             Some(hinst),
             None,
         );
-        if let Ok(h) = icon {
-            if let Some(hicon) = stock_warning_icon() {
-                SendMessageW(
-                    h,
-                    STM_SETICON,
-                    Some(WPARAM(hicon.0 as usize)),
-                    Some(LPARAM(0)),
-                );
-            }
+        if let Ok(h) = icon
+            && let Some(hicon) = stock_warning_icon()
+        {
+            SendMessageW(
+                h,
+                STM_SETICON,
+                Some(WPARAM(hicon.0 as usize)),
+                Some(LPARAM(0)),
+            );
         }
         let _ = CreateWindowExW(
             WINDOW_EX_STYLE(0),

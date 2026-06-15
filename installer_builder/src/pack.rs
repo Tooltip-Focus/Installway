@@ -235,10 +235,10 @@ pub fn run(args: &PackArgs) -> Result<()> {
             staged_uninstaller.display()
         )
     })?;
-    if let Some(i) = &icons {
-        if let Err(e) = crate::icon::embed_icons(&staged_uninstaller, i) {
-            eprintln!("warning: icon embed into uninstaller failed: {e:#}");
-        }
+    if let Some(i) = &icons
+        && let Err(e) = crate::icon::embed_icons(&staged_uninstaller, i)
+    {
+        eprintln!("warning: icon embed into uninstaller failed: {e:#}");
     }
     let uninstaller_bytes = fs::read(&staged_uninstaller)
         .with_context(|| format!("read {}", staged_uninstaller.display()))?;
@@ -262,10 +262,10 @@ pub fn run(args: &PackArgs) -> Result<()> {
         &uninstaller_bytes,
         zip_bytes.len() as u64,
     )?;
-    if let Some(i) = &icons {
-        if let Err(e) = crate::icon::embed_icons(&args.out, i) {
-            eprintln!("warning: icon embed into setup failed: {e:#}");
-        }
+    if let Some(i) = &icons
+        && let Err(e) = crate::icon::embed_icons(&args.out, i)
+    {
+        eprintln!("warning: icon embed into setup failed: {e:#}");
     }
     // Version resource (Explorer Details tab + SmartScreen reputation).
     if let Err(e) =

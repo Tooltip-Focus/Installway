@@ -131,18 +131,18 @@ unsafe fn enum_resource_names(hmod: HMODULE, rt: u16) -> Vec<ResName> {
 unsafe fn load_res_named(hmod: HMODULE, rt: u16, name: &ResName) -> Result<Vec<u8>> {
     unsafe {
         let hres = FindResourceW(
-            Some(hmod.into()),
+            Some(hmod),
             name.as_pcwstr(),
             PCWSTR(rt as usize as *const u16),
         );
         if hres.is_invalid() {
             bail!("FindResource type={} missing", rt);
         }
-        let size = SizeofResource(Some(hmod.into()), hres);
+        let size = SizeofResource(Some(hmod), hres);
         if size == 0 {
             bail!("SizeofResource returned 0");
         }
-        let hglobal = LoadResource(Some(hmod.into()), hres).context("LoadResource")?;
+        let hglobal = LoadResource(Some(hmod), hres).context("LoadResource")?;
         let ptr = LockResource(hglobal);
         if ptr.is_null() {
             bail!("LockResource returned null");

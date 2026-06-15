@@ -10,7 +10,6 @@ use crate::ui::{self, StepCounter, UninstallParams};
 use anyhow::Result;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -42,7 +41,7 @@ pub fn run(
         title: tr.fmt("uninstall.finalize_title", &[("product", &product)]),
         subtitle: tr.get("uninstall.finalize_subtitle"),
         confirm_text: String::new(), // never shown - auto-advances to Progress
-        worker: Box::new(move |progress: Arc<dyn Fn(u64, u64, &str) + Send + Sync>| {
+        worker: Box::new(move |progress: ui::Progress| {
             let counter = StepCounter::new(4, progress);
             counter.step(&tr.get("uninstall.waiting"));
             // Wait for the uninstall step to exit so file locks release.
@@ -82,14 +81,12 @@ pub fn run(
 
     // Completion box last: the finalize window (and the earlier uninstall window)
     // are gone by now, so it shows on top instead of racing behind them.
-    if show_complete {
-        if let Some(name) = display_name {
-            let tr = ui::tr();
-            ui::info(
-                &tr.fmt("uninstall.complete_message", &[("product", &name)]),
-                &tr.get("uninstall.complete_caption"),
-            );
-        }
+    if show_complete && let Some(name) = display_name {
+        let tr = ui::tr();
+        ui::info(
+            &tr.fmt("uninstall.complete_message", &[("product", &name)]),
+            &tr.get("uninstall.complete_caption"),
+        );
     }
     Ok(())
 }
