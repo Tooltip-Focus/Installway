@@ -29,7 +29,7 @@ minimal_done = "Update complete"
 [uninstall]
 title = "Uninstall {product}"
 subtitle = "Version {version}"
-confirm = "Are you sure you want to remove {product} {version} from:\n{path}\n\nAll product files, the desktop shortcut, the Start Menu shortcut, and the Add/Remove Programs entry will be deleted."
+confirm = "Are you sure you want to remove {product} {version} from:\n{path}\n\nAll product files, its shortcuts, and the Add/Remove Programs entry will be deleted."
 yes = "Yes, uninstall"
 no = "No"
 removing = "Removing {file}"

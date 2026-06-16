@@ -91,6 +91,11 @@ pub struct InstallerPayload {
     /// File-type associations to register under `HKCU\Software\Classes`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub associations: Vec<FileAssoc>,
+    /// Shortcuts (`.lnk`) to create at install; nothing is created unless
+    /// declared here. `dir`/`target`/`args` are templates expanded at install
+    /// time (see the shortcut docs for the token list).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shortcuts: Vec<ShortcutEntry>,
     /// Dev flag: ignore the installed version and reinstall from scratch
     /// (skip patch from-version check, rewrite all files, remove orphans).
     #[serde(default)]
@@ -175,6 +180,27 @@ pub struct RegEntry {
     pub value: RegValue,
 }
 
+/// One shortcut (`.lnk`) the installer creates.
+///
+/// In the payload the strings are templates; in `InstallInfo` they are the
+/// resolved values actually written (absolute `dir`/`target`), so the
+/// uninstaller removes exactly the files it created and an upgrade can
+/// reconcile a changed list by resolved `.lnk` path.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ShortcutEntry {
+    /// Directory the `.lnk` is placed in. Tokens: `%DESKTOP%`, `%START_MENU%`
+    /// (per-user Programs), `%INSTALL_DIR%`, plus `%VAR%` env vars.
+    pub dir: String,
+    /// Shortcut file name, without the `.lnk` extension (also the label).
+    pub name: String,
+    /// Shortcut target. A relative path resolves against the install dir (the
+    /// product exe); same tokens as `dir` are expanded.
+    pub target: String,
+    /// Free-form command-line arguments appended to the shortcut. Empty = none.
+    #[serde(default)]
+    pub args: String,
+}
+
 /// One file-type association: extension + a human description.
 /// The shell `open` verb is wired to the product's main exe with `"%1"`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -220,6 +246,10 @@ pub struct InstallInfo {
     /// exactly these.
     #[serde(default)]
     pub associations: Vec<FileAssoc>,
+    /// Shortcuts created at install (resolved absolute paths) - the uninstaller
+    /// removes exactly these, and an upgrade reconciles a changed set.
+    #[serde(default)]
+    pub shortcuts: Vec<ShortcutEntry>,
     /// Resolved registry entries written at install - the uninstaller removes
     /// exactly these (anti-stomp by value).
     #[serde(default)]
@@ -283,6 +313,7 @@ mod tests {
         assert!(!p.upgrade_minimal_ui);
         assert!(!p.show_uninstall_complete);
         assert!(p.associations.is_empty());
+        assert!(p.shortcuts.is_empty());
         assert!(p.license_text.is_none());
         assert_eq!(p.kind, PayloadKind::Full);
     }
@@ -297,6 +328,7 @@ mod tests {
         assert_eq!(i.publisher, "");
         assert_eq!(i.product_id, "");
         assert!(i.associations.is_empty());
+        assert!(i.shortcuts.is_empty());
     }
 
     #[test]
@@ -323,6 +355,12 @@ mod tests {
             associations: vec![FileAssoc {
                 ext: ".x".into(),
                 description: "X".into(),
+            }],
+            shortcuts: vec![ShortcutEntry {
+                dir: r"%DESKTOP%".into(),
+                name: "P".into(),
+                target: "a.exe".into(),
+                args: "--flag".into(),
             }],
             force_reinstall: true,
             purge_unknown_files: true,
@@ -372,6 +410,9 @@ mod tests {
         assert!(back.upgrade_minimal_ui);
         assert!(back.show_uninstall_complete);
         assert_eq!(back.associations.len(), 1);
+        assert_eq!(back.shortcuts.len(), 1);
+        assert_eq!(back.shortcuts[0].dir, r"%DESKTOP%");
+        assert_eq!(back.shortcuts[0].args, "--flag");
         assert_eq!(back.from_version.as_deref(), Some("1.0"));
     }
 }

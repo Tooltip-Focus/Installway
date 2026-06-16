@@ -3,7 +3,9 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use common::models::{InstallDirRestriction, PluginPhase, RegEntry, RegKind, RegValue};
+use common::models::{
+    InstallDirRestriction, PluginPhase, RegEntry, RegKind, RegValue, ShortcutEntry,
+};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -167,6 +169,18 @@ pub struct RegFileEntry {
     pub value: toml::Value,
 }
 
+/// One `[[shortcut]]` table from the config file. Converted + validated into a
+/// [`ShortcutEntry`] by [`build_shortcuts`].
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ShortcutFileEntry {
+    pub dir: String,
+    pub name: String,
+    pub target: String,
+    #[serde(default)]
+    pub args: String,
+}
+
 /// One `[[plugin]]` table from the config file. Converted + validated into a
 /// [`ResolvedPlugin`] by [`build_plugins`].
 #[derive(Deserialize, Debug)]
@@ -236,6 +250,9 @@ pub struct PackFile {
     /// Native DLL plugins (config-file only). `[[plugin]]` tables.
     #[serde(default, rename = "plugin")]
     pub plugins: Vec<PluginFileEntry>,
+    /// Shortcuts to create (config-file only). `[[shortcut]]` tables.
+    #[serde(default, rename = "shortcut")]
+    pub shortcuts: Vec<ShortcutFileEntry>,
 }
 
 /// Fully resolved `pack` options consumed by `pack::run`. CLI > TOML > default.
@@ -268,6 +285,7 @@ pub struct PackArgs {
     pub reuse_stub: bool,
     pub registry: Vec<RegEntry>,
     pub plugins: Vec<ResolvedPlugin>,
+    pub shortcuts: Vec<ShortcutEntry>,
 }
 
 impl PackArgs {
@@ -341,6 +359,7 @@ impl PackArgs {
             reuse_stub: cli.reuse_stub || file.reuse_stub,
             registry: build_registry(file.registry)?,
             plugins: build_plugins(file.plugins)?,
+            shortcuts: build_shortcuts(file.shortcuts)?,
         })
     }
 }
@@ -394,6 +413,41 @@ fn build_plugins(raw: Vec<PluginFileEntry>) -> Result<Vec<ResolvedPlugin>> {
             src: p.dll,
             phase,
             required: p.required,
+        });
+    }
+    Ok(out)
+}
+
+/// Convert + validate `[[shortcut]]` entries. `dir`, `name` and `target` must
+/// be non-empty; `name` must be a single filename component (no path separators
+/// or characters illegal on Windows), since it becomes `<name>.lnk`.
+fn build_shortcuts(raw: Vec<ShortcutFileEntry>) -> Result<Vec<ShortcutEntry>> {
+    let mut out = Vec::with_capacity(raw.len());
+    for (i, s) in raw.into_iter().enumerate() {
+        let n = i + 1;
+        let dir = s.dir.trim().to_string();
+        let name = s.name.trim().to_string();
+        let target = s.target.trim().to_string();
+        if dir.is_empty() {
+            bail!("shortcut #{n}: empty dir");
+        }
+        if name.is_empty() {
+            bail!("shortcut #{n}: empty name");
+        }
+        if target.is_empty() {
+            bail!("shortcut #{n} ('{name}'): empty target");
+        }
+        if name.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) {
+            bail!(
+                "shortcut #{n} ('{name}'): name must be a single filename \
+                 (no \\ / : * ? \" < > |)"
+            );
+        }
+        out.push(ShortcutEntry {
+            dir,
+            name,
+            target,
+            args: s.args,
         });
     }
     Ok(out)
@@ -656,6 +710,43 @@ force_reinstall = true
                  [[plugin]]\nname='A'\ndll='b.dll'\nphase='pre-install'\n"
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn shortcuts_parsed_and_validated() {
+        let r = resolve_with(
+            "\n[[shortcut]]\ndir='%DESKTOP%'\nname='My App'\ntarget='%EXE%'\n\
+             [[shortcut]]\ndir='%INSTALL_DIR%'\nname='Tools'\ntarget='bin/tool.exe'\nargs='--fast'\n",
+        )
+        .unwrap();
+        assert_eq!(r.shortcuts.len(), 2);
+        assert_eq!(r.shortcuts[0].dir, "%DESKTOP%");
+        assert_eq!(r.shortcuts[0].name, "My App");
+        assert_eq!(r.shortcuts[0].target, "%EXE%");
+        assert_eq!(r.shortcuts[0].args, "");
+        assert_eq!(r.shortcuts[1].args, "--fast");
+    }
+
+    #[test]
+    fn shortcuts_reject_bad() {
+        // empty name
+        assert!(
+            resolve_with("\n[[shortcut]]\ndir='%DESKTOP%'\nname=''\ntarget='a.exe'\n").is_err()
+        );
+        // empty target
+        assert!(resolve_with("\n[[shortcut]]\ndir='%DESKTOP%'\nname='X'\ntarget=''\n").is_err());
+        // empty dir
+        assert!(resolve_with("\n[[shortcut]]\ndir=''\nname='X'\ntarget='a.exe'\n").is_err());
+        // path separator in name
+        assert!(
+            resolve_with("\n[[shortcut]]\ndir='%DESKTOP%'\nname='a\\\\b'\ntarget='a.exe'\n")
+                .is_err()
+        );
+        // unknown field
+        assert!(
+            resolve_with("\n[[shortcut]]\ndir='%DESKTOP%'\nname='X'\ntarget='a.exe'\nicon='x'\n")
+                .is_err()
         );
     }
 
