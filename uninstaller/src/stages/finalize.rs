@@ -115,20 +115,7 @@ fn wait_for_pid(pid: u32, timeout: Duration) {
 }
 
 fn schedule_self_delete_on_reboot() {
-    use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
-    use windows::core::PCWSTR;
-
-    let Ok(self_exe) = std::env::current_exe() else {
-        return;
-    };
-    let w: Vec<u16> = std::os::windows::ffi::OsStrExt::encode_wide(self_exe.as_os_str())
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe {
-        let _ = MoveFileExW(
-            PCWSTR(w.as_ptr()),
-            PCWSTR::null(),
-            MOVEFILE_DELAY_UNTIL_REBOOT,
-        );
+    if let Ok(self_exe) = std::env::current_exe() {
+        crate::cleanup::schedule_delete_on_reboot(&self_exe);
     }
 }

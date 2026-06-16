@@ -34,7 +34,7 @@ enum Removal {
 /// Schedule `path` for deletion on next reboot. `MoveFileEx(MOVEFILE_DELAY_-
 /// UNTIL_REBOOT)` records the pending rename under HKLM, so it only succeeds
 /// when elevated; `false` otherwise. Best-effort last resort.
-fn schedule_delete_on_reboot(path: &Path) -> bool {
+pub(crate) fn schedule_delete_on_reboot(path: &Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
     use windows::core::PCWSTR;

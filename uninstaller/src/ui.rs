@@ -9,10 +9,9 @@
 
 use common::utils::wide;
 use std::cell::RefCell;
-use std::os::windows::ffi::OsStringExt;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -514,24 +513,7 @@ unsafe fn build_controls(hwnd: HWND, p: &UninstallParams) {
         );
     }
 
-    STATE.with(|s| {
-        if let Some(state) = s.borrow().as_ref() {
-            let st = state.borrow();
-            unsafe {
-                apply_font(hwnd, ID_HEADER, st.font_header);
-                for id in [
-                    ID_SUBHEADER,
-                    ID_CONFIRM_TEXT,
-                    ID_PROGRESS,
-                    ID_STATUS,
-                    ID_YES_BTN,
-                    ID_NO_BTN,
-                ] {
-                    apply_font(hwnd, id, st.font_body);
-                }
-            }
-        }
-    });
+    unsafe { apply_fonts(hwnd) }
 }
 
 unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
@@ -737,14 +719,6 @@ pub fn info(msg: &str, caption: &str) {
     }
 }
 
-#[allow(dead_code)]
-pub fn os_string_from_wide(buf: &[u16]) -> String {
-    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    std::ffi::OsString::from_wide(&buf[..end])
-        .to_string_lossy()
-        .into_owned()
-}
-
 /// Progress callback type alias (shared installer/uninstaller shape).
 pub type Progress = common::ProgressFn;
 
@@ -756,8 +730,6 @@ pub struct StepCounter {
     pub done: AtomicU64,
     pub total: u64,
     pub cb: Progress,
-    #[allow(dead_code)]
-    pub cancelled: Arc<AtomicBool>,
 }
 
 impl StepCounter {
@@ -766,7 +738,6 @@ impl StepCounter {
             done: AtomicU64::new(0),
             total,
             cb,
-            cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
     pub fn step(&self, label: &str) {
