@@ -18,6 +18,7 @@
 
 - [License, icon & version info](packaging/branding.md)
 - [File associations](packaging/associations.md)
+- [Shortcuts](packaging/shortcuts.md)
 - [Registry keys](packaging/registry.md)
 - [Plugins (custom DLLs)](packaging/plugins.md)
 - [Trimming the wizard](packaging/wizard.md)

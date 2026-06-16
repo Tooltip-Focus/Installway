@@ -60,13 +60,18 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # force_reinstall = true
 # reuse_stub      = true
 
+# shortcuts to create (.lnk) - see the Shortcuts page. None created unless declared.
+# [[shortcut]]
+# dir = "%DESKTOP%"; name = "My App"; target = "%EXE%"; args = ""
+
 # free-form registry keys (HKCU) - see the Registry keys page
 # [[registry]]
 # hive = "HKCU"; key = "%APP_KEY%"; name = "InstallDir"; type = "sz"; value = "%INSTALL_DIR%"
 ```
 
-> `[[registry]]` is an array-of-tables: put all flat keys above it, then the
-> `[[registry]]` blocks at the end of the file (standard TOML ordering).
+> `[[shortcut]]` and `[[registry]]` are arrays-of-tables: put all flat keys
+> above them, then the `[[shortcut]]` / `[[registry]]` blocks at the end of the
+> file (standard TOML ordering).
 
 Run it:
 

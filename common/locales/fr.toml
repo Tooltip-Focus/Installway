@@ -29,7 +29,7 @@ minimal_done = "Mise à jour terminée"
 [uninstall]
 title = "Désinstaller {product}"
 subtitle = "Version {version}"
-confirm = "Voulez-vous vraiment supprimer {product} {version} de :\n{path}\n\nTous les fichiers du produit, le raccourci du bureau, le raccourci du menu Démarrer et l'entrée dans Applications installées seront supprimés."
+confirm = "Voulez-vous vraiment supprimer {product} {version} de :\n{path}\n\nTous les fichiers du produit, ses raccourcis et l'entrée dans Applications installées seront supprimés."
 yes = "Oui, désinstaller"
 no = "Non"
 removing = "Suppression de {file}"

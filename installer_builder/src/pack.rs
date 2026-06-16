@@ -156,6 +156,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         show_uninstall_complete: args.show_uninstall_complete,
         registry: args.registry.clone(),
         plugins: plugin_entries,
+        shortcuts: args.shortcuts.clone(),
     };
 
     let payload_json = serde_json::to_string(&payload).context("serialize payload")?;

@@ -52,6 +52,30 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Expand `%VAR%` tokens via Win32 `ExpandEnvironmentStringsW` (handles
+/// `%LOCALAPPDATA%`, `%APPDATA%`, ...). Unknown tokens are left as-is; returns
+/// the input unchanged on failure.
+pub fn expand_env(s: &str) -> String {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows::core::PCWSTR;
+    let src: Vec<u16> = std::ffi::OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let needed = unsafe { ExpandEnvironmentStringsW(PCWSTR(src.as_ptr()), None) };
+    if needed == 0 {
+        return s.to_string();
+    }
+    let mut buf = vec![0u16; needed as usize];
+    let written = unsafe { ExpandEnvironmentStringsW(PCWSTR(src.as_ptr()), Some(&mut buf)) };
+    if written == 0 {
+        return s.to_string();
+    }
+    let n = (written as usize).saturating_sub(1).min(buf.len()); // drop trailing null
+    String::from_utf16_lossy(&buf[..n])
+}
+
 /// Remove `path`, retrying transient locks. `Ok` if it's already gone.
 pub fn remove_file_retry(path: &Path) -> Result<()> {
     let mut last_err = None;

@@ -123,13 +123,14 @@ pub fn remove_payload_files(install_dir: &Path, manifest: &Manifest) -> usize {
     count
 }
 
-pub fn remove_shortcuts(product: &str) {
-    for p in common::shortcuts::paths_for(product) {
+/// Remove the shortcuts recorded in `installer_info.json` (the resolved `.lnk`
+/// paths the installer created).
+pub fn remove_shortcuts(info: &InstallInfo) {
+    for e in &info.shortcuts {
+        let p = common::shortcuts::lnk_path(e);
         match remove_file_robust(&p) {
-            Removal::Absent => common::log::warn(format!(
-                "could not remove shortcut (absent): {}",
-                p.display()
-            )),
+            // Already gone (the user deleted it) - nothing to do, not an error.
+            Removal::Absent => {}
             Removal::Removed => {}
             Removal::Pending => common::log::warn(format!(
                 "shortcut deletion will be delayed for next reboot: {}",

@@ -18,10 +18,10 @@ Add/Remove Programs). Uninstalling runs that `uninstall.exe`, which:
 
 1. Reads `installer_info.json` to find the real `install_dir`.
 2. Walks `installer_manifest.json` and removes every tracked file.
-3. Removes desktop / Start Menu shortcuts, file associations (only `.ext`
-   defaults that still point at our ProgID), and any free-form
-   [registry entries](../packaging/registry.md) (anti-stomp; empty created keys
-   pruned).
+3. Removes the [shortcuts](../packaging/shortcuts.md) it created, file
+   associations (only `.ext` defaults that still point at our ProgID), and any
+   free-form [registry entries](../packaging/registry.md) (anti-stomp; empty
+   created keys pruned).
 4. Removes `version.json` + `installer_manifest.json` and empty subdirs.
 5. Deletes the HKCU `Uninstall` registry entry.
 6. Spawns a `%TEMP%` stage-2 copy of itself that deletes the **app dir** and the
@@ -42,15 +42,9 @@ invokes.
 
 ## Shortcuts
 
-If the payload's `manifest.exe` is non-empty, the installer drops two `.lnk`
-files (per-user, no admin) pointing at `<install_dir>\<exe>`:
-
-```text
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\<product>.lnk
-%USERPROFILE%\Desktop\<product>.lnk
-```
-
-Both are removed by the uninstaller. Shortcut path logic is shared between
-installer and uninstaller so the two never drift on naming.
+Shortcuts are **config-driven** — see [Shortcuts](../packaging/shortcuts.md).
+The installer records each resolved `.lnk` path in `installer_info.json`, and
+the uninstaller removes exactly those. An install that declares no shortcuts
+creates none.
 
 Next: [Manifest & payload format](../reference/payload.md).

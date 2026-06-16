@@ -117,7 +117,7 @@ pub fn run(silent: bool) -> Result<()> {
             // 2. Shortcuts + file associations. ProgID keyed by product_id;
             //    old records (no id) fall back to the display name.
             counter.step(&tr.get("uninstall.removing_shortcuts"));
-            cleanup::remove_shortcuts(&info_owned.product);
+            cleanup::remove_shortcuts(&info_owned);
             common::assoc::unregister(assoc_id(&info_owned), &info_owned.associations);
             for e in &info_owned.registry {
                 common::registry::remove_if_ours(e);
@@ -165,7 +165,7 @@ fn run_silent(
     run_down_plugins(info, data_dir);
     let n = cleanup::remove_payload_files(app_dir, manifest);
     common::log::info(format!("removed {} payload files", n));
-    cleanup::remove_shortcuts(&info.product);
+    cleanup::remove_shortcuts(info);
     common::assoc::unregister(assoc_id(info), &info.associations);
     for e in &info.registry {
         common::registry::remove_if_ours(e);

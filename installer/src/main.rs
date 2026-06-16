@@ -268,7 +268,7 @@ fn default_install_path(payload: &common::models::InstallerPayload) -> PathBuf {
     }
     // Per-app default from the build (env tokens expanded), if set.
     if let Some(dir) = payload.default_install_dir.as_deref() {
-        let expanded = expand_env(dir);
+        let expanded = common::utils::expand_env(dir);
         let trimmed = expanded.trim();
         if !trimmed.is_empty() {
             return PathBuf::from(trimmed);
@@ -297,29 +297,6 @@ fn previous_install_dir(payload: &common::models::InstallerPayload) -> Option<Pa
     } else {
         Some(PathBuf::from(info.install_dir))
     }
-}
-
-/// Expand `%VAR%` tokens via Win32 (handles `%LOCALAPPDATA%` etc.). Returns the
-/// input unchanged on failure.
-fn expand_env(s: &str) -> String {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
-    use windows::core::PCWSTR;
-    let src: Vec<u16> = std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let needed = unsafe { ExpandEnvironmentStringsW(PCWSTR(src.as_ptr()), None) };
-    if needed == 0 {
-        return s.to_string();
-    }
-    let mut buf = vec![0u16; needed as usize];
-    let written = unsafe { ExpandEnvironmentStringsW(PCWSTR(src.as_ptr()), Some(&mut buf)) };
-    if written == 0 {
-        return s.to_string();
-    }
-    let n = (written as usize).saturating_sub(1).min(buf.len()); // drop trailing null
-    String::from_utf16_lossy(&buf[..n])
 }
 
 fn report_fatal(msg: &str) {

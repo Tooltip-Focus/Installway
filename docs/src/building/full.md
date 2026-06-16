@@ -27,7 +27,7 @@ Supply each of these on the CLI or in a [config file](config.md):
 | `--publisher` | Vendor name. Sets the Add/Remove Programs "Publisher" field and the per-user uninstall data folder `%LOCALAPPDATA%\<publisher>\Uninstall\<product-id>`. Must not be empty. |
 | `--to-version` | Version string, e.g. `1.0` or `1.2.3`. Also parsed as `a.b.c.d` for the version-info resource. |
 | `--input` | Directory containing the files to install. Scanned recursively. |
-| `--exe` | Main executable, **relative to `--input`**, e.g. `bin\myapp.exe`. Drives shortcuts, the "Run now" checkbox, and file associations. |
+| `--exe` | Main executable, **relative to `--input`**, e.g. `bin\myapp.exe`. Drives the "Run now" checkbox and file associations, and is the `%EXE%` token for [shortcuts](../packaging/shortcuts.md). |
 | `--priv-key` | Ed25519 private key that signs the payload. |
 | `--out` | Output installer path. Parent dirs are created. |
 

@@ -39,6 +39,7 @@ pub(crate) fn sample_payload(view: &str) -> common::models::InstallerPayload {
         },
         license_text: None,
         associations: Vec::new(),
+        shortcuts: Vec::new(),
         force_reinstall: false,
         purge_unknown_files: false,
         skip_license: false,

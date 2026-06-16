@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use anyhow::{Context, Result};
-use common::models::{FileAssoc, InstallInfo, InstallerPayload, PluginPhase};
+use common::models::{FileAssoc, InstallInfo, InstallerPayload, PluginPhase, ShortcutEntry};
 use common::utils::days_to_ymd;
 use std::fs;
 use std::path::Path;
@@ -37,10 +37,18 @@ pub fn finalize(
         .as_ref()
         .map(|i| i.associations.clone())
         .unwrap_or_default();
+    // Prior shortcut set for reconciliation (the `.lnk`s this version may need
+    // to drop). Resolved paths from the previous install record.
+    let prior_shortcuts: Vec<ShortcutEntry> = prior
+        .as_ref()
+        .map(|i| i.shortcuts.clone())
+        .unwrap_or_default();
     let prior_reg = prior.map(|i| i.registry).unwrap_or_default();
 
     // Resolve the registry token templates against this install.
     let registry = expand_registry(payload, install_dir);
+    // Resolve shortcut templates to absolute dir/target/args.
+    let shortcuts = expand_shortcuts(payload, install_dir);
 
     // Atomic + retrying write: a fresh `.exe` is the prime Defender trigger
     // (it locks the new file to scan it), so a bare write could fail the
@@ -65,6 +73,7 @@ pub fn finalize(
         registry_key: key.clone(),
         exe: payload.manifest.exe.clone(),
         associations: payload.associations.clone(),
+        shortcuts: shortcuts.clone(),
         registry: registry.clone(),
         plugins: payload.plugins.clone(),
         show_uninstall_complete: payload.show_uninstall_complete,
@@ -87,17 +96,24 @@ pub fn finalize(
     if !stale.is_empty() {
         common::assoc::unregister(&payload.product_id, &stale);
     }
-    if !payload.manifest.exe.is_empty() {
-        let target = install_dir.join(&payload.manifest.exe);
-        // Shortcut label is the display name.
-        create_shortcuts(&payload.product, install_dir, &target);
+    if !payload.manifest.exe.is_empty() && !payload.associations.is_empty() {
+        // ProgIDs are keyed by product_id. Normalize separators so the registry
+        // command reads cleanly.
+        let exe_str = install_dir
+            .join(&payload.manifest.exe)
+            .to_string_lossy()
+            .replace('/', "\\");
+        common::assoc::register(&payload.product_id, &exe_str, &payload.associations);
+    }
 
-        if !payload.associations.is_empty() {
-            // ProgIDs are keyed by product_id. Normalize separators so the
-            // registry command reads cleanly.
-            let exe_str = target.to_string_lossy().replace('/', "\\");
-            common::assoc::register(&payload.product_id, &exe_str, &payload.associations);
-        }
+    // Shortcuts: config-driven. Drop `.lnk` files the previous install created
+    // that this version no longer declares, then (re)create the current set, so
+    // a changed list never orphans a shortcut.
+    for e in common::shortcuts::stale(&prior_shortcuts, &shortcuts) {
+        remove_shortcut(&e);
+    }
+    for e in &shortcuts {
+        create_shortcut(install_dir, e);
     }
 
     // Free-form registry: drop entries the previous install wrote but this
@@ -183,31 +199,56 @@ fn run_post_install_plugins(
     res
 }
 
-/// Resolve token templates in each registry entry against this install.
-/// Tokens: `%APP_KEY%` (= `Software\<publisher>\<product_id>`), `%INSTALL_DIR%`,
-/// `%EXE%`, `%VERSION%`, `%PRODUCT%`, `%PRODUCT_ID%`, `%PUBLISHER%`. The
-/// publisher is sanitized so it stays a single registry-key component.
+/// Precomputed install-context values for the `%TOKEN%` templates shared by
+/// registry + shortcut expansion. `publisher` is sanitized so it stays a single
+/// path/registry-key component; `install`/`exe` use backslash separators.
+struct Tokens {
+    install: String,
+    exe: String,
+    version: String,
+    product: String,
+    product_id: String,
+    publisher: String,
+}
+
+impl Tokens {
+    fn new(payload: &InstallerPayload, install_dir: &Path) -> Self {
+        Tokens {
+            install: install_dir.to_string_lossy().replace('/', "\\"),
+            exe: install_dir
+                .join(&payload.manifest.exe)
+                .to_string_lossy()
+                .replace('/', "\\"),
+            version: payload.to_version.clone(),
+            product: payload.product.clone(),
+            product_id: payload.product_id.clone(),
+            publisher: common::paths::sanitize_component(&payload.publisher),
+        }
+    }
+
+    /// Replace the tokens common to every expansion site. Each caller layers its
+    /// own extra tokens (`%APP_KEY%`, `%DESKTOP%`, ...) on top of this.
+    fn base(&self, s: &str) -> String {
+        s.replace("%INSTALL_DIR%", &self.install)
+            .replace("%EXE%", &self.exe)
+            .replace("%VERSION%", &self.version)
+            .replace("%PRODUCT_ID%", &self.product_id)
+            .replace("%PRODUCT%", &self.product)
+            .replace("%PUBLISHER%", &self.publisher)
+    }
+}
+
+/// Resolve token templates in each registry entry against this install. Tokens:
+/// the shared set (see [`Tokens`]) plus `%APP_KEY%`
+/// (= `Software\<publisher>\<product_id>`).
 fn expand_registry(
     payload: &InstallerPayload,
     install_dir: &Path,
 ) -> Vec<common::models::RegEntry> {
     use common::models::{RegEntry, RegValue};
-    let pub_s = common::paths::sanitize_component(&payload.publisher);
-    let app_key = format!(r"Software\{}\{}", pub_s, payload.product_id);
-    let exe = install_dir
-        .join(&payload.manifest.exe)
-        .to_string_lossy()
-        .replace('/', "\\");
-    let install = install_dir.to_string_lossy().replace('/', "\\");
-    let sub = |s: &str| {
-        s.replace("%APP_KEY%", &app_key)
-            .replace("%INSTALL_DIR%", &install)
-            .replace("%EXE%", &exe)
-            .replace("%VERSION%", &payload.to_version)
-            .replace("%PRODUCT_ID%", &payload.product_id)
-            .replace("%PRODUCT%", &payload.product)
-            .replace("%PUBLISHER%", &pub_s)
-    };
+    let tk = Tokens::new(payload, install_dir);
+    let app_key = format!(r"Software\{}\{}", tk.publisher, tk.product_id);
+    let sub = |s: &str| tk.base(s).replace("%APP_KEY%", &app_key);
     payload
         .registry
         .iter()
@@ -225,36 +266,104 @@ fn expand_registry(
         .collect()
 }
 
-/// Drop a desktop and Start Menu shortcut pointing at the installed exe.
-/// Best effort: a failed shortcut must not fail the install, but failures are
-/// logged so support can tell why a shortcut is missing.
-pub fn create_shortcuts(product: &str, install_dir: &Path, target: &Path) {
-    for path in common::shortcuts::paths_for(product) {
-        if let Some(parent) = path.parent()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
+/// Resolve each declared shortcut's token templates against this install into
+/// absolute `dir` / `target` strings (plus the verbatim `args`). Tokens:
+/// `%DESKTOP%`, `%START_MENU%` (per-user Programs), `%INSTALL_DIR%`, `%EXE%`,
+/// `%VERSION%`, `%PRODUCT%`, `%PRODUCT_ID%`, `%PUBLISHER%`, then `%VAR%` env
+/// vars. A relative `target` resolves against the install dir. A shortcut whose
+/// `dir` uses an unavailable `%DESKTOP%`/`%START_MENU%` location is skipped.
+fn expand_shortcuts(payload: &InstallerPayload, install_dir: &Path) -> Vec<ShortcutEntry> {
+    if payload.shortcuts.is_empty() {
+        return Vec::new();
+    }
+    let tk = Tokens::new(payload, install_dir);
+    let desktop = common::shortcuts::desktop_dir().map(|p| p.to_string_lossy().into_owned());
+    let start = common::shortcuts::start_menu_dir().map(|p| p.to_string_lossy().into_owned());
+
+    // Shared tokens + the location tokens, then expand %VAR% env tokens.
+    let sub = |s: &str| -> String {
+        let r = tk
+            .base(s)
+            .replace("%DESKTOP%", desktop.as_deref().unwrap_or("%DESKTOP%"))
+            .replace("%START_MENU%", start.as_deref().unwrap_or("%START_MENU%"));
+        common::utils::expand_env(&r)
+    };
+
+    let mut out = Vec::with_capacity(payload.shortcuts.len());
+    for s in &payload.shortcuts {
+        let dir = sub(&s.dir);
+        // An unresolved location token means the folder isn't available - skip.
+        if dir.contains("%DESKTOP%") || dir.contains("%START_MENU%") {
             common::log::warn(format!(
-                "shortcut: could not create folder {}: {e}",
-                parent.display()
+                "shortcut '{}': location {} unavailable - skipped",
+                s.name, s.dir
             ));
             continue;
         }
-        match mslnk::ShellLink::new(target.to_string_lossy().as_ref()) {
-            Ok(mut lnk) => {
-                lnk.set_working_dir(Some(install_dir.to_string_lossy().into_owned()));
-                match lnk.create_lnk(&path) {
-                    Ok(()) => common::log::info(format!("shortcut created: {}", path.display())),
-                    Err(e) => common::log::warn(format!(
-                        "shortcut: could not write {}: {e}",
-                        path.display()
-                    )),
-                }
+        // A relative target hangs off the install dir.
+        let t = sub(&s.target);
+        let target = {
+            let p = Path::new(&t);
+            if p.is_absolute() {
+                t
+            } else {
+                install_dir.join(&t).to_string_lossy().replace('/', "\\")
             }
-            Err(e) => common::log::warn(format!(
-                "shortcut: could not build link to {}: {e}",
-                target.display()
-            )),
+        };
+        out.push(ShortcutEntry {
+            dir,
+            name: s.name.clone(),
+            target,
+            args: sub(&s.args),
+        });
+    }
+    out
+}
+
+/// Create one resolved shortcut. Best effort: a failed shortcut must not fail
+/// the install, but failures are logged so support can tell why one is missing.
+fn create_shortcut(install_dir: &Path, e: &ShortcutEntry) {
+    let path = common::shortcuts::lnk_path(e);
+    if let Some(parent) = path.parent()
+        && let Err(err) = fs::create_dir_all(parent)
+    {
+        common::log::warn(format!(
+            "shortcut: could not create folder {}: {err}",
+            parent.display()
+        ));
+        return;
+    }
+    match mslnk::ShellLink::new(&e.target) {
+        Ok(mut lnk) => {
+            lnk.set_working_dir(Some(install_dir.to_string_lossy().into_owned()));
+            if !e.args.is_empty() {
+                lnk.set_arguments(Some(e.args.clone()));
+            }
+            match lnk.create_lnk(&path) {
+                Ok(()) => common::log::info(format!("shortcut created: {}", path.display())),
+                Err(err) => common::log::warn(format!(
+                    "shortcut: could not write {}: {err}",
+                    path.display()
+                )),
+            }
         }
+        Err(err) => common::log::warn(format!(
+            "shortcut: could not build link to {}: {err}",
+            e.target
+        )),
+    }
+}
+
+/// Remove one shortcut's `.lnk` (upgrade reconciliation). Best effort.
+fn remove_shortcut(e: &ShortcutEntry) {
+    let path = common::shortcuts::lnk_path(e);
+    match fs::remove_file(&path) {
+        Ok(()) => common::log::info(format!("shortcut removed (stale): {}", path.display())),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => common::log::warn(format!(
+            "shortcut: could not remove stale {}: {err}",
+            path.display()
+        )),
     }
 }
 
@@ -378,4 +487,94 @@ pub fn launch_product(install_dir: &Path, exe_rel: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::models::{Manifest, PayloadKind, ShortcutEntry};
+    use std::collections::HashMap;
+
+    fn payload_with(shortcuts: Vec<ShortcutEntry>) -> InstallerPayload {
+        InstallerPayload {
+            kind: PayloadKind::Full,
+            product: "My App".into(),
+            product_id: "MyApp".into(),
+            publisher: "Acme".into(),
+            from_version: None,
+            to_version: "2.0".into(),
+            min_installer_version: "1.0.0".into(),
+            payload_blake3: String::new(),
+            created_at_unix: 0,
+            manifest: Manifest {
+                version: "2.0".into(),
+                exe: "bin/app.exe".into(),
+                files: HashMap::new(),
+                deleted_files: Vec::new(),
+                full_size: 0,
+                total_patch_size: 0,
+            },
+            license_text: None,
+            associations: Vec::new(),
+            shortcuts,
+            force_reinstall: false,
+            purge_unknown_files: false,
+            skip_license: false,
+            skip_path: false,
+            install_dir_restriction: common::models::InstallDirRestriction::Enforce,
+            default_install_dir: None,
+            upgrade_minimal_ui: false,
+            show_uninstall_complete: false,
+            registry: Vec::new(),
+            plugins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn expand_resolves_install_dir_exe_and_args_tokens() {
+        let dir = Path::new(r"C:\Apps\MyApp");
+        let p = payload_with(vec![ShortcutEntry {
+            dir: r"%INSTALL_DIR%\sub".into(),
+            name: "Tool".into(),
+            target: "%EXE%".into(),
+            args: "--name %PRODUCT% --v %VERSION%".into(),
+        }]);
+        let out = expand_shortcuts(&p, dir);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].dir, r"C:\Apps\MyApp\sub");
+        assert_eq!(out[0].target, r"C:\Apps\MyApp\bin\app.exe");
+        assert_eq!(out[0].args, "--name My App --v 2.0");
+    }
+
+    #[test]
+    fn expand_joins_relative_target_to_install_dir() {
+        let dir = Path::new(r"C:\Apps\MyApp");
+        let p = payload_with(vec![ShortcutEntry {
+            dir: r"C:\Shortcuts".into(),
+            name: "Helper".into(),
+            target: "bin/helper.exe".into(),
+            args: String::new(),
+        }]);
+        let out = expand_shortcuts(&p, dir);
+        assert_eq!(out[0].target, r"C:\Apps\MyApp\bin\helper.exe");
+    }
+
+    #[test]
+    fn expand_keeps_absolute_target_verbatim() {
+        let dir = Path::new(r"C:\Apps\MyApp");
+        let p = payload_with(vec![ShortcutEntry {
+            dir: r"C:\Shortcuts".into(),
+            name: "Notepad".into(),
+            target: r"C:\Windows\notepad.exe".into(),
+            args: String::new(),
+        }]);
+        let out = expand_shortcuts(&p, dir);
+        assert_eq!(out[0].target, r"C:\Windows\notepad.exe");
+    }
+
+    #[test]
+    fn expand_empty_is_empty() {
+        let p = payload_with(Vec::new());
+        assert!(expand_shortcuts(&p, Path::new(r"C:\x")).is_empty());
+    }
 }
