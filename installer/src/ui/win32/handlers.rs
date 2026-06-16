@@ -15,6 +15,7 @@ use crate::ui::helpers::{
     self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, get_window_text, scale_progress,
     set_dlg_text, set_progress,
 };
+use common::models::InstallDirRestriction;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -158,14 +159,44 @@ fn dir_has_entries(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Normalize a Windows path for a tolerant equality test: trim, unify slashes.
+fn norm_dir(p: &str) -> String {
+    p.trim()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+/// Whether `path` points at the same directory as `default_path`.
+fn same_dir(path: &str, default_path: &str) -> bool {
+    !path.trim().is_empty() && norm_dir(path) == norm_dir(default_path)
+}
+
 /// Whether the install must be blocked because the destination is a non-empty
 /// folder. The emptiness guard only applies to a fresh install where the user
 /// actually picks the folder (`skip_path` false). When the path is fixed
 /// (update/upgrade/patch over an existing install, or a build-time `skip_path`),
 /// the destination legitimately already holds the product's own files, so the
 /// check is skipped.
-fn should_block_nonempty(skip_path: bool, path: &str) -> bool {
-    !skip_path && dir_has_entries(path)
+///
+/// `restriction` (build-time, signed) can relax the guard for apps that install
+/// over an existing layout (e.g. replacing a legacy InstallShield/MSI install):
+/// `Bypass` allows any non-empty folder; `DefaultDirOnly` allows it only when
+/// the chosen folder is still the proposed `default_path`.
+fn should_block_nonempty(
+    restriction: InstallDirRestriction,
+    skip_path: bool,
+    default_path: &str,
+    path: &str,
+) -> bool {
+    if skip_path || !dir_has_entries(path) {
+        return false;
+    }
+    match restriction {
+        InstallDirRestriction::Bypass => false,
+        InstallDirRestriction::DefaultDirOnly => !same_dir(path, default_path),
+        InstallDirRestriction::Enforce => true,
+    }
 }
 
 /// Re-evaluate the chosen folder: show/hide the non-empty warning and
@@ -174,7 +205,12 @@ fn should_block_nonempty(skip_path: bool, path: &str) -> bool {
 pub(super) unsafe fn update_path_warning(hwnd: HWND) {
     let edit = unsafe { GetDlgItem(Some(hwnd), ID_PATH_EDIT as i32).unwrap_or_default() };
     let path = unsafe { get_window_text(edit) };
-    let danger = dir_has_entries(&path);
+    let danger = should_block_nonempty(
+        super::restriction(),
+        super::skip_path(),
+        &super::default_path(),
+        &path,
+    );
 
     let warn = unsafe { GetDlgItem(Some(hwnd), ID_PATH_WARN as i32).unwrap_or_default() };
     let warn_icon = unsafe { GetDlgItem(Some(hwnd), ID_PATH_WARN_ICON as i32).unwrap_or_default() };
@@ -200,7 +236,12 @@ pub(super) unsafe fn on_install(hwnd: HWND) {
     // Defensive: the Install button is disabled when the folder is non-empty,
     // but a default-button keypress could still reach here. See
     // `should_block_nonempty` for why the guard is skipped on a fixed path.
-    if should_block_nonempty(super::skip_path(), &path) {
+    if should_block_nonempty(
+        super::restriction(),
+        super::skip_path(),
+        &super::default_path(),
+        &path,
+    ) {
         unsafe { message_box(hwnd, &tr().get("install.path_not_empty"), MB_ICONWARNING) };
         return;
     }
@@ -345,7 +386,8 @@ fn push_error(hwnd_isize: isize, msg: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dir_has_entries, should_block_nonempty};
+    use super::{dir_has_entries, same_dir, should_block_nonempty};
+    use common::models::InstallDirRestriction::{Bypass, DefaultDirOnly, Enforce};
     use std::fs;
     use tempfile::tempdir;
 
@@ -377,7 +419,7 @@ mod tests {
         fs::write(dir.path().join("file.txt"), b"x").unwrap();
         let path = dir.path().to_string_lossy();
         // skip_path = false: the user picked this folder, it must be empty.
-        assert!(should_block_nonempty(false, &path));
+        assert!(should_block_nonempty(Enforce, false, "", &path));
     }
 
     #[test]
@@ -385,12 +427,48 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("app.exe"), b"x").unwrap();
         let path = dir.path().to_string_lossy();
-        assert!(!should_block_nonempty(true, &path));
+        assert!(!should_block_nonempty(Enforce, true, "", &path));
     }
 
     #[test]
     fn fresh_install_allows_empty_folder() {
         let dir = tempdir().unwrap();
-        assert!(!should_block_nonempty(false, &dir.path().to_string_lossy()));
+        assert!(!should_block_nonempty(
+            Enforce,
+            false,
+            "",
+            &dir.path().to_string_lossy()
+        ));
+    }
+
+    #[test]
+    fn bypass_allows_any_nonempty_folder() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("legacy.dll"), b"x").unwrap();
+        let path = dir.path().to_string_lossy();
+        assert!(!should_block_nonempty(Bypass, false, "C:\\Other", &path));
+    }
+
+    #[test]
+    fn default_dir_only_allows_default_blocks_others() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("legacy.dll"), b"x").unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        // Same folder as the proposed default → allowed.
+        assert!(!should_block_nonempty(DefaultDirOnly, false, &path, &path));
+        // A different non-empty folder → still blocked.
+        assert!(should_block_nonempty(
+            DefaultDirOnly,
+            false,
+            "C:\\Some\\Other\\Dir",
+            &path
+        ));
+    }
+
+    #[test]
+    fn same_dir_normalizes_slashes_case_and_trailing_sep() {
+        assert!(same_dir("C:/Program Files/App", "c:\\program files\\app\\"));
+        assert!(!same_dir("C:\\App", "C:\\Other"));
+        assert!(!same_dir("", "C:\\App"));
     }
 }

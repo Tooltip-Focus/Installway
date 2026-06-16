@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use common::models::{PluginPhase, RegEntry, RegKind, RegValue};
+use common::models::{InstallDirRestriction, PluginPhase, RegEntry, RegKind, RegValue};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -107,6 +107,9 @@ pub struct PackCli {
     /// Hide the Choose-location page; install straight to the default path.
     #[arg(long)]
     pub skip_path: bool,
+
+    #[arg(long, value_name = "enforce|default-dir-only|bypass")]
+    pub install_dir_restriction: Option<String>,
 
     /// Use the compact minimal UI for upgrades (a run over an already-installed
     /// copy). The first install still uses the full wizard. Optional.
@@ -214,6 +217,7 @@ pub struct PackFile {
     pub skip_license: bool,
     #[serde(default)]
     pub skip_path: bool,
+    pub install_dir_restriction: Option<String>,
     #[serde(default)]
     pub upgrade_minimal_ui: bool,
     #[serde(default)]
@@ -252,6 +256,7 @@ pub struct PackArgs {
     pub purge_unknown_files: bool,
     pub skip_license: bool,
     pub skip_path: bool,
+    pub install_dir_restriction: InstallDirRestriction,
     pub upgrade_minimal_ui: bool,
     pub show_uninstall_complete: bool,
     pub default_install_dir: Option<String>,
@@ -328,12 +333,32 @@ impl PackArgs {
             purge_unknown_files: cli.purge_unknown_files || file.purge_unknown_files,
             skip_license: cli.skip_license || file.skip_license,
             skip_path: cli.skip_path || file.skip_path,
+            install_dir_restriction: parse_install_dir_restriction(
+                cli.install_dir_restriction.or(file.install_dir_restriction),
+            )?,
             upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
             show_uninstall_complete: cli.show_uninstall_complete || file.show_uninstall_complete,
             reuse_stub: cli.reuse_stub || file.reuse_stub,
             registry: build_registry(file.registry)?,
             plugins: build_plugins(file.plugins)?,
         })
+    }
+}
+
+/// Parse the optional `install_dir_restriction` value (CLI or config).
+/// Accepts `enforce` / `default-dir-only` / `bypass` (case- and
+/// `_`/`-`-insensitive). Absent → [`InstallDirRestriction::Enforce`].
+fn parse_install_dir_restriction(v: Option<String>) -> Result<InstallDirRestriction> {
+    let Some(s) = v else {
+        return Ok(InstallDirRestriction::Enforce);
+    };
+    match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "enforce" => Ok(InstallDirRestriction::Enforce),
+        "default-dir-only" => Ok(InstallDirRestriction::DefaultDirOnly),
+        "bypass" => Ok(InstallDirRestriction::Bypass),
+        other => {
+            bail!("unknown install-dir-restriction '{other}' (enforce | default-dir-only | bypass)")
+        }
     }
 }
 
@@ -466,6 +491,7 @@ mod tests {
             purge_unknown_files: false,
             skip_license: false,
             skip_path: false,
+            install_dir_restriction: None,
             upgrade_minimal_ui: false,
             show_uninstall_complete: false,
             default_install_dir: None,
@@ -631,5 +657,29 @@ force_reinstall = true
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn install_dir_restriction_defaults_and_parses() {
+        // Absent → Enforce.
+        assert_eq!(
+            resolve_with("").unwrap().install_dir_restriction,
+            InstallDirRestriction::Enforce
+        );
+        // From file, accepting `-`/`_` and case variations.
+        assert_eq!(
+            resolve_with("\ninstall_dir_restriction = 'default_dir_only'\n")
+                .unwrap()
+                .install_dir_restriction,
+            InstallDirRestriction::DefaultDirOnly
+        );
+        assert_eq!(
+            resolve_with("\ninstall_dir_restriction = 'BYPASS'\n")
+                .unwrap()
+                .install_dir_restriction,
+            InstallDirRestriction::Bypass
+        );
+        // Unknown value errors.
+        assert!(resolve_with("\ninstall_dir_restriction = 'nope'\n").is_err());
     }
 }

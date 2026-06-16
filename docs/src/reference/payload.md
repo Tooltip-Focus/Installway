@@ -45,6 +45,7 @@ parses `InstallerPayload` from them — avoiding any serializer-determinism trap
 | `force_reinstall` | `bool` | dev: rewrite all, remove orphans, skip from-check |
 | `purge_unknown_files` | `bool` | Full installs: remove unknown/leftover files (known files still hash-skipped); ignored for patches |
 | `skip_license` / `skip_path` | `bool` | trim the wizard |
+| `install_dir_restriction` | `Enforce` \| `DefaultDirOnly` \| `Bypass` | whether a fresh interactive install may target a non-empty folder; default `Enforce` (block). See [Config file](../building/config.md) |
 | `default_install_dir` | `Option<String>` | proposed path; `%VAR%` tokens expanded |
 | `upgrade_minimal_ui` | `bool` | upgrades use the minimal UI; first install always uses the wizard |
 | `show_uninstall_complete` | `bool` | show the "uninstall complete" message box at the end (off by default) |

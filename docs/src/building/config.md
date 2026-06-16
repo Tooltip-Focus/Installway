@@ -28,6 +28,15 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # skip_license = true   # hide the License page
 # skip_path    = true   # hide the Choose-location page
 
+# allow a fresh interactive install into a NON-EMPTY folder (optional).
+#   enforce          = block a non-empty destination (default)
+#   default_dir_only = allow only the proposed default_install_dir
+#   bypass           = allow any folder
+# Use when replacing a legacy InstallShield/MSI install in its own directory:
+# pair with purge_unknown_files and a plugin that validates the old install
+# (pre-install) and tears it down at uninstall (down).
+# install_dir_restriction = "default_dir_only"
+
 # use the compact minimal UI for upgrades (first install still uses the wizard)
 # upgrade_minimal_ui = true
 
@@ -84,5 +93,8 @@ An invalid `product_id` (see [Full installer](full.md)) also fails the build.
 - **Booleans** (`force_reinstall`, `purge_unknown_files`, `skip_license`,
   `skip_path`, `reuse_stub`): either source can turn them on.
 - **`min_installer_version`**: defaults to `1.0.0` when set in neither.
+- **`install_dir_restriction`**: a scalar (CLI wins, then file); defaults to
+  `enforce`. Accepts `enforce` / `default_dir_only` / `bypass` (case- and
+  `_`/`-`-insensitive).
 
 Next: [License, icon & version info](../packaging/branding.md).

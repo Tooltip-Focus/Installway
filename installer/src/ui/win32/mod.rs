@@ -97,6 +97,9 @@ thread_local! {
     pub(super) static LAUNCH_FLAG: RefCell<bool> = const { RefCell::new(false) };
     pub(super) static SKIP_LICENSE: RefCell<bool> = const { RefCell::new(false) };
     pub(super) static SKIP_PATH: RefCell<bool> = const { RefCell::new(false) };
+    pub(super) static RESTRICTION: RefCell<common::models::InstallDirRestriction> =
+        const { RefCell::new(common::models::InstallDirRestriction::Enforce) };
+    pub(super) static DEFAULT_PATH: RefCell<String> = const { RefCell::new(String::new()) };
     static T: RefCell<common::i18n::Translator> = RefCell::new(common::i18n::Translator::default());
 }
 
@@ -105,6 +108,12 @@ fn skip_license() -> bool {
 }
 fn skip_path() -> bool {
     SKIP_PATH.with(|s| *s.borrow())
+}
+fn restriction() -> common::models::InstallDirRestriction {
+    RESTRICTION.with(|r| *r.borrow())
+}
+fn default_path() -> String {
+    DEFAULT_PATH.with(|d| d.borrow().clone())
 }
 
 pub(super) fn tr() -> common::i18n::Translator {
@@ -130,6 +139,8 @@ pub fn run(
     LAUNCH_FLAG.with(|l| *l.borrow_mut() = launch_flag);
     SKIP_LICENSE.with(|s| *s.borrow_mut() = skip_license);
     SKIP_PATH.with(|s| *s.borrow_mut() = skip_path);
+    RESTRICTION.with(|r| *r.borrow_mut() = loaded.payload.install_dir_restriction);
+    DEFAULT_PATH.with(|d| *d.borrow_mut() = default_path.to_string_lossy().into_owned());
     T.with(|t| *t.borrow_mut() = translator);
 
     unsafe {

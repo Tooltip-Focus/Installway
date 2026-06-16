@@ -39,6 +39,27 @@ pub enum PayloadKind {
     Patch,
 }
 
+/// Whether the *interactive* installer lets a fresh install target a non-empty
+/// folder. A first install normally blocks a non-empty destination (a guard
+/// against picking the wrong folder). These relax it for apps that must install
+/// over an existing layout - e.g. replacing a legacy InstallShield or MSI
+/// install in its own directory, where a (pre-install) plugin validates the old
+/// install and a `purge_unknown_files` + uninstall `down` plugin clean it up.
+/// Only affects the Choose-location page; silent/headless installs never run
+/// this guard.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallDirRestriction {
+    /// Default: block a fresh install into a non-empty folder.
+    #[default]
+    Enforce,
+    /// Allow a non-empty folder only when it is the build-time default install
+    /// dir (the known legacy location). Any other non-empty folder is blocked.
+    DefaultDirOnly,
+    /// Allow any non-empty folder.
+    Bypass,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InstallerPayload {
     pub kind: PayloadKind,
@@ -87,6 +108,10 @@ pub struct InstallerPayload {
     /// Hide the Choose-location page; install straight to the default path.
     #[serde(default)]
     pub skip_path: bool,
+    /// Whether a fresh interactive install may target a non-empty folder.
+    /// Defaults to [`InstallDirRestriction::Enforce`]; see that type's docs.
+    #[serde(default)]
+    pub install_dir_restriction: InstallDirRestriction,
     /// Default install directory the UI proposes, set per-app at build time.
     /// May contain `%VAR%` env tokens (e.g. `%LOCALAPPDATA%\Programs\MyApp`).
     /// `None` falls back to `%LOCALAPPDATA%\Programs\<product>`.
@@ -254,6 +279,7 @@ mod tests {
         assert_eq!(p.product_id, "");
         assert!(!p.force_reinstall);
         assert!(!p.purge_unknown_files);
+        assert_eq!(p.install_dir_restriction, InstallDirRestriction::Enforce);
         assert!(!p.upgrade_minimal_ui);
         assert!(!p.show_uninstall_complete);
         assert!(p.associations.is_empty());
@@ -302,6 +328,7 @@ mod tests {
             purge_unknown_files: true,
             skip_license: true,
             skip_path: false,
+            install_dir_restriction: InstallDirRestriction::DefaultDirOnly,
             default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),
             upgrade_minimal_ui: true,
             registry: vec![RegEntry {
@@ -334,6 +361,10 @@ mod tests {
         assert!(back.purge_unknown_files);
         assert!(back.skip_license);
         assert!(!back.skip_path);
+        assert_eq!(
+            back.install_dir_restriction,
+            InstallDirRestriction::DefaultDirOnly
+        );
         assert_eq!(
             back.default_install_dir.as_deref(),
             Some(r"%LOCALAPPDATA%\Programs\P")
