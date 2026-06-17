@@ -300,18 +300,10 @@ fn previous_install_dir(payload: &common::models::InstallerPayload) -> Option<Pa
 }
 
 fn report_fatal(msg: &str) {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     use windows::core::PCWSTR;
-    let text: Vec<u16> = OsStr::new(msg)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let cap: Vec<u16> = OsStr::new("Installer error")
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let text = common::utils::wide(msg);
+    let cap = common::utils::wide("Installer error");
     unsafe {
         MessageBoxW(
             None,

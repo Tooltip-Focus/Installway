@@ -446,16 +446,7 @@ unsafe fn build_controls(hwnd: HWND, payload: &common::models::InstallerPayload)
         );
     }
 
-    STATE.with(|s| {
-        if let Some(st) = s.borrow().as_ref() {
-            let st = st.borrow();
-            unsafe {
-                helpers::set_font(hwnd, ID_TITLE, st.font_title);
-                helpers::set_font(hwnd, ID_SUB, st.font_body);
-                helpers::set_font(hwnd, ID_STATUS, st.font_body);
-            }
-        }
-    });
+    unsafe { apply_fonts(hwnd) }
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

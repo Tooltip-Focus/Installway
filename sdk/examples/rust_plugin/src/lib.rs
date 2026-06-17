@@ -2,9 +2,6 @@
 //! Example Installway plugin in Rust. Mirrors `sdk/installway_plugin.h`.
 //! Logs a line via the host callback and succeeds.
 
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
-
 const INSTALLWAY_ABI_VERSION: u32 = 1;
 
 #[repr(C)]
@@ -19,7 +16,7 @@ pub struct InstallwayContext {
 }
 
 fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// Call the host log callback, if present.

@@ -4,8 +4,6 @@
 //! Shared Win32 helpers used by both installer UIs (full wizard + minimal updater).
 
 use common::utils::wide;
-use std::ffi::OsString;
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DEFAULT_PITCH,
@@ -80,11 +78,7 @@ pub unsafe fn own_icon() -> HICON {
     let Ok(exe) = std::env::current_exe() else {
         return HICON::default();
     };
-    let w: Vec<u16> = exe
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let w = wide(&exe.to_string_lossy());
     unsafe {
         let hmod = GetModuleHandleW(PCWSTR::null()).unwrap_or_default();
         ExtractIconW(Some(HINSTANCE(hmod.0)), PCWSTR(w.as_ptr()), 0)
@@ -172,9 +166,7 @@ pub unsafe fn get_window_text(ctrl: HWND) -> String {
     let mut buf = vec![0u16; (len + 1) as usize];
     unsafe { GetWindowTextW(ctrl, &mut buf) };
     let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    OsString::from_wide(&buf[..end])
-        .to_string_lossy()
-        .into_owned()
+    String::from_utf16_lossy(&buf[..end])
 }
 
 /// `done/total` as a 0..=10000 fixed-point value for `PBM_SETPOS`.

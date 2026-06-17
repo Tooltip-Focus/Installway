@@ -514,7 +514,7 @@ fn acquire_install_lock(install_dir: &Path) -> Result<InstallLock> {
     let hash = blake3::hash(key.as_bytes()).to_hex();
     // Local\ namespace = per-session, which matches our per-user installs.
     let name = format!("Local\\Installway-Install-{}", &hash.as_str()[..32]);
-    let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide = common::utils::wide(&name);
 
     unsafe {
         let handle = CreateMutexW(None, false, PCWSTR(wide.as_ptr()))
@@ -683,17 +683,15 @@ fn backup_then_remove(install_dir: &Path, backup_dir: &Path, rel: &str) -> Resul
 /// Record every path the commit will touch, so an interrupted commit can be
 /// rolled back on the next launch.
 fn write_journal(temp_dir: &Path, adds: &[String], deletes: &[String]) -> Result<()> {
-    let mut lines = Vec::with_capacity(adds.len() + deletes.len());
-    for r in adds {
-        lines.push(r.as_str());
-    }
-    for r in deletes {
-        lines.push(r.as_str());
-    }
-    // Write to .tmp then rename so the journal itself appears atomically.
+    let content = adds
+        .iter()
+        .chain(deletes.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
     let jp = journal_path(temp_dir);
     let tmp = jp.with_extension("journal.tmp");
-    fs::write(&tmp, lines.join("\n")).context("write journal")?;
+    fs::write(&tmp, content).context("write journal")?;
     fs::rename(&tmp, &jp).context("commit journal")?;
     Ok(())
 }
