@@ -152,11 +152,7 @@ pub fn embed(target: &Path, product: &str, publisher: &str, version: &str) -> Re
         .unwrap_or_else(|| "setup.exe".to_string());
     let blob = build(product, publisher, version, &original);
 
-    let wide: Vec<u16> = target
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let wide = crate::embed::wide_path(target);
 
     unsafe {
         let h = BeginUpdateResourceW(PCWSTR(wide.as_ptr()), false)

@@ -35,11 +35,7 @@ pub struct ExeIcons {
 /// Read every icon resource from `exe`, preserving identifiers.
 /// Returns `Ok(None)` if the source exe has no icons (still a success).
 pub fn extract_from_exe(exe: &Path) -> Result<Option<ExeIcons>> {
-    let wide: Vec<u16> = exe
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let wide = crate::embed::wide_path(exe);
 
     unsafe {
         let hmod = LoadLibraryExW(
@@ -153,11 +149,7 @@ unsafe fn load_res_named(hmod: HMODULE, rt: u16, name: &ResName) -> Result<Vec<u
 }
 
 pub fn embed_icons(target: &Path, icons: &ExeIcons) -> Result<()> {
-    let wide: Vec<u16> = target
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let wide = crate::embed::wide_path(target);
 
     unsafe {
         let h = BeginUpdateResourceW(PCWSTR(wide.as_ptr()), false)

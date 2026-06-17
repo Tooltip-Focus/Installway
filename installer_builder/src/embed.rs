@@ -4,6 +4,14 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
+/// Convert a `Path` to a null-terminated UTF-16 string for Win32 APIs.
+pub(crate) fn wide_path(p: &Path) -> Vec<u16> {
+    p.to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
 /// Magic at the start of the appended payload overlay, so the installer can
 /// sanity-check it found the right region.
 pub const OVERLAY_MAGIC: &[u8; 8] = b"RIIPLD01";
@@ -22,11 +30,7 @@ pub fn embed_resources(
     };
     use windows::core::PCWSTR;
 
-    let wide: Vec<u16> = exe
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let wide = wide_path(exe);
 
     unsafe {
         let h =
