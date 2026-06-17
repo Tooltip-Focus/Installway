@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use common::models::{FileAssoc, InstallInfo, InstallerPayload, PluginPhase, ShortcutEntry};
-use common::utils::days_to_ymd;
+use common::utils::{days_to_ymd, wide};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -377,11 +377,11 @@ fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path) -> Result<()>
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
         info.registry_key
     );
-    let sub_w: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
+    let sub_w = wide(&sub);
 
     unsafe {
         let mut hkey = HKEY::default();
-        let rc = RegCreateKeyExW(
+        RegCreateKeyExW(
             HKEY_CURRENT_USER,
             PCWSTR(sub_w.as_ptr()),
             None,
@@ -391,10 +391,9 @@ fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path) -> Result<()>
             None,
             &mut hkey,
             None,
-        );
-        if rc.is_err() {
-            anyhow::bail!("RegCreateKeyEx failed: {:?}", rc);
-        }
+        )
+        .ok()
+        .context("RegCreateKeyEx failed")?;
 
         set_sz_logged(hkey, "DisplayName", &info.product);
         set_sz_logged(hkey, "DisplayVersion", &info.version);
@@ -431,14 +430,12 @@ unsafe fn set_sz(
 ) -> Result<()> {
     use windows::Win32::System::Registry::{REG_SZ, RegSetValueExW};
     use windows::core::PCWSTR;
-    let n: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-    let v: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
-    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) };
-    let rc = unsafe { RegSetValueExW(hkey, PCWSTR(n.as_ptr()), None, REG_SZ, Some(bytes)) };
-    if rc.is_err() {
-        anyhow::bail!("RegSetValueEx({}) failed: {:?}", name, rc);
-    }
-    Ok(())
+    let n = wide(name);
+    let v = wide(value);
+    let bytes: Vec<u8> = v.iter().flat_map(|u| u.to_le_bytes()).collect();
+    unsafe { RegSetValueExW(hkey, PCWSTR(n.as_ptr()), None, REG_SZ, Some(&bytes)) }
+        .ok()
+        .with_context(|| format!("RegSetValueEx({name}) failed"))
 }
 
 /// `set_sz`, but logs (instead of silently dropping) a failure to write one
@@ -458,7 +455,6 @@ fn install_date_yyyymmdd(unix: i64) -> String {
 }
 
 pub fn launch_product(install_dir: &Path, exe_rel: &str) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     use windows::core::PCWSTR;
@@ -467,15 +463,9 @@ pub fn launch_product(install_dir: &Path, exe_rel: &str) -> Result<()> {
         return Ok(());
     }
     let full = install_dir.join(exe_rel);
-    let path_w: Vec<u16> = std::ffi::OsStr::new(&full)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let dir_w: Vec<u16> = std::ffi::OsStr::new(install_dir)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let op: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+    let path_w = wide(&full.to_string_lossy());
+    let dir_w = wide(&install_dir.to_string_lossy());
+    let op = wide("open");
     unsafe {
         ShellExecuteW(
             None,

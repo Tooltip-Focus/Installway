@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use common::models::{InstallInfo, Manifest};
-use common::utils::{FS_RETRIES, FS_RETRY_DELAY};
+use common::utils::{FS_RETRIES, FS_RETRY_DELAY, wide};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -35,17 +35,12 @@ enum Removal {
 /// UNTIL_REBOOT)` records the pending rename under HKLM, so it only succeeds
 /// when elevated; `false` otherwise. Best-effort last resort.
 pub(crate) fn schedule_delete_on_reboot(path: &Path) -> bool {
-    use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
     use windows::core::PCWSTR;
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let path_w = wide(&path.to_string_lossy());
     unsafe {
         MoveFileExW(
-            PCWSTR(wide.as_ptr()),
+            PCWSTR(path_w.as_ptr()),
             PCWSTR::null(),
             MOVEFILE_DELAY_UNTIL_REBOOT,
         )
@@ -158,9 +153,9 @@ pub fn unregister(key: &str) {
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
         key
     );
-    let wide: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
+    let sub_w = wide(&sub);
     unsafe {
-        let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(wide.as_ptr()));
+        let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(sub_w.as_ptr()));
     }
 }
 

@@ -25,6 +25,7 @@ use windows::Win32::UI::Controls::{
     PROGRESS_CLASSW,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Shell::ExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
 
@@ -251,19 +252,11 @@ pub fn run(params: UninstallParams) -> bool {
 }
 
 /// Load this exe's own primary icon (stamped at build) for window + taskbar.
-unsafe fn own_icon() -> windows::Win32::UI::WindowsAndMessaging::HICON {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Foundation::HINSTANCE;
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::UI::Shell::ExtractIconW;
-    use windows::Win32::UI::WindowsAndMessaging::HICON;
+unsafe fn own_icon() -> HICON {
     let Ok(exe) = std::env::current_exe() else {
         return HICON::default();
     };
-    let w: Vec<u16> = std::ffi::OsStr::new(&exe)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let w = wide(&exe.to_string_lossy());
     unsafe {
         let hmod = GetModuleHandleW(PCWSTR::null()).unwrap_or_default();
         ExtractIconW(Some(HINSTANCE(hmod.0)), PCWSTR(w.as_ptr()), 0)

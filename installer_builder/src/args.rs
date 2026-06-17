@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use common::models::{
     InstallDirRestriction, PluginPhase, RegEntry, RegKind, RegValue, ShortcutEntry,
@@ -479,7 +479,7 @@ fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegEntry>> {
             other => bail!("registry #{n}: unknown type '{other}'"),
         };
         let value = convert_reg_value(kind, &e.value).ok_or_else(|| {
-            anyhow::anyhow!(
+            anyhow!(
                 "registry #{n} ('{key}'): value does not match type '{}'",
                 e.kind
             )

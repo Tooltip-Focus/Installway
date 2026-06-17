@@ -10,8 +10,6 @@
 //!   dll   = "plugins/uninstall_old_is.dll"
 //!   phase = "pre-install"
 
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
 use std::process::Command;
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
@@ -34,7 +32,7 @@ pub struct InstallwayContext {
 }
 
 fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 unsafe fn log(ctx: *const InstallwayContext, level: &str, msg: &str) {
@@ -53,13 +51,15 @@ fn find_uninstall_string() -> Option<String> {
             continue;
         };
         for sub in base.enum_keys().flatten() {
-            let Ok(k) = base.open_subkey(&sub) else { continue };
+            let Ok(k) = base.open_subkey(&sub) else {
+                continue;
+            };
             let Ok(name) = k.get_value::<String, _>("DisplayName") else {
                 continue;
             };
             if name.contains(DISPLAY_NAME_MATCH) {
-                if let Ok(us) = k.get_value::<String, _>("UninstallString") {
-                    return Some(us);
+                if let Ok(uninstall_str) = k.get_value::<String, _>("UninstallString") {
+                    return Some(uninstall_str);
                 }
             }
         }
@@ -74,14 +74,20 @@ pub extern "system" fn installway_abi_version() -> u32 {
 
 #[no_mangle]
 pub extern "system" fn installway_up(ctx: *const InstallwayContext) -> i32 {
-    let Some(uninstall) = find_uninstall_string() else {
-        unsafe { log(ctx, "INFO", "InstallShield product not found - nothing to do") };
+    let Some(uninstall_str) = find_uninstall_string() else {
+        unsafe {
+            log(
+                ctx,
+                "INFO",
+                "InstallShield product not found - nothing to do",
+            )
+        };
         return 0; // nothing to remove is success
     };
 
     // InstallShield silent: append `/s` (and a quiet MSI transform). Real
     // UninstallStrings vary; adjust the flags for your product if needed.
-    let cmd = format!("{uninstall} /s /v\"/qn\"");
+    let cmd = format!("{uninstall_str} /s /v\"/qn\"");
     unsafe { log(ctx, "INFO", &cmd) };
     match Command::new("cmd").args(["/C", &cmd]).status() {
         Ok(s) => match s.code().unwrap_or(1) {
