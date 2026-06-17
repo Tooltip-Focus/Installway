@@ -15,6 +15,7 @@
 //! ProgID, so we never stomp an association the user re-pointed elsewhere.
 
 use crate::models::FileAssoc;
+use crate::utils::wide;
 
 /// Deterministic ProgID for a (product_id, extension) pair, e.g.
 /// `("MyApp", ".myx") -> "MyApp.myx"`. `product_id` is the registry-safe id
@@ -107,7 +108,7 @@ fn create_key(sub: &str) -> Option<HKEY> {
         HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCreateKeyExW,
     };
     use windows::core::PCWSTR;
-    let w: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
+    let w = wide(sub);
     unsafe {
         let mut hkey = HKEY::default();
         let rc = RegCreateKeyExW(
@@ -128,11 +129,11 @@ fn create_key(sub: &str) -> Option<HKEY> {
 fn set_default(hkey: HKEY, value: &str) {
     use windows::Win32::System::Registry::{REG_SZ, RegSetValueExW};
     use windows::core::PCWSTR;
-    let v: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
-    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) };
+    let v = wide(value);
+    let bytes: Vec<u8> = v.iter().flat_map(|u| u.to_le_bytes()).collect();
     unsafe {
         // Name = null/empty → the key's (Default) value.
-        let _ = RegSetValueExW(hkey, PCWSTR::null(), None, REG_SZ, Some(bytes));
+        let _ = RegSetValueExW(hkey, PCWSTR::null(), None, REG_SZ, Some(&bytes));
     }
 }
 
@@ -148,7 +149,7 @@ fn read_default(sub: &str) -> Option<String> {
         HKEY_CURRENT_USER, KEY_READ, REG_VALUE_TYPE, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
     };
     use windows::core::PCWSTR;
-    let w: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
+    let w = wide(sub);
     unsafe {
         let mut hkey = HKEY::default();
         if RegOpenKeyExW(
@@ -186,7 +187,7 @@ fn read_default(sub: &str) -> Option<String> {
 fn delete_tree(sub: &str) {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteTreeW};
     use windows::core::PCWSTR;
-    let w: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
+    let w = wide(sub);
     unsafe {
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(w.as_ptr()));
     }
