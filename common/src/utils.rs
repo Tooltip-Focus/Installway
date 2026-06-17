@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -16,6 +16,20 @@ use walkdir::WalkDir;
 pub const FS_RETRIES: usize = 50;
 pub const FS_RETRY_DELAY: Duration = Duration::from_millis(100);
 
+fn retry_fs<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut last = std::io::Error::other("exhausted");
+    for _ in 0..FS_RETRIES {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                last = e;
+                std::thread::sleep(FS_RETRY_DELAY);
+            }
+        }
+    }
+    Err(last)
+}
+
 /// Rename `src` → `dest`, retrying transient failures. Creates `dest`'s parent
 /// and removes an existing `dest` first (Windows `rename` fails if the target
 /// exists). The dominant failure this survives: an AV holding a brief lock on a
@@ -24,28 +38,20 @@ pub fn rename_retry(src: &Path, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut last_err = None;
-    for _ in 0..FS_RETRIES {
+    retry_fs(|| {
         if dest.exists() {
             let _ = fs::remove_file(dest);
         }
-        match fs::rename(src, dest) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_err = Some(e);
-                std::thread::sleep(FS_RETRY_DELAY);
-            }
-        }
-    }
-    Err(anyhow!(
-        "could not move {} -> {} after {} attempts: {}",
-        src.display(),
-        dest.display(),
-        FS_RETRIES,
-        last_err
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "unknown".into())
-    ))
+        fs::rename(src, dest)
+    })
+    .with_context(|| {
+        format!(
+            "could not move {} -> {} after {} attempts",
+            src.display(),
+            dest.display(),
+            FS_RETRIES
+        )
+    })
 }
 
 pub fn wide(s: &str) -> Vec<u16> {
@@ -78,27 +84,19 @@ pub fn expand_env(s: &str) -> String {
 
 /// Remove `path`, retrying transient locks. `Ok` if it's already gone.
 pub fn remove_file_retry(path: &Path) -> Result<()> {
-    let mut last_err = None;
-    for _ in 0..FS_RETRIES {
+    retry_fs(|| {
         if !path.exists() {
             return Ok(());
         }
-        match fs::remove_file(path) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_err = Some(e);
-                std::thread::sleep(FS_RETRY_DELAY);
-            }
-        }
-    }
-    Err(anyhow!(
-        "could not remove {} after {} attempts: {}",
-        path.display(),
-        FS_RETRIES,
-        last_err
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "unknown".into())
-    ))
+        fs::remove_file(path)
+    })
+    .with_context(|| {
+        format!(
+            "could not remove {} after {} attempts",
+            path.display(),
+            FS_RETRIES
+        )
+    })
 }
 
 /// Recursively remove a directory, retrying through transient locks.
@@ -121,48 +119,26 @@ pub fn copy_retry(src: &Path, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut last_err = None;
-    for _ in 0..FS_RETRIES {
-        match fs::copy(src, dest) {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                last_err = Some(e);
-                std::thread::sleep(FS_RETRY_DELAY);
-            }
-        }
-    }
-    Err(anyhow!(
-        "could not copy {} -> {} after {} attempts: {}",
-        src.display(),
-        dest.display(),
-        FS_RETRIES,
-        last_err
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "unknown".into())
-    ))
+    retry_fs(|| fs::copy(src, dest).map(|_| ())).with_context(|| {
+        format!(
+            "could not copy {} -> {} after {} attempts",
+            src.display(),
+            dest.display(),
+            FS_RETRIES
+        )
+    })
 }
 
 /// Write `bytes` to `path`, retrying transient locks (a stale `.tmp` from a
 /// prior run may still be briefly held by a scanner).
 fn write_bytes_retry(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut last_err = None;
-    for _ in 0..FS_RETRIES {
-        match fs::write(path, bytes) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_err = Some(e);
-                std::thread::sleep(FS_RETRY_DELAY);
-            }
-        }
-    }
-    Err(anyhow!(
-        "could not write {} after {} attempts: {}",
-        path.display(),
-        FS_RETRIES,
-        last_err
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "unknown".into())
-    ))
+    retry_fs(|| fs::write(path, bytes)).with_context(|| {
+        format!(
+            "could not write {} after {} attempts",
+            path.display(),
+            FS_RETRIES
+        )
+    })
 }
 
 pub fn file_blake3(path: &Path) -> Result<String> {

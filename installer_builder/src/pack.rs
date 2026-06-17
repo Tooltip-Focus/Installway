@@ -17,7 +17,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
@@ -372,33 +371,25 @@ fn build_full(
     check_case_collisions(&files)?;
     println!("Found {} files", files.len());
 
-    let total_size = Mutex::new(0u64);
     let entries: HashMap<String, FileEntry> = files
         .par_iter()
-        .map(|rel| -> Result<(String, FileEntry, Vec<u8>)> {
+        .map(|rel| -> Result<(String, FileEntry)> {
             let abs = input.join(rel);
             let bytes = fs::read(&abs).with_context(|| format!("read {}", abs.display()))?;
-            let hash = bytes_blake3(&bytes);
-            let size = bytes.len() as u64;
-            {
-                let mut t = total_size.lock().unwrap();
-                *t += size;
-            }
             Ok((
                 rel.clone(),
                 FileEntry {
-                    hash,
-                    size,
+                    hash: bytes_blake3(&bytes),
+                    size: bytes.len() as u64,
                     patch: None,
                 },
-                bytes,
             ))
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
-        .map(|(rel, entry, _)| (rel, entry))
         .collect();
 
+    let full_size: u64 = entries.values().map(|e| e.size).sum();
     let zip_bytes = write_zip(input, &files, &HashMap::new(), plugins)?;
 
     let manifest = Manifest {
@@ -406,7 +397,7 @@ fn build_full(
         exe: exe.to_string(),
         files: entries,
         deleted_files: Vec::new(),
-        full_size: *total_size.lock().unwrap(),
+        full_size,
         total_patch_size: 0,
     };
     Ok((zip_bytes, manifest))
@@ -450,9 +441,6 @@ fn build_patch(
         .collect();
     deleted_files.sort();
 
-    let total_full_size = Mutex::new(0u64);
-    let total_patch_size = Mutex::new(0u64);
-
     // Per-file work: hash new, hash old if present, generate patch if both exist + differ.
     let temp_patches =
         std::env::temp_dir().join(format!("installway-patches-{}", std::process::id()));
@@ -471,10 +459,6 @@ fn build_patch(
             let new_abs = new_input.join(rel);
             let new_hash = file_blake3(&new_abs)?;
             let new_size = fs::metadata(&new_abs)?.len();
-            {
-                let mut t = total_full_size.lock().unwrap();
-                *t += new_size;
-            }
 
             if !old_set.contains(rel) {
                 return Ok(WorkOut {
@@ -513,10 +497,6 @@ fn build_patch(
                 let psize = fs::metadata(&patch_path)?.len();
                 // Heuristic: if patch is bigger than the full file, just ship the full.
                 if psize < new_size {
-                    {
-                        let mut t = total_patch_size.lock().unwrap();
-                        *t += psize;
-                    }
                     return Ok(WorkOut {
                         rel: rel.clone(),
                         entry: FileEntry {
@@ -548,6 +528,13 @@ fn build_patch(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let total_full_size: u64 = work.iter().map(|w| w.entry.size).sum();
+    let total_patch_size: u64 = work
+        .iter()
+        .filter_map(|w| w.entry.patch.as_ref())
+        .map(|p| p.size)
+        .sum();
+
     let mut entries: HashMap<String, FileEntry> = HashMap::new();
     let mut full_paths: Vec<String> = Vec::new();
     let mut patch_paths: HashMap<String, PathBuf> = HashMap::new();
@@ -570,8 +557,8 @@ fn build_patch(
         exe: exe.to_string(),
         files: entries,
         deleted_files,
-        full_size: *total_full_size.lock().unwrap(),
-        total_patch_size: *total_patch_size.lock().unwrap(),
+        full_size: total_full_size,
+        total_patch_size,
     };
     Ok((zip_bytes, manifest))
 }
@@ -653,7 +640,7 @@ fn write_zip(
     // compressed, so just memcpy + header rewrite). `into_iter` frees each mini
     // as consumed to keep peak memory down.
     let mut zip = ZipWriter::new(Cursor::new(Vec::with_capacity(16 * 1024 * 1024)));
-    for mini in minis.into_iter() {
+    for mini in minis {
         let mut src =
             zip::ZipArchive::new(Cursor::new(mini)).context("reopen worker mini-zip for merge")?;
         let entry = src.by_index_raw(0).context("read mini-zip entry")?;
