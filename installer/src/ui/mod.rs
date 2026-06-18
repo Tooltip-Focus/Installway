@@ -19,7 +19,7 @@ fn page_defaults(page: &PluginPage, plugin: &str) -> Result<PluginInputs> {
     let mut out = PluginInputs::new();
     for w in &page.widgets {
         let (id, value) = match w {
-            PluginWidget::Label { .. } => continue,
+            PluginWidget::Label { .. } | PluginWidget::Progress { .. } => continue,
             PluginWidget::Text {
                 id,
                 default,
@@ -109,7 +109,12 @@ pub fn headless_plugin_inputs(
                     done = true;
                     break;
                 }
-                PageStep::Page { page, .. } => answers.extend(page_defaults(&page, &entry.name)?),
+                PageStep::Page { page, .. } => {
+                    if page.buttons {
+                        answers.extend(page_defaults(&page, &entry.name)?);
+                    }
+                    // buttons:false = auto-run page; `up` runs in install pipeline, skip here.
+                }
             }
         }
         if !done {
@@ -182,6 +187,7 @@ mod tests {
             title: "T".into(),
             subtitle: String::new(),
             widgets,
+            buttons: true,
         }
     }
 

@@ -29,6 +29,8 @@ pub const WM_APP_DONE: u32 = WM_APP + 2;
 pub const WM_APP_ERROR: u32 = WM_APP + 3;
 /// Posted by the background plugin-step query thread when a result is ready.
 pub const WM_APP_PLUGIN_STEP: u32 = WM_APP + 4;
+/// Posted by the progress pipe reader thread; WPARAM carries the 0–100 value.
+pub const WM_APP_PLUGIN_PROGRESS: u32 = WM_APP + 5;
 
 /// Register the progress-bar common control class.
 pub fn init_progress_class() {
@@ -194,6 +196,18 @@ pub unsafe fn set_progress(parent: HWND, id: usize, scaled: i32) {
 /// Post a no-payload app message to a window thread (thread-safe FFI).
 pub fn post(hwnd_isize: isize, msg: u32) {
     let _ = unsafe { PostMessageW(Some(HWND(hwnd_isize as *mut _)), msg, WPARAM(0), LPARAM(0)) };
+}
+
+/// Post a message carrying a value in WPARAM (thread-safe FFI).
+pub fn post_wparam(hwnd_isize: isize, msg: u32, wparam: usize) {
+    let _ = unsafe {
+        PostMessageW(
+            Some(HWND(hwnd_isize as *mut _)),
+            msg,
+            WPARAM(wparam),
+            LPARAM(0),
+        )
+    };
 }
 
 /// Standard blocking message pump until `WM_QUIT`.

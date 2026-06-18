@@ -87,7 +87,7 @@ pub fn run_each(
         let mut ctx = base_ctx.clone();
         ctx.inputs_json = inputs_json.clone();
         let ctx_json = serde_json::to_string(&ctx)?;
-        let (ok, _descriptor) = run_child(self_exe, dll, func, &ctx_json, false)?;
+        let (ok, _descriptor) = run_child(self_exe, dll, func, &ctx_json, false, None)?;
         if !ok {
             let m = format!("plugin '{}' {} returned failure", entry.name, func);
             if enforce_required && entry.required {
@@ -95,6 +95,43 @@ pub fn run_each(
             }
             crate::log::warn(format!("{m} (continuing)"));
         }
+    }
+    Ok(())
+}
+
+/// Run `installway_up` for a single plugin during wizard time (called when a
+/// plugin page has `buttons: false`). Hash-verified, same child-process
+/// isolation as `run_each`. Required failures are errors; non-required are
+/// logged. `on_progress` drives a deterministic bar when the page has
+/// `marquee: false`.
+pub fn run_up_single(
+    self_exe: &Path,
+    base_ctx: &PluginCtx,
+    entry: &PluginEntry,
+    dll: &Path,
+    inputs_json: &str,
+    on_progress: Option<Box<dyn Fn(u32) + Send>>,
+) -> Result<()> {
+    let bytes = std::fs::read(dll).with_context(|| format!("read plugin dll {}", dll.display()))?;
+    if crate::utils::bytes_blake3(&bytes) != entry.blake3 {
+        let m = format!("plugin '{}' hash mismatch - refusing to load", entry.name);
+        if entry.required {
+            bail!("{m}");
+        }
+        crate::log::warn(m);
+        return Ok(());
+    }
+    crate::log::info(format!("plugin '{}': up (wizard)", entry.name));
+    let mut ctx = base_ctx.clone();
+    ctx.inputs_json = inputs_json.to_string();
+    let ctx_json = serde_json::to_string(&ctx)?;
+    let (ok, _) = run_child(self_exe, dll, "up", &ctx_json, false, on_progress)?;
+    if !ok {
+        let m = format!("plugin '{}' up returned failure", entry.name);
+        if entry.required {
+            bail!("{m}");
+        }
+        crate::log::warn(format!("{m} (continuing)"));
     }
     Ok(())
 }
@@ -117,7 +154,7 @@ pub fn query_step(
     let mut ctx = base_ctx.clone();
     ctx.inputs_json = answers_json.to_string();
     let ctx_json = serde_json::to_string(&ctx)?;
-    let (ok, descriptor) = run_child(self_exe, dll, "pages", &ctx_json, true)?;
+    let (ok, descriptor) = run_child(self_exe, dll, "pages", &ctx_json, true, None)?;
     if !ok {
         bail!("plugin '{}' page step returned failure", entry.name);
     }
@@ -125,14 +162,17 @@ pub fn query_step(
 }
 
 /// Spawn the plugin host child, send `ctx_json` on its stdin, and wait (killing
-/// it past the timeout). With `want_descriptor`, also set up the named pipe the
-/// child writes its page descriptor to. Returns `(exited 0, descriptor)`.
+/// it past the timeout). `want_descriptor` sets up the named pipe for page
+/// descriptors. `on_progress`, when `Some`, sets up a second pipe for 0–100
+/// progress values (called for each `emit_progress` the plugin fires).
+/// Returns `(exited 0, descriptor)`.
 fn run_child(
     self_exe: &Path,
     dll: &Path,
     func: &str,
     ctx_json: &str,
     want_descriptor: bool,
+    on_progress: Option<Box<dyn Fn(u32) + Send>>,
 ) -> Result<(bool, String)> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -143,10 +183,20 @@ fn run_child(
     } else {
         None
     };
+    let progress_pipe = if on_progress.is_some() {
+        Some(make_progress_pipe()?)
+    } else {
+        None
+    };
 
     let mut cmd = Command::new(self_exe);
     cmd.arg("--run-plugin").arg(dll).arg(func);
-    if let Some(p) = &pipe {
+    // Always push the pages arg when a progress arg follows, so positional order
+    // stays stable (child reads: [idx+3]=pages, [idx+4]=progress).
+    if pipe.is_some() || progress_pipe.is_some() {
+        cmd.arg(pipe.as_ref().map(|p| p.name.as_str()).unwrap_or(""));
+    }
+    if let Some(p) = &progress_pipe {
         cmd.arg(&p.name);
     }
     let mut child = cmd
@@ -157,19 +207,23 @@ fn run_child(
         .spawn()
         .with_context(|| format!("spawn plugin host for {}", dll.display()))?;
 
-    // Send ctx on stdin, then close (EOF). Small payload, so one write can't deadlock.
     if let Some(mut stdin) = child.stdin.take()
         && let Err(e) = stdin.write_all(ctx_json.as_bytes())
     {
         crate::log::warn(format!("plugin host: stdin write failed: {e}"));
     }
 
-    // Read the descriptor on a thread so the timeout loop stays responsive. Main
-    // keeps the handle (to cancel/close); the reader borrows its raw value.
-    let server = pipe.as_ref().map(|p| p.server);
-    let reader = pipe.map(|p| {
+    let pages_server = pipe.as_ref().map(|p| p.server);
+    let pages_reader = pipe.map(|p| {
         let raw = p.server.0 as isize;
         std::thread::spawn(move || read_pages_pipe(raw))
+    });
+
+    let progress_server = progress_pipe.as_ref().map(|p| p.server);
+    let progress_reader = progress_pipe.map(|p| {
+        let raw = p.server.0 as isize;
+        let cb = on_progress.unwrap();
+        std::thread::spawn(move || read_progress_pipe(raw, cb))
     });
 
     let start = Instant::now();
@@ -189,17 +243,14 @@ fn run_child(
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    let descriptor = if let Some(r) = reader {
-        // Child gone: a connected reader hit EOF; one stuck on accept (child died
-        // pre-connect) is freed by cancelling the pipe I/O. Cancel before join,
-        // close after — so the handle can't be recycled under us.
-        if let Some(h) = server {
-            unsafe {
-                let _ = CancelIoEx(h, None);
-            }
+    for h in [pages_server, progress_server].into_iter().flatten() {
+        unsafe {
+            let _ = CancelIoEx(h, None);
         }
+    }
+    let descriptor = if let Some(r) = pages_reader {
         let out = r.join().unwrap_or_default();
-        if let Some(h) = server {
+        if let Some(h) = pages_server {
             unsafe {
                 let _ = CloseHandle(h);
             }
@@ -208,6 +259,14 @@ fn run_child(
     } else {
         String::new()
     };
+    if let Some(r) = progress_reader {
+        let _ = r.join();
+        if let Some(h) = progress_server {
+            unsafe {
+                let _ = CloseHandle(h);
+            }
+        }
+    }
 
     if timed_out {
         bail!("plugin timed out after {}s", TIMEOUT.as_secs());
@@ -215,8 +274,12 @@ fn run_child(
     Ok((success, descriptor))
 }
 
-/// Server end of the per-run descriptor pipe.
 struct PagesPipe {
+    server: HANDLE,
+    name: String,
+}
+
+struct ProgressPipe {
     server: HANDLE,
     name: String,
 }
@@ -249,6 +312,49 @@ fn make_pages_pipe() -> Result<PagesPipe> {
     Ok(PagesPipe { server, name })
 }
 
+fn make_progress_pipe() -> Result<ProgressPipe> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CTR: AtomicU32 = AtomicU32::new(0);
+    let name = format!(
+        r"\\.\pipe\installway-progress-{}-{}",
+        std::process::id(),
+        CTR.fetch_add(1, Ordering::Relaxed)
+    );
+    let wname = wide(&name);
+    let server = unsafe {
+        CreateNamedPipeW(
+            PCWSTR(wname.as_ptr()),
+            PIPE_ACCESS_INBOUND,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1,
+            0,
+            256,
+            0,
+            None,
+        )
+    };
+    if server == INVALID_HANDLE_VALUE {
+        bail!("create progress pipe failed");
+    }
+    Ok(ProgressPipe { server, name })
+}
+
+/// Read 4-byte progress values from the pipe and call `on_progress` for each.
+fn read_progress_pipe(server_raw: isize, on_progress: Box<dyn Fn(u32) + Send>) {
+    let h = HANDLE(server_raw as *mut core::ffi::c_void);
+    unsafe {
+        let _ = ConnectNamedPipe(h, None);
+        let mut buf = [0u8; 4];
+        loop {
+            let mut read = 0u32;
+            match ReadFile(h, Some(&mut buf), Some(&mut read), None) {
+                Ok(()) if read == 4 => on_progress(u32::from_le_bytes(buf)),
+                _ => break,
+            }
+        }
+    }
+}
+
 /// Accept the child and read the descriptor it writes, to EOF. Returns the bytes
 /// as a (lossy) UTF-8 string; empty on any error. The caller (main thread) owns
 /// and closes the handle.
@@ -272,30 +378,27 @@ fn read_pages_pipe(server_raw: isize) -> String {
 
 // ---- Child side ---------------------------------------------------------
 
-// Log sink for the plugin's `log` callback; set for the duration of one call.
 static LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
-// Descriptor stashed by the plugin's `emit_pages` callback during a `pages` run;
-// forwarded to the parent over the named pipe after the call returns.
 static PAGES: Mutex<Option<String>> = Mutex::new(None);
+// Write end of the progress pipe as raw isize (HANDLE is !Send); set by `host_main`.
+static PROGRESS_PIPE: Mutex<Option<isize>> = Mutex::new(None);
 
 #[repr(C)]
 struct CContext {
     abi_version: u32,
     install_dir: *const u16,
-    // Per-user data dir (where installer_info.json lives); for persistent state.
     data_dir: *const u16,
     product: *const u16,
     product_id: *const u16,
     version: *const u16,
     exe: *const u16,
     log: extern "system" fn(*const u16, *const u16),
-    // `up` only: the user's page answers, or null. Empty/null when no pages.
     inputs_json: *const u16,
-    // `installway_pages` calls this with the descriptor; the host forwards it.
     emit_pages: extern "system" fn(*const u16),
+    /// Null when the parent didn't open a progress pipe (marquee mode).
+    emit_progress: Option<extern "system" fn(u32)>,
 }
 
-/// Stash the descriptor the plugin emits; `host_main` forwards it after the call.
 extern "system" fn emit_pages_cb(json: *const u16) {
     if let Ok(mut g) = PAGES.lock() {
         if g.is_some() {
@@ -308,13 +411,35 @@ extern "system" fn emit_pages_cb(json: *const u16) {
     }
 }
 
+extern "system" fn emit_progress_cb(value: u32) {
+    let Ok(g) = PROGRESS_PIPE.lock() else {
+        return;
+    };
+    let Some(raw) = *g else {
+        return;
+    };
+
+    let h = HANDLE(raw as *mut core::ffi::c_void);
+    let bytes = value.clamp(0, 100).to_le_bytes();
+    let mut written = 0u32;
+    unsafe {
+        let _ = WriteFile(h, Some(&bytes), Some(&mut written), None);
+    }
+}
+
 type AbiFn = unsafe extern "system" fn() -> u32;
 type ActionFn = unsafe extern "system" fn(*const CContext) -> i32;
 
 /// Child entry point: read the context JSON from stdin, load `dll`, check its
-/// ABI version, call `installway_{up,down,pages}`, and return its exit code. For
-/// `pages`, `pipe_name` is the descriptor pipe to forward the result through.
-pub fn host_main(dll: &Path, func: &str, pipe_name: Option<&str>) -> i32 {
+/// ABI version, call `installway_{up,down,pages}`, and return its exit code.
+/// `pipe_name`: descriptor pipe for `pages`. `progress_pipe_name`: progress
+/// pipe for `up` with a deterministic bar.
+pub fn host_main(
+    dll: &Path,
+    func: &str,
+    pipe_name: Option<&str>,
+    progress_pipe_name: Option<&str>,
+) -> i32 {
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
         return 101;
@@ -332,9 +457,10 @@ pub fn host_main(dll: &Path, func: &str, pipe_name: Option<&str>) -> i32 {
     }
     *PAGES.lock().unwrap() = None;
 
-    // Connect the descriptor pipe before loading the DLL so the parent's accept
-    // completes early; if the plugin then crashes, the parent just sees EOF.
     let pipe = pipe_name.and_then(open_pages_client);
+    *PROGRESS_PIPE.lock().unwrap() = progress_pipe_name
+        .and_then(open_pages_client)
+        .map(|h| h.0 as isize);
 
     let code = unsafe { call(dll, func, &ctx) };
 
@@ -346,6 +472,11 @@ pub fn host_main(dll: &Path, func: &str, pipe_name: Option<&str>) -> i32 {
                 let _ = WriteFile(h, Some(json.as_bytes()), Some(&mut written), None);
             }
             let _ = CloseHandle(h);
+        }
+    }
+    if let Some(raw) = PROGRESS_PIPE.lock().unwrap().take() {
+        unsafe {
+            let _ = CloseHandle(HANDLE(raw as *mut core::ffi::c_void));
         }
     }
 
@@ -429,6 +560,7 @@ unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginCtx) -> i32 {
     } else {
         inputs.as_ptr()
     };
+    let has_progress = PROGRESS_PIPE.lock().map(|g| g.is_some()).unwrap_or(false);
     let c = CContext {
         abi_version: ABI_VERSION,
         install_dir: install_dir.as_ptr(),
@@ -440,6 +572,11 @@ unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginCtx) -> i32 {
         log: log_cb,
         inputs_json: inputs_ptr,
         emit_pages: emit_pages_cb,
+        emit_progress: if has_progress {
+            Some(emit_progress_cb)
+        } else {
+            None
+        },
     };
     unsafe { act(&c) }
 }

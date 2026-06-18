@@ -54,6 +54,9 @@ pub(super) enum FieldKind {
     Combo,
     /// Checkbox group; value is the checked option values joined by `,`.
     MultiCheck,
+    /// Marker only — no Win32 control, no collected value. `true` = marquee,
+    /// `false` = deterministic (plugin drives % via `emit_progress`).
+    Progress(bool),
 }
 
 /// One rendered widget: every HWND it owns (with base-DPI layout), plus what's
@@ -89,6 +92,8 @@ pub(super) enum Step {
     Stay,
     /// Backed out before the first plugin page — return to the built-in flow.
     Exit,
+    /// Page had `buttons: false` — run the plugin's `up` in the background.
+    AutoRun { marquee: bool },
 }
 
 /// One shown page in the current plugin's path (kept for Back).
@@ -268,6 +273,7 @@ impl Wizard {
             answers: self.answers.clone(),
             finished: self.finished.clone(),
             _keepalive: self.tmp.clone(),
+            on_progress: None,
         })
     }
 
@@ -288,14 +294,29 @@ impl Wizard {
                 back,
             } => {
                 if cur != self.cur {
-                    // Moved to a new plugin — start a fresh page-history stack.
                     self.stack.clear();
                 }
                 self.cur = cur;
                 self.answers = answers;
                 self.finished = finished;
+                let auto_run = !page.buttons;
+                let marquee = page
+                    .widgets
+                    .iter()
+                    .find_map(|w| {
+                        if let PluginWidget::Progress { marquee } = w {
+                            Some(*marquee)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(true);
                 unsafe { self.push(hwnd, page, notice, back) };
-                Step::Show
+                if auto_run {
+                    Step::AutoRun { marquee }
+                } else {
+                    Step::Show
+                }
             }
         }
     }
@@ -350,6 +371,81 @@ impl Wizard {
     }
 }
 
+// ---- Auto-run helpers ---------------------------------------------------
+
+const PBS_MARQUEE: u32 = 0x0008;
+const PBM_SETMARQUEE: u32 = 0x400 + 10;
+const PBM_SETPOS: u32 = 0x402;
+const PBM_SETRANGE: u32 = 0x401;
+
+/// Find the progress bar control for the current slot, if any.
+fn current_progress_bar(hwnd: HWND) -> Option<HWND> {
+    let slot = current_slot()?;
+    STATE.with(|s| {
+        s.borrow().as_ref().and_then(|st| {
+            st.borrow()
+                .plugin_fields
+                .iter()
+                .find(|f| f.page == slot && matches!(f.kind, FieldKind::Progress(_)))
+                .and_then(|f| f.ctrl_ids.first().copied())
+                .map(|id| unsafe { GetDlgItem(Some(hwnd), id as i32).unwrap_or_default() })
+        })
+    })
+}
+
+/// Set marquee mode on the current slot's progress bar control and initialise its range.
+fn set_slot_marquee(hwnd: HWND, marquee: bool) {
+    let Some(bar) = current_progress_bar(hwnd) else {
+        return;
+    };
+    if bar.is_invalid() {
+        return;
+    }
+    unsafe {
+        let style = GetWindowLongW(bar, GWL_STYLE) as u32;
+        if marquee {
+            SetWindowLongW(bar, GWL_STYLE, (style | PBS_MARQUEE) as i32);
+            SendMessageW(bar, PBM_SETMARQUEE, Some(WPARAM(1)), Some(LPARAM(60)));
+        } else {
+            SendMessageW(bar, PBM_SETMARQUEE, Some(WPARAM(0)), Some(LPARAM(0)));
+            SetWindowLongW(bar, GWL_STYLE, (style & !PBS_MARQUEE) as i32);
+            // Range 0–10000 matches the host's standard progress scale.
+            SendMessageW(
+                bar,
+                PBM_SETRANGE,
+                Some(WPARAM(0)),
+                Some(LPARAM(10000 << 16)),
+            );
+            SendMessageW(bar, PBM_SETPOS, Some(WPARAM(0)), None);
+        }
+    }
+}
+
+/// Called from `act_step` when entering an auto-run page: hide nav buttons and
+/// start the progress bar in the correct mode.
+pub(super) fn apply_auto_run(hwnd: HWND, marquee: bool) {
+    unsafe {
+        for id in [super::ID_BACK_BTN, super::ID_NEXT_BTN, super::ID_CANCEL_BTN] {
+            let h = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
+            let _ = ShowWindow(h, SW_HIDE);
+        }
+    }
+    set_slot_marquee(hwnd, marquee);
+}
+
+/// Drive the deterministic progress bar on the current slot's Progress widget.
+/// `scaled` is 0–10000 (same scale as the host's standard progress bar).
+pub(super) fn update_current_progress(hwnd: HWND, scaled: i32) {
+    let Some(bar) = current_progress_bar(hwnd) else {
+        return;
+    };
+    if !bar.is_invalid() {
+        unsafe {
+            SendMessageW(bar, PBM_SETPOS, Some(WPARAM(scaled as usize)), None);
+        }
+    }
+}
+
 // ---- Background step query ----------------------------------------------
 
 /// Wizard state extracted for the background query thread (all Clone + Send).
@@ -360,9 +456,9 @@ pub(super) struct StepArgs {
     pub(super) cur: usize,
     pub(super) answers: PluginInputs,
     pub(super) finished: common::plugin::InputsByPlugin,
-    /// Holds the extracted-DLL temp dir alive for the whole query so the dir
-    /// can't be removed (window closed) while this thread reads a DLL.
     _keepalive: Option<Arc<TempDirGuard>>,
+    /// Set by `dispatch_plugin_run` when the page has a deterministic progress bar.
+    pub(super) on_progress: Option<Box<dyn Fn(u32) + Send>>,
 }
 
 /// Result of a completed background `run_step_query` call.
@@ -380,6 +476,48 @@ pub(super) enum StepOutcome {
     },
 }
 
+/// Run on a background thread: call `installway_up` for the current plugin,
+/// commit its answers, then continue querying from the next plugin.
+pub(super) fn run_plugin_then_step(args: StepArgs) -> StepOutcome {
+    let StepArgs {
+        self_exe,
+        base_ctx,
+        plugins,
+        cur,
+        mut answers,
+        mut finished,
+        _keepalive,
+        on_progress,
+    } = args;
+    if let Some((entry, dll)) = plugins.get(cur) {
+        let inputs_json = serde_json::to_string(&answers).unwrap_or_else(|_| "{}".into());
+        if let Err(e) = common::plugin::run_up_single(
+            &self_exe,
+            &base_ctx,
+            entry,
+            dll,
+            &inputs_json,
+            on_progress,
+        ) {
+            common::log::warn(format!("plugin '{}' up (wizard): {e:#}", entry.name));
+        }
+        finished
+            .entry(entry.name.clone())
+            .or_default()
+            .extend(std::mem::take(&mut answers));
+    }
+    let next = cur + 1;
+    advance_steps(
+        &plugins,
+        next,
+        answers,
+        finished,
+        |entry, dll, answers_json| {
+            common::plugin::query_step(&self_exe, &base_ctx, entry, dll, answers_json)
+        },
+    )
+}
+
 /// Run on a background thread: advance through plugins (spawning each plugin's
 /// step subprocess) until one returns a `Page`, or all are exhausted.
 pub(super) fn run_step_query(args: StepArgs) -> StepOutcome {
@@ -393,6 +531,7 @@ pub(super) fn run_step_query(args: StepArgs) -> StepOutcome {
         answers,
         finished,
         _keepalive,
+        on_progress: _,
     } = args;
     advance_steps(
         &plugins,
@@ -789,6 +928,33 @@ unsafe fn build_widget(
                 rects,
             }
         }
+        PluginWidget::Progress { marquee } => {
+            let id = *next_id;
+            *next_id += 1;
+            unsafe {
+                mk(
+                    hwnd,
+                    hinst,
+                    w!("msctls_progress32"),
+                    "",
+                    WINDOW_STYLE(0),
+                    WINDOW_EX_STYLE(0),
+                    id,
+                    (x, *y, content_w, 20),
+                );
+            }
+            let rects = vec![(id, x, *y, content_w, 20)];
+            *y += 20 + ROW_GAP;
+            PluginField {
+                page,
+                key: String::new(),
+                kind: FieldKind::Progress(*marquee),
+                required: false,
+                ctrl_ids: vec![id],
+                values: vec![],
+                rects,
+            }
+        }
     }
 }
 
@@ -912,7 +1078,10 @@ unsafe fn collect_slot(hwnd: HWND, slot: usize) -> Option<PluginInputs> {
                 st.borrow()
                     .plugin_fields
                     .iter()
-                    .filter(|f| f.page == slot && f.kind != FieldKind::Label)
+                    .filter(|f| {
+                        f.page == slot
+                            && !matches!(f.kind, FieldKind::Label | FieldKind::Progress(_))
+                    })
                     .map(|f| {
                         (
                             f.kind,
@@ -961,7 +1130,7 @@ unsafe fn read_field(
 ) -> Option<String> {
     unsafe {
         match kind {
-            FieldKind::Label => None,
+            FieldKind::Label | FieldKind::Progress(_) => None,
             FieldKind::Text => {
                 let h = GetDlgItem(Some(hwnd), ids[0] as i32).unwrap_or_default();
                 let t = helpers::get_window_text(h);
@@ -1043,6 +1212,7 @@ mod tests {
                 title: String::new(),
                 subtitle: String::new(),
                 widgets: vec![],
+                buttons: true,
             },
             notice: String::new(),
             back: true,

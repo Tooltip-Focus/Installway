@@ -86,7 +86,7 @@ fn run() -> Result<()> {
     if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
         let code = match (argv.get(idx + 1), argv.get(idx + 2)) {
             (Some(dll), Some(func)) => {
-                common::plugin::host_main(std::path::Path::new(dll), func, None)
+                common::plugin::host_main(std::path::Path::new(dll), func, None, None)
             }
             _ => 2,
         };

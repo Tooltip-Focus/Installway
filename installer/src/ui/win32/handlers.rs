@@ -13,8 +13,8 @@ use super::{
 use crate::extract::{InstallCtx, install};
 use crate::install as install_mod;
 use crate::ui::helpers::{
-    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PLUGIN_STEP, WM_APP_PROGRESS, get_window_text,
-    scale_progress, set_dlg_text, set_progress,
+    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PLUGIN_PROGRESS, WM_APP_PLUGIN_STEP, WM_APP_PROGRESS,
+    get_window_text, post_wparam, scale_progress, set_dlg_text, set_progress,
 };
 use common::models::InstallDirRestriction;
 use std::path::{Path, PathBuf};
@@ -190,7 +190,38 @@ unsafe fn act_step(hwnd: HWND, step: super::plugin_pages::Step) {
                 apply_phase(hwnd, Phase::License);
             }
         },
+        Step::AutoRun { marquee } => unsafe {
+            apply_phase(hwnd, Phase::Plugin);
+            super::plugin_pages::apply_auto_run(hwnd, marquee);
+            dispatch_plugin_run(hwnd, marquee);
+        },
     }
+}
+
+/// Spawn a background thread that calls the current plugin's `installway_up`
+/// then queries the next wizard step. Posts `WM_APP_PLUGIN_STEP` on completion.
+/// When `!marquee`, wires a progress callback that posts `WM_APP_PLUGIN_PROGRESS`.
+unsafe fn dispatch_plugin_run(hwnd: HWND, marquee: bool) {
+    let args = WIZARD.with(|w| w.borrow().as_ref().and_then(|z| z.step_args()));
+    let Some(mut args) = args else {
+        unsafe { act_step(hwnd, super::plugin_pages::Step::Install) };
+        return;
+    };
+    if QUERY_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if !marquee {
+        let hwnd_isize = hwnd.0 as isize;
+        args.on_progress = Some(Box::new(move |v| {
+            post_wparam(hwnd_isize, WM_APP_PLUGIN_PROGRESS, v as usize);
+        }));
+    }
+    let hwnd_isize = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let outcome = super::plugin_pages::run_plugin_then_step(args);
+        *QUERIED_STEP.lock().unwrap() = Some(outcome);
+        helpers::post(hwnd_isize, WM_APP_PLUGIN_STEP);
+    });
 }
 
 pub(super) unsafe fn on_accept_toggle(hwnd: HWND) {

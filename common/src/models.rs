@@ -325,15 +325,14 @@ pub enum PageStep {
 /// One contributed wizard page.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PluginPage {
-    /// Unique within the contributing plugin; namespaces collected values
-    /// (`"<page_id>.<widget_id>"`).
     pub id: String,
-    /// Banner title (final text — the plugin localizes it, the host renders it
-    /// verbatim).
     pub title: String,
     #[serde(default)]
     pub subtitle: String,
     pub widgets: Vec<PluginWidget>,
+    /// Show Back/Next/Cancel buttons.
+    #[serde(default = "default_true")]
+    pub buttons: bool,
 }
 
 /// One form control. `kind` is the serde tag; each maps to a built-in Win32
@@ -396,12 +395,18 @@ pub enum PluginWidget {
         #[serde(default)]
         label: String,
         options: Vec<ChoiceOption>,
-        /// Option `value`s checked initially.
         #[serde(default)]
         default: Vec<String>,
-        /// Require at least one selection.
         #[serde(default)]
         required: bool,
+    },
+    /// Progress bar widget. No value collected.
+    /// `marquee: true` (default): infinite animation.
+    /// `marquee: false`: deterministic 0–100 bar; plugin drives the percentage
+    /// via `emit_progress` calls from `installway_up`.
+    Progress {
+        #[serde(default = "default_true")]
+        marquee: bool,
     },
 }
 
@@ -562,6 +567,7 @@ mod tests {
                 id: "main".into(),
                 title: "Pick".into(),
                 subtitle: String::new(),
+                buttons: true,
                 widgets: vec![
                     PluginWidget::Label {
                         id: String::new(),

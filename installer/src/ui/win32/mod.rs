@@ -433,6 +433,7 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
                     required: false,
                 },
             ],
+            buttons: true,
         };
         let step = PageStep::Page {
             page,
@@ -508,8 +509,6 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
         Phase::Error => (false, false, false, true),
     };
 
-    // Plugin pages overwrite the banner with their own title; restore the
-    // product header/subheader whenever a built-in phase is shown.
     if phase != Phase::Plugin {
         let (h, s) = STATE.with(|st| {
             st.borrow()
@@ -542,8 +541,9 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     show(ID_PROGRESS, prog);
     show(
         ID_STATUS,
-        phase == Phase::Progress || phase == Phase::Done || phase == Phase::Error,
+        matches!(phase, Phase::Progress | Phase::Done | Phase::Error),
     );
+
     show(ID_LAUNCH_CHK, phase == Phase::Done);
 
     show(ID_BACK_BTN, phase == Phase::Choose && !skip_license());
@@ -738,6 +738,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             handlers::on_plugin_step(hwnd);
             LRESULT(0)
         },
+        m if m == helpers::WM_APP_PLUGIN_PROGRESS => {
+            let scaled = (wparam.0.min(100) as i32) * 100;
+            plugin_pages::update_current_progress(hwnd, scaled);
+            LRESULT(0)
+        }
         WM_CLOSE => unsafe {
             let _ = DestroyWindow(hwnd);
             LRESULT(0)

@@ -103,7 +103,12 @@ fn parse_args() -> Cli {
             (Some(dll), Some(func)) => common::plugin::host_main(
                 Path::new(dll),
                 func,
-                argv.get(idx + 3).map(String::as_str),
+                argv.get(idx + 3)
+                    .filter(|s| !s.is_empty())
+                    .map(String::as_str),
+                argv.get(idx + 4)
+                    .filter(|s| !s.is_empty())
+                    .map(String::as_str),
             ),
             _ => 2,
         };
