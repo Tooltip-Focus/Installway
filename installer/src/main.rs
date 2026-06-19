@@ -179,8 +179,8 @@ fn run(cli: Cli) -> Result<()> {
         println!(
             "OK: {} {} -> {} (payload {} bytes verified)\nLicense: {}",
             match loaded.payload.kind {
-                common::models::PayloadKind::Full => "FULL",
-                common::models::PayloadKind::Patch => "PATCH",
+                common::model::payload_kind::PayloadKind::Full => "FULL",
+                common::model::payload_kind::PayloadKind::Patch => "PATCH",
             },
             loaded
                 .payload
@@ -275,7 +275,7 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
 /// then `INSTALLWAY_PATH`, then the per-app default.
 fn resolve_install_path(
     cli_path: Option<&str>,
-    payload: &common::models::InstallerPayload,
+    payload: &common::model::installer_payload::InstallerPayload,
 ) -> PathBuf {
     if let Some(p) = cli_path {
         return PathBuf::from(p);
@@ -286,7 +286,7 @@ fn resolve_install_path(
     default_install_path(payload)
 }
 
-fn default_install_path(payload: &common::models::InstallerPayload) -> PathBuf {
+fn default_install_path(payload: &common::model::installer_payload::InstallerPayload) -> PathBuf {
     // Already installed? Propose the same folder so a reinstall/update lands in
     // place (the user can still change it on the Choose page).
     if let Some(prev) = previous_install_dir(payload) {
@@ -314,10 +314,12 @@ fn default_install_path(payload: &common::models::InstallerPayload) -> PathBuf {
 /// The folder this product was last installed to, read from `installer_info.json`
 /// in the per-user data dir. `None` if never installed or the record is missing
 /// / empty.
-fn previous_install_dir(payload: &common::models::InstallerPayload) -> Option<PathBuf> {
+fn previous_install_dir(
+    payload: &common::model::installer_payload::InstallerPayload,
+) -> Option<PathBuf> {
     let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product_id)?;
     let text = std::fs::read_to_string(data_dir.join("installer_info.json")).ok()?;
-    let info: common::models::InstallInfo = serde_json::from_str(&text).ok()?;
+    let info: common::model::install_info::InstallInfo = serde_json::from_str(&text).ok()?;
     if info.install_dir.trim().is_empty() {
         None
     } else {

@@ -9,7 +9,14 @@ pub mod minimal;
 pub mod win32;
 
 use anyhow::{Result, bail};
-use common::models::{PageStep, PluginInputs, PluginPage, PluginWidget};
+use common::model::install_dir_restriction::InstallDirRestriction;
+use common::model::installer_payload::InstallerPayload;
+use common::model::manifest::Manifest;
+use common::model::page_step::PageStep;
+use common::model::payload_kind::PayloadKind;
+use common::model::plugin_page::PluginInputs;
+use common::model::plugin_page::PluginPage;
+use common::model::plugin_widget::PluginWidget;
 
 /// Fill one page's answers from each widget's declared default, for the
 /// non-interactive paths (`--silent` / compact upgrade UI) where there is no form
@@ -135,8 +142,7 @@ pub fn headless_plugin_inputs(
 /// signed installer payload. `view` may contain `patch` to preview the patch
 /// subheader; otherwise a full install is described.
 #[cfg(debug_assertions)]
-pub(crate) fn sample_payload(view: &str) -> common::models::InstallerPayload {
-    use common::models::{InstallerPayload, Manifest, PayloadKind};
+pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
     let is_patch = view.contains("patch");
     InstallerPayload {
         kind: if is_patch {
@@ -167,7 +173,7 @@ pub(crate) fn sample_payload(view: &str) -> common::models::InstallerPayload {
         purge_unknown_files: false,
         skip_license: false,
         skip_path: false,
-        install_dir_restriction: common::models::InstallDirRestriction::Enforce,
+        install_dir_restriction: InstallDirRestriction::Enforce,
         default_install_dir: None,
         upgrade_minimal_ui: false,
         show_uninstall_complete: false,
@@ -179,7 +185,10 @@ pub(crate) fn sample_payload(view: &str) -> common::models::InstallerPayload {
 #[cfg(test)]
 mod tests {
     use super::page_defaults;
-    use common::models::{ChoiceOption, ChoiceStyle, PluginPage, PluginWidget};
+    use common::model::choice_option::ChoiceOption;
+    use common::model::choice_style::ChoiceStyle;
+    use common::model::plugin_page::PluginPage;
+    use common::model::plugin_widget::PluginWidget;
 
     fn page(widgets: Vec<PluginWidget>) -> PluginPage {
         PluginPage {

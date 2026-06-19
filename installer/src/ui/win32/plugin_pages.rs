@@ -3,7 +3,7 @@
 
 //! Dynamic, data-driven wizard pages contributed by `ui = true` plugins (ABI
 //! v2). Unlike the built-in views (whose controls are hardcoded), these are
-//! created at runtime from each plugin's [`common::models::PluginPage`]
+//! created at runtime from each plugin's [`common::model::plugin_page::PluginPage`]
 //! descriptor: one control per widget, laid out top-to-bottom, shown/hidden per
 //! `Phase::Plugin(i)`. Controls are created once and only shown/hidden (never
 //! destroyed mid-flow), mirroring the built-in pages' lifecycle.
@@ -17,7 +17,12 @@ use super::{
 };
 use crate::extract::TempDirGuard;
 use crate::ui::helpers;
-use common::models::{ChoiceStyle, PageStep, PluginEntry, PluginInputs, PluginPage, PluginWidget};
+use common::model::choice_style::ChoiceStyle;
+use common::model::page_step::PageStep;
+use common::model::plugin_entry::PluginEntry;
+use common::model::plugin_page::PluginInputs;
+use common::model::plugin_page::PluginPage;
+use common::model::plugin_widget::PluginWidget;
 use common::plugin::{InputsByPlugin, PluginCtx};
 use common::utils::wide;
 use std::path::PathBuf;
@@ -112,7 +117,7 @@ struct Frame {
 /// never destroyed; a back-then-branch leaves a few hidden orphan controls, freed
 /// at window close. Going Back just re-shows a prior page's retained controls.
 pub(super) struct Wizard {
-    plugins: Vec<(common::models::PluginEntry, PathBuf)>, // (entry, extracted dll)
+    plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>, // (entry, extracted dll)
     base_ctx: PluginCtx,
     self_exe: PathBuf,
     /// Keeps the extracted-DLL temp dir alive. Shared (via `Arc`) into every
@@ -132,7 +137,7 @@ pub(super) struct Wizard {
 
 impl Wizard {
     pub(super) fn new(
-        plugins: Vec<(common::models::PluginEntry, PathBuf)>,
+        plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
         base_ctx: PluginCtx,
         self_exe: PathBuf,
         tmp: Arc<TempDirGuard>,
@@ -168,8 +173,10 @@ impl Wizard {
             next_id: ID_PLUGIN_BASE,
             canned: None,
         };
-        w.plugins
-            .push((common::models::PluginEntry::default(), PathBuf::new()));
+        w.plugins.push((
+            common::model::plugin_entry::PluginEntry::default(),
+            PathBuf::new(),
+        ));
         w.canned = Some(steps.into());
         w
     }
@@ -1186,7 +1193,10 @@ unsafe fn read_field(
 #[cfg(test)]
 mod tests {
     use super::{StepOutcome, advance_steps};
-    use common::models::{PageStep, PluginEntry, PluginInputs, PluginPage};
+    use common::model::page_step::PageStep;
+    use common::model::plugin_entry::PluginEntry;
+    use common::model::plugin_page::PluginInputs;
+    use common::model::plugin_page::PluginPage;
     use common::plugin::InputsByPlugin;
     use std::path::{Path, PathBuf};
 

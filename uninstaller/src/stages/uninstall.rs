@@ -9,13 +9,14 @@
 use crate::cleanup;
 use crate::ui::{self, StepCounter, UninstallParams};
 use anyhow::{Context, Result};
+use common::model::manifest::Manifest;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
 const DETACHED_PROCESS: u32 = 0x00000008;
 
-fn assoc_id(info: &common::models::InstallInfo) -> &str {
+fn assoc_id(info: &common::model::install_info::InstallInfo) -> &str {
     if info.product_id.is_empty() {
         &info.product
     } else {
@@ -58,7 +59,7 @@ pub fn run(silent: bool) -> Result<()> {
     // removal no-ops, but shortcuts/registry/dir cleanup still run.
     let manifest = cleanup::read_manifest(&data_dir).unwrap_or_else(|e| {
         common::log::warn(format!("manifest unreadable ({e:#}) - skipping file list"));
-        common::models::Manifest {
+        Manifest {
             version: info.version.clone(),
             exe: info.exe.clone(),
             files: Default::default(),
@@ -159,8 +160,8 @@ pub fn run(silent: bool) -> Result<()> {
 fn run_silent(
     app_dir: &Path,
     data_dir: &Path,
-    info: &common::models::InstallInfo,
-    manifest: &common::models::Manifest,
+    info: &common::model::install_info::InstallInfo,
+    manifest: &Manifest,
 ) -> Result<()> {
     run_down_plugins(info, data_dir);
     let n = cleanup::remove_payload_files(app_dir, manifest);
@@ -186,7 +187,7 @@ fn run_silent(
 /// Run each plugin's `down` (reverse install order) in isolated child
 /// processes, from the data dir. Best-effort: failures are logged, never block
 /// the uninstall.
-fn run_down_plugins(info: &common::models::InstallInfo, data_dir: &Path) {
+fn run_down_plugins(info: &common::model::install_info::InstallInfo, data_dir: &Path) {
     if info.plugins.is_empty() {
         return;
     }

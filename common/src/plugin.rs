@@ -11,7 +11,7 @@
 //! the parent side (verify each DLL's hash, spawn the child, enforce the
 //! required/timeout policy).
 
-use crate::models::PluginEntry;
+use crate::model::plugin_entry::PluginEntry;
 use crate::utils::wide;
 use anyhow::{Context, Result, bail};
 use std::io::{Read, Write};
@@ -59,7 +59,8 @@ pub struct PluginCtx {
 
 /// Collected page answers per plugin name; each value becomes that plugin's
 /// `ctx.inputs_json`.
-pub type InputsByPlugin = std::collections::HashMap<String, crate::models::PluginInputs>;
+pub type InputsByPlugin =
+    std::collections::HashMap<String, crate::model::plugin_page::PluginInputs>;
 
 /// Run `func` (`"up"`/`"down"`) for each plugin in its own child process,
 /// passing that plugin's `inputs_json`. With `enforce_required`, a required
@@ -146,7 +147,7 @@ pub fn query_step(
     entry: &PluginEntry,
     dll: &Path,
     answers_json: &str,
-) -> Result<crate::models::PageStep> {
+) -> Result<crate::model::page_step::PageStep> {
     let bytes = std::fs::read(dll).with_context(|| format!("read plugin dll {}", dll.display()))?;
     if crate::utils::bytes_blake3(&bytes) != entry.blake3 {
         bail!("plugin '{}' hash mismatch - refusing to load", entry.name);

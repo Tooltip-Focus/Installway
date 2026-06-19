@@ -8,7 +8,9 @@
 //! deletes a key that still holds anything (so shared keys like `...\Run` keep
 //! their other values).
 
-use crate::models::{RegEntry, RegKind, RegValue};
+use crate::model::reg_entry::RegEntry;
+use crate::model::reg_kind::RegKind;
+use crate::model::reg_value::RegValue;
 use crate::utils::wide;
 use std::collections::HashSet;
 use windows::Win32::System::Registry::{

@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use anyhow::{Context, Result, bail};
-use common::models::{InstallerPayload, SignedPayload};
+use common::model::installer_payload::InstallerPayload;
+use common::model::signed_payload::SignedPayload;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 include!(concat!(env!("OUT_DIR"), "/pub_key.rs"));

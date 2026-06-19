@@ -14,7 +14,7 @@
 //! names. Uninstall only clears the `.ext` default when it still points at our
 //! ProgID, so we never stomp an association the user re-pointed elsewhere.
 
-use crate::models::FileAssoc;
+use crate::model::file_assoc::FileAssoc;
 use crate::utils::wide;
 
 /// Deterministic ProgID for a (product_id, extension) pair, e.g.

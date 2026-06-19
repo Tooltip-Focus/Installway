@@ -3,14 +3,14 @@
 
 //! Shortcut (`.lnk`) path logic shared by the installer + uninstaller.
 //!
-//! Shortcuts are config-driven ([`crate::models::ShortcutEntry`]); the installer
+//! Shortcuts are config-driven ([`crate::model::ShortcutEntry`]); the installer
 //! resolves each entry's tokens to absolute paths, records them in
 //! `installer_info.json`, and reconciles a changed set on upgrade. This module
 //! holds the pure path helpers (no `.lnk` writing - that needs `mslnk`, an
 //! installer-only dep): the standard location dirs, the resolved `.lnk` path of
 //! an entry, and the stale-set diff for upgrades.
 
-use crate::models::ShortcutEntry;
+use crate::model::shortcut_entry::ShortcutEntry;
 use std::collections::HashSet;
 use std::path::PathBuf;
 

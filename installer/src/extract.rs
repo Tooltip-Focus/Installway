@@ -2,7 +2,9 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use anyhow::{Context, Result, bail};
-use common::models::{InstallerPayload, Manifest, PayloadKind};
+use common::model::installer_payload::InstallerPayload;
+use common::model::manifest::Manifest;
+use common::model::payload_kind::PayloadKind;
 use hdiffpatch_rs::patchers::HDiff;
 use rayon::prelude::*;
 use std::fs::{self, File};
@@ -183,7 +185,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
 
     // Pre-install plugins run before any file is staged, so a required failure
     // aborts cleanly (live install untouched).
-    run_zip_plugins(&ctx, common::models::PluginPhase::PreInstall)?;
+    run_zip_plugins(&ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
 
     let temp_dir = ctx.install_dir.join(".installer_tmp");
 
@@ -210,7 +212,8 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
     ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
 
     // Deterministic order - easier UX and reproducible.
-    let mut entries: Vec<(&String, &common::models::FileEntry)> = manifest.files.iter().collect();
+    let mut entries: Vec<(&String, &common::model::file_entry::FileEntry)> =
+        manifest.files.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
 
     // ---- PHASE 1: STAGE (parallel) ------------------------------------
@@ -429,7 +432,7 @@ fn stage_file(
     archive: &mut ZipArchive<Cursor<&[u8]>>,
     kind: PayloadKind,
     rel: &str,
-    entry: &common::models::FileEntry,
+    entry: &common::model::file_entry::FileEntry,
     old: &Path,
     staged_path: &Path,
 ) -> Result<()> {
@@ -759,8 +762,11 @@ fn data_dir_of(payload: &InstallerPayload) -> Option<PathBuf> {
 
 /// Extract the `phase` plugins from the payload zip to `%TEMP%`, run their `up`
 /// in isolated child processes, then clean up. Used for the pre-install phase.
-fn run_zip_plugins(ctx: &InstallCtx, phase: common::models::PluginPhase) -> Result<()> {
-    let plugins: Vec<common::models::PluginEntry> = ctx
+fn run_zip_plugins(
+    ctx: &InstallCtx,
+    phase: common::model::plugin_phase::PluginPhase,
+) -> Result<()> {
+    let plugins: Vec<common::model::plugin_entry::PluginEntry> = ctx
         .payload
         .plugins
         .iter()
@@ -833,7 +839,7 @@ impl Drop for TempDirGuard {
 /// extracted DLL, in config order), the base context, and this exe's path (to
 /// spawn the plugin host). The temp dir of DLLs lives as long as `tmp`.
 pub struct UiPlugins {
-    pub plugins: Vec<(common::models::PluginEntry, PathBuf)>,
+    pub plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
     pub base_ctx: common::plugin::PluginCtx,
     pub self_exe: PathBuf,
     pub tmp: TempDirGuard,
@@ -850,7 +856,8 @@ pub fn extract_ui_plugins(
     self_exe: &Path,
     zip_bytes: &[u8],
 ) -> Option<UiPlugins> {
-    let ui: Vec<&common::models::PluginEntry> = payload.plugins.iter().filter(|p| p.ui).collect();
+    let ui: Vec<&common::model::plugin_entry::PluginEntry> =
+        payload.plugins.iter().filter(|p| p.ui).collect();
     if ui.is_empty() {
         return None;
     }
@@ -995,7 +1002,7 @@ pub fn verify_install(data_dir: &Path) -> Result<()> {
     let info_path = data_dir.join("installer_info.json");
     let info_data = fs::read_to_string(&info_path)
         .with_context(|| format!("read {} - is this product installed?", info_path.display()))?;
-    let info: common::models::InstallInfo =
+    let info: common::model::install_info::InstallInfo =
         serde_json::from_str(&info_data).context("parse installer_info.json")?;
 
     let manifest_path = data_dir.join("installer_manifest.json");
@@ -1006,7 +1013,8 @@ pub fn verify_install(data_dir: &Path) -> Result<()> {
 
     let app_dir = PathBuf::from(&info.install_dir);
 
-    let mut rels: Vec<(&String, &common::models::FileEntry)> = manifest.files.iter().collect();
+    let mut rels: Vec<(&String, &common::model::file_entry::FileEntry)> =
+        manifest.files.iter().collect();
     rels.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut missing = 0usize;
@@ -1153,7 +1161,7 @@ mod tests {
         let mut files = std::collections::HashMap::new();
         files.insert(
             "foo.txt".to_string(),
-            common::models::FileEntry {
+            common::model::file_entry::FileEntry {
                 hash: bytes_hash(good),
                 size: good.len() as u64,
                 patch: None,
