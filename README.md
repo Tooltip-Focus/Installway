@@ -9,7 +9,11 @@ Each output `.exe` carries its own payload: the file zip is appended as a PE
 while the signed manifest, the uninstaller and the payload length ride as small
 `RT_RCDATA` resources.
 
-## 📖 Documentation
+## Screenshots
+
+<img width="1033" height="827" alt="Sample App Software Installation Progress" src="https://github.com/user-attachments/assets/f1091106-b147-427f-b278-45e645cf522b" />
+
+## Documentation
 
 Full guide: **<https://tooltip-focus.github.io/Installway/>**
 
