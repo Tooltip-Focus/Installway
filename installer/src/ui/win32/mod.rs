@@ -14,6 +14,13 @@ mod views;
 use crate::payload::LoadedPayload;
 use crate::ui::helpers;
 use anyhow::Result;
+use common::model::choice_option::ChoiceOption;
+use common::model::choice_style::ChoiceStyle;
+use common::model::install_dir_restriction::InstallDirRestriction;
+use common::model::installer_payload::InstallerPayload;
+use common::model::page_step::PageStep;
+use common::model::plugin_page::PluginPage;
+use common::model::plugin_widget::PluginWidget;
 use common::utils::wide;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -106,13 +113,13 @@ pub(super) struct UiState {
 
 thread_local! {
     pub(super) static STATE: RefCell<Option<Rc<RefCell<UiState>>>> = const { RefCell::new(None) };
-    pub(super) static PAYLOAD: RefCell<Option<common::models::InstallerPayload>> = const { RefCell::new(None) };
+    pub(super) static PAYLOAD: RefCell<Option<InstallerPayload>> = const { RefCell::new(None) };
     pub(super) static UNINSTALLER: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
     pub(super) static LAUNCH_FLAG: RefCell<bool> = const { RefCell::new(false) };
     pub(super) static SKIP_LICENSE: RefCell<bool> = const { RefCell::new(false) };
     pub(super) static SKIP_PATH: RefCell<bool> = const { RefCell::new(false) };
-    pub(super) static RESTRICTION: RefCell<common::models::InstallDirRestriction> =
-        const { RefCell::new(common::models::InstallDirRestriction::Enforce) };
+    pub(super) static RESTRICTION: RefCell<InstallDirRestriction> =
+        const { RefCell::new(InstallDirRestriction::Enforce) };
     pub(super) static DEFAULT_PATH: RefCell<String> = const { RefCell::new(String::new()) };
     /// The plugin-page wizard engine (None when no `ui = true` plugin).
     pub(super) static WIZARD: RefCell<Option<plugin_pages::Wizard>> = const { RefCell::new(None) };
@@ -125,7 +132,7 @@ fn skip_license() -> bool {
 fn skip_path() -> bool {
     SKIP_PATH.with(|s| *s.borrow())
 }
-fn restriction() -> common::models::InstallDirRestriction {
+fn restriction() -> InstallDirRestriction {
     RESTRICTION.with(|r| *r.borrow())
 }
 fn default_path() -> String {
@@ -216,7 +223,7 @@ pub fn run(
 /// the real `run` and the dev-only `preview`. Does not show the window or set a
 /// phase.
 unsafe fn create_window(
-    payload: &common::models::InstallerPayload,
+    payload: &common::model::installer_payload::InstallerPayload,
     default_path: &Path,
 ) -> Result<HWND> {
     unsafe {
@@ -375,7 +382,6 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
     // `--preview plugin`: a canned one-page wizard (no real plugin/payload needed)
     // so the dynamic renderer can be exercised.
     if matches!(phase, Phase::Plugin) {
-        use common::models::{ChoiceOption, ChoiceStyle, PageStep, PluginPage, PluginWidget};
         let page = PluginPage {
             id: "region".into(),
             title: "Choose your country".into(),

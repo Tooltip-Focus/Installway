@@ -16,7 +16,7 @@ use crate::ui::helpers::{
     self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PLUGIN_PROGRESS, WM_APP_PLUGIN_STEP, WM_APP_PROGRESS,
     get_window_text, post_wparam, scale_progress, set_dlg_text, set_progress,
 };
-use common::models::InstallDirRestriction;
+use common::model::install_dir_restriction::InstallDirRestriction;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -573,7 +573,9 @@ fn push_error(hwnd_isize: isize, msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::{dir_has_entries, same_dir, should_block_nonempty};
-    use common::models::InstallDirRestriction::{Bypass, DefaultDirOnly, Enforce};
+    use common::model::install_dir_restriction::InstallDirRestriction::{
+        Bypass, DefaultDirOnly, Enforce,
+    };
     use std::fs;
     use tempfile::tempdir;
 

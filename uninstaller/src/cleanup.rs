@@ -4,7 +4,8 @@
 //! Shared file/registry/shortcut cleanup helpers used by both stages.
 
 use anyhow::{Context, Result};
-use common::models::{InstallInfo, Manifest};
+use common::model::install_info::InstallInfo;
+use common::model::manifest::Manifest;
 use common::utils::{FS_RETRIES, FS_RETRY_DELAY, wide};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -162,7 +163,8 @@ pub fn unregister(key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::models::{FileEntry, Manifest};
+    use common::model::file_entry::FileEntry;
+    use common::model::manifest::Manifest;
 
     #[test]
     fn remove_empty_subdirs_keeps_nonempty_and_root() {

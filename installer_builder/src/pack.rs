@@ -4,9 +4,13 @@
 use crate::args::PackArgs;
 use crate::embed;
 use anyhow::{Context, Result, bail};
-use common::models::{
-    FileAssoc, FileEntry, InstallerPayload, Manifest, PatchInfo, PayloadKind, SignedPayload,
-};
+use common::model::file_assoc::FileAssoc;
+use common::model::file_entry::FileEntry;
+use common::model::installer_payload::InstallerPayload;
+use common::model::manifest::Manifest;
+use common::model::patch_info::PatchInfo;
+use common::model::payload_kind::PayloadKind;
+use common::model::signed_payload::SignedPayload;
 use common::utils::{
     bytes_blake3, collect_files, copy_retry, file_blake3, generate_patch, remove_dir_retry,
     remove_file_retry,
@@ -72,7 +76,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
 
     // Plugins: read each DLL for its hash + in-zip name; the bytes are bundled
     // into the payload zip by build_full/build_patch.
-    let mut plugin_entries: Vec<common::models::PluginEntry> = Vec::new();
+    let mut plugin_entries: Vec<common::model::plugin_entry::PluginEntry> = Vec::new();
     let mut plugin_files: Vec<(String, PathBuf)> = Vec::new();
     for p in &args.plugins {
         let in_zip = format!("plugins/{}.dll", p.name);
@@ -80,7 +84,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
             .with_context(|| format!("read plugin dll {}", p.src.display()))?;
         println!("Plugin: {} ({:?}) <- {}", p.name, p.phase, p.src.display());
         plugin_files.push((in_zip.clone(), p.src.clone()));
-        plugin_entries.push(common::models::PluginEntry {
+        plugin_entries.push(common::model::plugin_entry::PluginEntry {
             name: p.name.clone(),
             file: in_zip,
             blake3: hash,

@@ -2,7 +2,13 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use anyhow::{Context, Result};
-use common::models::{FileAssoc, InstallInfo, InstallerPayload, PluginPhase, ShortcutEntry};
+use common::model::file_assoc::FileAssoc;
+use common::model::install_info::InstallInfo;
+use common::model::installer_payload::InstallerPayload;
+use common::model::plugin_phase::PluginPhase;
+use common::model::reg_entry::RegEntry;
+use common::model::reg_value::RegValue;
+use common::model::shortcut_entry::ShortcutEntry;
 use common::utils::{days_to_ymd, wide};
 use std::fs;
 use std::path::Path;
@@ -246,11 +252,7 @@ impl Tokens {
 /// Resolve token templates in each registry entry against this install. Tokens:
 /// the shared set (see [`Tokens`]) plus `%APP_KEY%`
 /// (= `Software\<publisher>\<product_id>`).
-fn expand_registry(
-    payload: &InstallerPayload,
-    install_dir: &Path,
-) -> Vec<common::models::RegEntry> {
-    use common::models::{RegEntry, RegValue};
+fn expand_registry(payload: &InstallerPayload, install_dir: &Path) -> Vec<RegEntry> {
     let tk = Tokens::new(payload, install_dir);
     let app_key = format!(r"Software\{}\{}", tk.publisher, tk.product_id);
     let sub = |s: &str| tk.base(s).replace("%APP_KEY%", &app_key);
@@ -487,7 +489,9 @@ pub fn launch_product(install_dir: &Path, exe_rel: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::models::{Manifest, PayloadKind, ShortcutEntry};
+    use common::model::manifest::Manifest;
+    use common::model::payload_kind::PayloadKind;
+    use common::model::shortcut_entry::ShortcutEntry;
     use std::collections::HashMap;
 
     fn payload_with(shortcuts: Vec<ShortcutEntry>) -> InstallerPayload {
@@ -516,7 +520,8 @@ mod tests {
             purge_unknown_files: false,
             skip_license: false,
             skip_path: false,
-            install_dir_restriction: common::models::InstallDirRestriction::Enforce,
+            install_dir_restriction:
+                common::model::install_dir_restriction::InstallDirRestriction::Enforce,
             default_install_dir: None,
             upgrade_minimal_ui: false,
             show_uninstall_complete: false,

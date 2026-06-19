@@ -3,9 +3,12 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use common::models::{
-    InstallDirRestriction, PluginPhase, RegEntry, RegKind, RegValue, ShortcutEntry,
-};
+use common::model::install_dir_restriction::InstallDirRestriction;
+use common::model::plugin_phase::PluginPhase;
+use common::model::reg_entry::RegEntry;
+use common::model::reg_kind::RegKind;
+use common::model::reg_value::RegValue;
+use common::model::shortcut_entry::ShortcutEntry;
 use serde::Deserialize;
 use std::path::PathBuf;
 

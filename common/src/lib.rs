@@ -4,7 +4,7 @@
 pub mod assoc;
 pub mod i18n;
 pub mod log;
-pub mod models;
+pub mod model;
 pub mod paths;
 pub mod plugin;
 pub mod registry;

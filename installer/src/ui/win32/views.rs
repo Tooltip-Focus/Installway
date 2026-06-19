@@ -11,7 +11,8 @@ use super::{
     STATE, WIN_H, WIN_W, tr,
 };
 use crate::ui::helpers::{self};
-use common::models::{InstallerPayload, PayloadKind};
+use common::model::installer_payload::InstallerPayload;
+use common::model::payload_kind::PayloadKind;
 use common::utils::wide;
 use std::path::Path;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};

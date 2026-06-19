@@ -129,7 +129,9 @@ struct Window {
     prog: Arc<Mutex<Prog>>,
 }
 
-unsafe fn build_window(payload: &common::models::InstallerPayload) -> Result<Window> {
+unsafe fn build_window(
+    payload: &common::model::installer_payload::InstallerPayload,
+) -> Result<Window> {
     helpers::init_progress_class();
     let hinstance = unsafe { GetModuleHandleW(PCWSTR::null()) }?;
 
@@ -353,7 +355,7 @@ unsafe fn apply_fonts(hwnd: HWND) {
     });
 }
 
-unsafe fn build_controls(hwnd: HWND, payload: &common::models::InstallerPayload) {
+unsafe fn build_controls(hwnd: HWND, payload: &common::model::installer_payload::InstallerPayload) {
     let hinst = unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() };
     let hinst = HINSTANCE(hinst.0);
     let tr = tr();
