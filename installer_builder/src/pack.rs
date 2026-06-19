@@ -49,7 +49,11 @@ pub fn run(args: &PackArgs) -> Result<()> {
 
     println!("Mode: {}", if is_patch { "PATCH" } else { "FULL" });
 
-    let signing = load_signing_key(&args.priv_key)?;
+    let signing = match (&args.priv_key, &args.priv_key_literal) {
+        (Some(path), _) => load_signing_key(path)?,
+        (None, Some(hex)) => parse_signing_key_hex(hex)?,
+        (None, None) => unreachable!("validated in PackArgs::resolve"),
+    };
 
     // Toolchain-free mode: prebuilt stub + uninstaller supplied, so we never
     // invoke cargo. The stub already has its public key baked in.
@@ -59,19 +63,24 @@ pub fn run(args: &PackArgs) -> Result<()> {
     }
     let pub_key_hex: Option<String> = if prebuilt {
         println!("Toolchain-free mode: using prebuilt binaries (no cargo build)");
-        if args.pub_key.is_some() {
+        if args.pub_key.is_some() || args.pub_key_literal.is_some() {
             println!(
-                "warning: --pub-key is ignored in toolchain-free mode - the stub \
-                 (installer.exe) carries its own compiled-in key; --priv-key must match it"
+                "warning: --pub-key / --pub-key-literal is ignored in toolchain-free mode - \
+                 the stub (installer.exe) carries its own compiled-in key; \
+                 --priv-key / --priv-key-literal must match it"
             );
         }
         None
     } else {
-        let p = args
-            .pub_key
-            .as_ref()
-            .context("--pub-key is required (omit it only when using --installer-stub)")?;
-        Some(load_pub_key_hex(p)?)
+        let hex = match (&args.pub_key, &args.pub_key_literal) {
+            (Some(path), _) => load_pub_key_hex(path)?,
+            (None, Some(hex)) => validate_pub_key_hex(hex)?,
+            (None, None) => bail!(
+                "--pub-key or --pub-key-literal is required \
+                 (omit it only when using --installer-stub)"
+            ),
+        };
+        Some(hex)
     };
 
     // Plugins: read each DLL for its hash + in-zip name; the bytes are bundled
@@ -327,8 +336,12 @@ fn self_verify(setup: &Path) -> Result<()> {
 
 fn load_signing_key(path: &Path) -> Result<SigningKey> {
     let hex_data = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let bytes = hex::decode(hex_data.trim())
-        .with_context(|| format!("decode hex private key {}", path.display()))?;
+    parse_signing_key_hex(hex_data.trim())
+        .with_context(|| format!("invalid private key in {}", path.display()))
+}
+
+fn parse_signing_key_hex(hex: &str) -> Result<SigningKey> {
+    let bytes = hex::decode(hex.trim()).context("decode hex private key")?;
     let arr: [u8; 32] = bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("private key must be 32 bytes"))?;
@@ -337,13 +350,17 @@ fn load_signing_key(path: &Path) -> Result<SigningKey> {
 
 fn load_pub_key_hex(path: &Path) -> Result<String> {
     let hex_data = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let hex_data = hex_data.trim().to_string();
-    let bytes = hex::decode(&hex_data)
-        .with_context(|| format!("decode hex public key {}", path.display()))?;
+    validate_pub_key_hex(hex_data.trim())
+        .with_context(|| format!("invalid public key in {}", path.display()))
+}
+
+fn validate_pub_key_hex(hex: &str) -> Result<String> {
+    let hex = hex.trim().to_string();
+    let bytes = hex::decode(&hex).context("decode hex public key")?;
     if bytes.len() != 32 {
         bail!("public key must be 32 bytes");
     }
-    Ok(hex_data)
+    Ok(hex)
 }
 
 /// Reject two paths differing only by case: on case-insensitive NTFS they'd map
@@ -840,5 +857,52 @@ mod tests {
         let long = "x".repeat(80);
         let t = trimmed_title(&long);
         assert!(t.ends_with("...") && t.chars().count() == 63);
+    }
+
+    #[test]
+    fn signing_key_literal_valid() {
+        let hex = "a".repeat(64); // 32 bytes of 0xaa
+        assert!(parse_signing_key_hex(&hex).is_ok());
+    }
+
+    #[test]
+    fn signing_key_literal_with_whitespace() {
+        let hex = format!("  {}\n", "b".repeat(64));
+        assert!(parse_signing_key_hex(&hex).is_ok());
+    }
+
+    #[test]
+    fn signing_key_literal_bad_hex() {
+        assert!(parse_signing_key_hex("not-hex-at-all").is_err());
+    }
+
+    #[test]
+    fn signing_key_literal_wrong_length() {
+        let hex = "ab".repeat(16); // 16 bytes, not 32
+        assert!(parse_signing_key_hex(&hex).is_err());
+    }
+
+    #[test]
+    fn pub_key_literal_valid() {
+        let hex = "cc".repeat(32);
+        let result = validate_pub_key_hex(&hex).unwrap();
+        assert_eq!(result, hex);
+    }
+
+    #[test]
+    fn pub_key_literal_with_whitespace() {
+        let hex = format!("  {}\n", "dd".repeat(32));
+        assert!(validate_pub_key_hex(&hex).is_ok());
+    }
+
+    #[test]
+    fn pub_key_literal_bad_hex() {
+        assert!(validate_pub_key_hex("not-hex").is_err());
+    }
+
+    #[test]
+    fn pub_key_literal_wrong_length() {
+        let hex = "ab".repeat(16); // 16 bytes, not 32
+        assert!(validate_pub_key_hex(&hex).is_err());
     }
 }
