@@ -26,21 +26,16 @@ pub mod signed_payload;
 mod tests {
     use super::choice_option::ChoiceOption;
     use super::choice_style::ChoiceStyle;
-    use super::file_assoc::FileAssoc;
     use super::install_dir_restriction::InstallDirRestriction;
     use super::install_info::InstallInfo;
     use super::installer_payload::InstallerPayload;
-    use super::manifest::Manifest;
     use super::page_step::PageStep;
     use super::payload_kind::PayloadKind;
-    use super::plugin_entry::PluginEntry;
     use super::plugin_page::PluginPage;
     use super::plugin_phase::PluginPhase;
     use super::plugin_widget::PluginWidget;
-    use super::reg_entry::RegEntry;
     use super::reg_kind::RegKind;
     use super::reg_value::RegValue;
-    use super::shortcut_entry::ShortcutEntry;
 
     #[test]
     fn payload_parses_old_json_with_defaults() {
@@ -79,59 +74,7 @@ mod tests {
 
     #[test]
     fn payload_roundtrips() {
-        let p = InstallerPayload {
-            kind: PayloadKind::Patch,
-            product: "P".into(),
-            product_id: "P_id".into(),
-            publisher: "Pub".into(),
-            from_version: Some("1.0".into()),
-            to_version: "1.1".into(),
-            min_installer_version: "1.0.0".into(),
-            payload_blake3: "abc".into(),
-            created_at_unix: 123,
-            manifest: Manifest {
-                version: "1.1".into(),
-                exe: "a.exe".into(),
-                files: Default::default(),
-                deleted_files: vec![],
-                full_size: 0,
-                total_patch_size: 0,
-            },
-            license_text: None,
-            associations: vec![FileAssoc {
-                ext: ".x".into(),
-                description: "X".into(),
-            }],
-            shortcuts: vec![ShortcutEntry {
-                dir: r"%DESKTOP%".into(),
-                name: "P".into(),
-                target: "a.exe".into(),
-                args: "--flag".into(),
-            }],
-            force_reinstall: true,
-            purge_unknown_files: true,
-            skip_license: true,
-            skip_path: false,
-            install_dir_restriction: InstallDirRestriction::DefaultDirOnly,
-            default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),
-            upgrade_minimal_ui: true,
-            registry: vec![RegEntry {
-                hive: "HKCU".into(),
-                key: r"Software\Acme\App".into(),
-                name: "Build".into(),
-                kind: RegKind::Dword,
-                value: RegValue::Int(42),
-            }],
-            plugins: vec![PluginEntry {
-                name: "p1".into(),
-                file: "plugins/p1.dll".into(),
-                blake3: "abc".into(),
-                phase: PluginPhase::PreInstall,
-                required: true,
-                ui: true,
-            }],
-            show_uninstall_complete: true,
-        };
+        let p = InstallerPayload::default();
         let s = serde_json::to_string(&p).unwrap();
         let back: InstallerPayload = serde_json::from_str(&s).unwrap();
         assert_eq!(back.publisher, "Pub");

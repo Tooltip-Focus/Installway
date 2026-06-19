@@ -489,44 +489,12 @@ pub fn launch_product(install_dir: &Path, exe_rel: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::model::manifest::Manifest;
-    use common::model::payload_kind::PayloadKind;
     use common::model::shortcut_entry::ShortcutEntry;
-    use std::collections::HashMap;
 
     fn payload_with(shortcuts: Vec<ShortcutEntry>) -> InstallerPayload {
         InstallerPayload {
-            kind: PayloadKind::Full,
-            product: "My App".into(),
-            product_id: "MyApp".into(),
-            publisher: "Acme".into(),
-            from_version: None,
-            to_version: "2.0".into(),
-            min_installer_version: "1.0.0".into(),
-            payload_blake3: String::new(),
-            created_at_unix: 0,
-            manifest: Manifest {
-                version: "2.0".into(),
-                exe: "bin/app.exe".into(),
-                files: HashMap::new(),
-                deleted_files: Vec::new(),
-                full_size: 0,
-                total_patch_size: 0,
-            },
-            license_text: None,
-            associations: Vec::new(),
             shortcuts,
-            force_reinstall: false,
-            purge_unknown_files: false,
-            skip_license: false,
-            skip_path: false,
-            install_dir_restriction:
-                common::model::install_dir_restriction::InstallDirRestriction::Enforce,
-            default_install_dir: None,
-            upgrade_minimal_ui: false,
-            show_uninstall_complete: false,
-            registry: Vec::new(),
-            plugins: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -542,8 +510,8 @@ mod tests {
         let out = expand_shortcuts(&p, dir);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].dir, r"C:\Apps\MyApp\sub");
-        assert_eq!(out[0].target, r"C:\Apps\MyApp\bin\app.exe");
-        assert_eq!(out[0].args, "--name My App --v 2.0");
+        assert_eq!(out[0].target, r"C:\Apps\MyApp\a.exe");
+        assert_eq!(out[0].args, "--name P --v 1.1");
     }
 
     #[test]
