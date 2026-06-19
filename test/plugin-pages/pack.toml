@@ -1,0 +1,29 @@
+# Real-install demo for plugin-contributed wizard pages.
+# Build it with: scripts\test-plugin-pages.ps1  (stages the payload, builds the
+# stub/uninstaller with the committed test key, builds the plugin, then packs).
+# Paths are relative to the repo root (the script runs from there).
+
+product      = "Plugin Pages Demo"
+product_id   = "pluginpagesdemo"
+publisher    = "Installway"
+to_version   = "1.0.0"
+
+input        = "test/plugin-pages/src"
+exe          = "bin/app.exe"
+skip_license = true                       # jump straight to folder pick -> plugin page
+
+# Toolchain-free pack: the prebuilt stub carries the compiled-in public key, the
+# private key signs the payload.
+installer_stub = "target/release/installer.exe"
+uninstaller    = "target/release/uninstall.exe"
+priv_key       = "test/keys/priv.key"
+out            = "test/out/setup-plugin-pages.exe"
+
+# The country-picker plugin contributes a wizard page (ui = true) and, at
+# post-install, writes the chosen country to <install_dir>/selected-country.txt.
+[[plugin]]
+name     = "country"
+dll      = "test/plugin-pages/plugins/country_picker.dll"
+phase    = "post-install"
+ui       = true
+required = true

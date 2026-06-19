@@ -97,10 +97,19 @@ fn parse_args() -> Cli {
     let mut argv: Vec<String> = std::env::args().collect();
 
     if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
-        let code = match (argv.get(idx + 1), argv.get(idx + 2), argv.get(idx + 3)) {
-            (Some(dll), Some(func), Some(ctx)) => {
-                common::plugin::host_main(Path::new(dll), func, Path::new(ctx))
-            }
+        // `--run-plugin <dll> <func> [<pipe>]`. The context arrives on stdin; the
+        // optional pipe carries the page descriptor back (pages only).
+        let code = match (argv.get(idx + 1), argv.get(idx + 2)) {
+            (Some(dll), Some(func)) => common::plugin::host_main(
+                Path::new(dll),
+                func,
+                argv.get(idx + 3)
+                    .filter(|s| !s.is_empty())
+                    .map(String::as_str),
+                argv.get(idx + 4)
+                    .filter(|s| !s.is_empty())
+                    .map(String::as_str),
+            ),
             _ => 2,
         };
         std::process::exit(code);
@@ -195,7 +204,19 @@ fn run(cli: Cli) -> Result<()> {
         return ui::minimal::run(loaded, default_path, launch, translator);
     }
 
-    ui::win32::run(loaded, default_path, launch, already_installed, translator)?;
+    // Extract any `ui = true` plugin DLLs for the wizard to query step by step.
+    let self_exe = std::env::current_exe()?;
+    let ui_plugins =
+        extract::extract_ui_plugins(&loaded.payload, &default_path, &self_exe, loaded.zip());
+
+    ui::win32::run(
+        loaded,
+        default_path,
+        launch,
+        already_installed,
+        translator,
+        ui_plugins,
+    )?;
     Ok(())
 }
 
@@ -222,12 +243,16 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         }
     }) as common::ProgressFn;
 
+    // No interactive UI: plugin pages fall back to their declared defaults.
+    let plugin_inputs = ui::headless_plugin_inputs(loaded, &install_dir)?;
+
     let ctx = extract::InstallCtx {
         install_dir: install_dir.clone(),
         payload: &loaded.payload,
         zip_bytes: loaded.zip(),
         cancel: Arc::new(AtomicBool::new(false)),
         on_progress: progress,
+        plugin_inputs: plugin_inputs.clone(),
     };
     extract::install(ctx)?;
     install::finalize(
@@ -235,6 +260,7 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         &loaded.payload,
         &loaded.uninstaller_bytes,
         loaded.zip(),
+        &plugin_inputs,
     )?;
 
     if launch && !loaded.payload.manifest.exe.is_empty() {

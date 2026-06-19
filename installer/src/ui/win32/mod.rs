@@ -8,6 +8,7 @@
 //! and worker logic.
 
 mod handlers;
+mod plugin_pages;
 mod views;
 
 use crate::payload::LoadedPayload;
@@ -51,6 +52,10 @@ pub(super) const ID_BANNER: usize = 1016;
 pub(super) const ID_PATH_WARN: usize = 1017;
 pub(super) const ID_PATH_WARN_ICON: usize = 1018;
 
+/// First dialog id for dynamically-built plugin-page controls. Kept well clear
+/// of the built-in ids (1001-1018); allocated sequentially in `plugin_pages`.
+pub(super) const ID_PLUGIN_BASE: usize = 5000;
+
 pub(super) const WIN_W: i32 = 700;
 pub(super) const WIN_H: i32 = 500;
 pub(super) const BANNER_H: i32 = 72;
@@ -62,6 +67,8 @@ const ACCENT_LIGHT: u32 = 0x00F3F3F3; // light gray banner card
 pub(super) enum Phase {
     License,
     Choose,
+    /// The plugin wizard's current page (driven by [`WIZARD`]).
+    Plugin,
     Progress,
     Done,
     Error,
@@ -85,6 +92,13 @@ pub(super) struct UiState {
     pub card_brush: HBRUSH,
     pub license_accepted: bool,
     pub chosen_path: Option<PathBuf>,
+    /// Runtime-built controls for plugin-contributed pages (empty with no UI
+    /// plugins). See [`plugin_pages`].
+    pub(in crate::ui::win32) plugin_fields: Vec<plugin_pages::PluginField>,
+    /// The product banner header/subheader text, captured at build so it can be
+    /// restored after a plugin page overwrote the banner with its own title.
+    pub header_text: String,
+    pub sub_text: String,
     /// Current monitor DPI (96 = 100%); drives scaled layout + fonts, updated on
     /// `WM_DPICHANGED`.
     pub dpi: i32,
@@ -100,6 +114,8 @@ thread_local! {
     pub(super) static RESTRICTION: RefCell<common::models::InstallDirRestriction> =
         const { RefCell::new(common::models::InstallDirRestriction::Enforce) };
     pub(super) static DEFAULT_PATH: RefCell<String> = const { RefCell::new(String::new()) };
+    /// The plugin-page wizard engine (None when no `ui = true` plugin).
+    pub(super) static WIZARD: RefCell<Option<plugin_pages::Wizard>> = const { RefCell::new(None) };
     static T: RefCell<common::i18n::Translator> = RefCell::new(common::i18n::Translator::default());
 }
 
@@ -116,6 +132,11 @@ fn default_path() -> String {
     DEFAULT_PATH.with(|d| d.borrow().clone())
 }
 
+/// Whether a `ui = true` plugin wizard is active.
+pub(super) fn has_plugin_pages() -> bool {
+    WIZARD.with(|w| w.borrow().is_some())
+}
+
 pub(super) fn tr() -> common::i18n::Translator {
     T.with(|t| *t.borrow())
 }
@@ -126,6 +147,7 @@ pub fn run(
     launch_flag: bool,
     already_installed: bool,
     translator: common::i18n::Translator,
+    ui_plugins: Option<crate::extract::UiPlugins>,
 ) -> Result<()> {
     // An existing install fixes the target folder: a patch must go there, and a
     // full reinstall/upgrade should too (no accidental second copy). So the
@@ -141,16 +163,39 @@ pub fn run(
     SKIP_PATH.with(|s| *s.borrow_mut() = skip_path);
     RESTRICTION.with(|r| *r.borrow_mut() = loaded.payload.install_dir_restriction);
     DEFAULT_PATH.with(|d| *d.borrow_mut() = default_path.to_string_lossy().into_owned());
+    // Seed the wizard. The extracted-DLL temp dir is held by an `Arc` shared
+    // between this guard and every background step query, so the dir survives an
+    // in-flight query even if the window closes before it returns.
+    let _ui_guard = ui_plugins.map(|u| {
+        let tmp = Arc::new(u.tmp);
+        WIZARD.with(|w| {
+            *w.borrow_mut() = Some(plugin_pages::Wizard::new(
+                u.plugins,
+                u.base_ctx,
+                u.self_exe,
+                tmp.clone(),
+            ));
+        });
+        tmp
+    });
     T.with(|t| *t.borrow_mut() = translator);
+
+    let has_plugin = has_plugin_pages();
 
     unsafe {
         let hwnd = create_window(&loaded.payload, &default_path)?;
-        // Pick the first non-skipped page; if both are skipped there is no user
-        // step, so install immediately to the default path.
+        // Pick the first interactive page. With both built-in pages skipped, the
+        // plugin wizard (if any) is the only user step; otherwise install straight
+        // to the default path.
         if skip_license && skip_path {
-            apply_phase(hwnd, Phase::Progress);
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            handlers::on_install(hwnd);
+            if has_plugin {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+                handlers::begin_plugin_wizard(hwnd);
+            } else {
+                apply_phase(hwnd, Phase::Progress);
+                let _ = ShowWindow(hwnd, SW_SHOW);
+                handlers::on_install(hwnd);
+            }
         } else {
             apply_phase(
                 hwnd,
@@ -226,6 +271,9 @@ unsafe fn create_window(
             card_brush,
             license_accepted: false,
             chosen_path: Some(default_path.to_path_buf()),
+            plugin_fields: Vec::new(),
+            header_text: String::new(),
+            sub_text: String::new(),
             dpi: 96,
         }));
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
@@ -314,6 +362,7 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
     // Accept a `-patch` suffix (e.g. `choose-patch`) to preview the patch variant.
     let phase = match view.split('-').next().unwrap_or(view) {
         "choose" => Phase::Choose,
+        "plugin" => Phase::Plugin,
         "progress" => Phase::Progress,
         "done" => Phase::Done,
         "error" => Phase::Error,
@@ -323,10 +372,85 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
     LAUNCH_FLAG.with(|l| *l.borrow_mut() = true);
     T.with(|t| *t.borrow_mut() = translator);
 
+    // `--preview plugin`: a canned one-page wizard (no real plugin/payload needed)
+    // so the dynamic renderer can be exercised.
+    if matches!(phase, Phase::Plugin) {
+        use common::models::{ChoiceOption, ChoiceStyle, PageStep, PluginPage, PluginWidget};
+        let page = PluginPage {
+            id: "region".into(),
+            title: "Choose your country".into(),
+            subtitle: "Sample plugin page (preview)".into(),
+            widgets: vec![
+                PluginWidget::Label {
+                    id: String::new(),
+                    text: "Where will you use this app?".into(),
+                },
+                PluginWidget::SingleChoice {
+                    id: "country".into(),
+                    label: "Country".into(),
+                    options: vec![
+                        ChoiceOption {
+                            label: "France".into(),
+                            value: "FR".into(),
+                        },
+                        ChoiceOption {
+                            label: "DOM-TOM".into(),
+                            value: "DOM".into(),
+                        },
+                        ChoiceOption {
+                            label: "Other".into(),
+                            value: "XX".into(),
+                        },
+                    ],
+                    style: ChoiceStyle::Radio,
+                    default: "FR".into(),
+                    required: true,
+                },
+                PluginWidget::Text {
+                    id: "license".into(),
+                    label: "License key".into(),
+                    default: String::new(),
+                    required: false,
+                    placeholder: "optional".into(),
+                    password: true,
+                    number: false,
+                    multiline: false,
+                },
+                PluginWidget::MultiChoice {
+                    id: "addons".into(),
+                    label: "Optional add-ons".into(),
+                    options: vec![
+                        ChoiceOption {
+                            label: "Documentation".into(),
+                            value: "docs".into(),
+                        },
+                        ChoiceOption {
+                            label: "Samples".into(),
+                            value: "samples".into(),
+                        },
+                    ],
+                    default: vec!["docs".into()],
+                    required: false,
+                },
+            ],
+            buttons: true,
+        };
+        let step = PageStep::Page {
+            page,
+            notice: String::new(),
+            back: true,
+        };
+        WIZARD.with(|w| *w.borrow_mut() = Some(plugin_pages::Wizard::canned(vec![step])));
+    }
+
     let default_path = PathBuf::from(r"C:\Program Files\Sample App");
     unsafe {
         let hwnd = create_window(&payload, &default_path)?;
-        apply_phase(hwnd, phase);
+        if matches!(phase, Phase::Plugin) {
+            handlers::begin_plugin_wizard(hwnd);
+        } else {
+            apply_phase(hwnd, phase);
+        }
 
         // Populate the view with believable sample content.
         match phase {
@@ -379,10 +503,27 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     let (lic, choose, prog, _done) = match phase {
         Phase::License => (true, false, false, false),
         Phase::Choose => (false, true, false, false),
+        Phase::Plugin => (false, false, false, false),
         Phase::Progress => (false, false, true, false),
         Phase::Done => (false, false, true, true),
         Phase::Error => (false, false, false, true),
     };
+
+    if phase != Phase::Plugin {
+        let (h, s) = STATE.with(|st| {
+            st.borrow()
+                .as_ref()
+                .map(|x| {
+                    let x = x.borrow();
+                    (x.header_text.clone(), x.sub_text.clone())
+                })
+                .unwrap_or_default()
+        });
+        unsafe {
+            helpers::set_dlg_text(hwnd, ID_HEADER, &h);
+            helpers::set_dlg_text(hwnd, ID_SUBHEADER, &s);
+        }
+    }
 
     show(ID_LICENSE_EDIT, lic);
     show(ID_ACCEPT_CHK, lic);
@@ -400,8 +541,9 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     show(ID_PROGRESS, prog);
     show(
         ID_STATUS,
-        phase == Phase::Progress || phase == Phase::Done || phase == Phase::Error,
+        matches!(phase, Phase::Progress | Phase::Done | Phase::Error),
     );
+
     show(ID_LAUNCH_CHK, phase == Phase::Done);
 
     show(ID_BACK_BTN, phase == Phase::Choose && !skip_license());
@@ -414,19 +556,57 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     show(ID_CLOSE_BTN, phase == Phase::Done || phase == Phase::Error);
 
     // Entering Choose: evaluate the destination folder so the warning + the
-    // Install button's enabled state reflect the current path right away.
+    // Install button's enabled state reflect the current path right away. With
+    // plugin pages pending, the primary button advances to them, so label it
+    // "Next" rather than "Install".
     if phase == Phase::Choose {
         unsafe { handlers::update_path_warning(hwnd) };
+        let label = if has_plugin_pages() {
+            "install.next"
+        } else {
+            "install.install"
+        };
+        unsafe { helpers::set_dlg_text(hwnd, ID_INSTALL_BTN, &tr().get(label)) };
     }
 
-    // With no Choose page, the License "Next" is really the install trigger.
+    // With no Choose page (and no plugin pages) the License "Next" is really the
+    // install trigger; otherwise it advances to the next page.
     if phase == Phase::License {
-        let label = if skip_path() {
+        let label = if skip_path() && !has_plugin_pages() {
             "install.install"
         } else {
             "install.next"
         };
         unsafe { helpers::set_dlg_text(hwnd, ID_NEXT_BTN, &tr().get(label)) };
+    }
+
+    // Plugin wizard: show the current page's controls + nav buttons; hide all
+    // plugin controls on the built-in phases. The primary button is always Next
+    // (we only learn it's the last page when the next step returns Done).
+    let active_plugin = if phase == Phase::Plugin {
+        plugin_pages::current_slot()
+    } else {
+        None
+    };
+    unsafe { plugin_pages::apply_visibility(hwnd, active_plugin) };
+    if phase == Phase::Plugin {
+        let has_builtin = !skip_path() || !skip_license();
+        let can_back = WIZARD.with(|w| {
+            w.borrow()
+                .as_ref()
+                .map(|z| z.wants_back() && (z.can_pop() || has_builtin))
+                .unwrap_or(false)
+        });
+        show(ID_BACK_BTN, can_back);
+        show(ID_NEXT_BTN, true);
+        show(ID_INSTALL_BTN, false);
+        show(ID_CANCEL_BTN, true);
+        show(ID_CLOSE_BTN, false);
+        unsafe {
+            // Choose may have relabeled Install to "Next"; restore Next's label.
+            helpers::set_dlg_text(hwnd, ID_NEXT_BTN, &tr().get("install.next"));
+            plugin_pages::set_banner(hwnd);
+        }
     }
 
     if phase == Phase::Done {
@@ -554,6 +734,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             apply_phase(hwnd, Phase::Error);
             LRESULT(0)
         },
+        m if m == helpers::WM_APP_PLUGIN_STEP => unsafe {
+            handlers::on_plugin_step(hwnd);
+            LRESULT(0)
+        },
+        m if m == helpers::WM_APP_PLUGIN_PROGRESS => {
+            let scaled = (wparam.0.min(100) as i32) * 100;
+            plugin_pages::update_current_progress(hwnd, scaled);
+            LRESULT(0)
+        }
         WM_CLOSE => unsafe {
             let _ = DestroyWindow(hwnd);
             LRESULT(0)

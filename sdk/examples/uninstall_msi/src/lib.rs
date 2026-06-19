@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Example Installway plugin: silently uninstall a previous MSI before the new
+//! install. Emits a `buttons: false` page with a marquee progress bar;
+//! the host auto-runs `installway_up` while that screen is shown.
 
 use std::process::Command;
 
@@ -13,11 +15,17 @@ const UPGRADE_CODE: &str = "{12021922-0000-0000-F000-1202192222AA}";
 pub struct InstallwayContext {
     abi_version: u32,
     install_dir: *const u16,
+    data_dir: *const u16,
     product: *const u16,
     product_id: *const u16,
     version: *const u16,
     exe: *const u16,
     log: Option<extern "system" fn(*const u16, *const u16)>,
+    inputs_json: *const u16,
+    emit_pages: Option<extern "system" fn(*const u16)>,
+    /// Call with a 0–100 value to drive a deterministic progress bar.
+    /// Null when the page uses `marquee: true` (infinite bar).
+    emit_progress: Option<extern "system" fn(u32)>,
 }
 
 #[link(name = "msi")]
@@ -62,6 +70,24 @@ fn find_product_code_by_upgrade_code(upgrade_code: &str) -> Option<String> {
 #[no_mangle]
 pub extern "system" fn installway_abi_version() -> u32 {
     ABI_VERSION
+}
+
+#[no_mangle]
+pub extern "system" fn installway_pages(ctx: *const InstallwayContext) -> i32 {
+    if ctx.is_null() {
+        return 1;
+    }
+    // Skip the uninstall page entirely when no previous MSI is installed.
+    if find_product_code_by_upgrade_code(UPGRADE_CODE).is_none() {
+        return 0;
+    }
+    match unsafe { (*ctx).emit_pages } {
+        Some(emit) => {
+            emit(wide(r#"{"step":"page","page":{"id":"uninstall","title":"Removing previous version","subtitle":"Uninstalling the legacy MSI — this may take a moment.","buttons":false,"widgets":[{"kind":"progress"}]}}"#).as_ptr());
+            0
+        }
+        None => 2,
+    }
 }
 
 #[no_mangle]

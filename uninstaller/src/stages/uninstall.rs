@@ -194,10 +194,11 @@ fn run_down_plugins(info: &common::models::InstallInfo, data_dir: &Path) {
         .plugins
         .iter()
         .rev()
-        .map(|p| (p.clone(), data_dir.join(&p.file)))
+        .map(|p| (p.clone(), data_dir.join(&p.file), String::new()))
         .collect();
     let ctx = common::plugin::PluginCtx {
         install_dir: info.install_dir.clone(),
+        data_dir: data_dir.to_string_lossy().into_owned(),
         product: info.product.clone(),
         product_id: info.product_id.clone(),
         version: info.version.clone(),
@@ -208,18 +209,11 @@ fn run_down_plugins(info: &common::models::InstallInfo, data_dir: &Path) {
         log_path: common::log::current_path()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
-    };
-    let ctx_path = match common::plugin::write_ctx(&ctx) {
-        Ok(p) => p,
-        Err(e) => {
-            common::log::warn(format!("plugin context: {e:#}"));
-            return;
-        }
+        ..Default::default()
     };
     if let Ok(self_exe) = std::env::current_exe() {
-        let _ = common::plugin::run_each(&self_exe, &ctx_path, &items, "down", false);
+        let _ = common::plugin::run_each(&self_exe, &ctx, &items, "down", false);
     }
-    let _ = std::fs::remove_file(&ctx_path);
 }
 
 /// Spawn the %TEMP% finalize step that deletes the app dir, the data dir, and

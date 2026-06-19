@@ -67,13 +67,14 @@ pub(super) unsafe fn build_controls(hwnd: HWND, payload: &InstallerPayload, defa
 /// Banner strip + product header + subheader (always visible).
 unsafe fn build_banner_header(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerPayload) {
     let tr = tr();
-    let header = wide(&tr.fmt(
+    let header_s = tr.fmt(
         "install.header",
         &[
             ("product", &payload.product),
             ("version", &payload.to_version),
         ],
-    ));
+    );
+    let header = wide(&header_s);
     let sub = match payload.kind {
         PayloadKind::Full => tr.get("install.sub_full"),
         PayloadKind::Patch => tr.fmt(
@@ -85,6 +86,15 @@ unsafe fn build_banner_header(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerP
         ),
     };
     let sub_w = wide(&sub);
+    // Remember the product banner so plugin pages can borrow the banner and the
+    // built-in phases can restore it (see `super::apply_phase`).
+    STATE.with(|s| {
+        if let Some(st) = s.borrow().as_ref() {
+            let mut st = st.borrow_mut();
+            st.header_text = header_s;
+            st.sub_text = sub;
+        }
+    });
 
     unsafe {
         // Banner background - a wide empty STATIC; WM_CTLCOLORSTATIC paints it.
@@ -495,6 +505,8 @@ pub(super) unsafe fn relayout(hwnd: HWND, dpi: i32) {
             }
         }
     }
+    // Plugin pages keep their own base-rect layout.
+    super::plugin_pages::relayout(hwnd, dpi);
 }
 
 pub(super) unsafe fn apply_fonts(hwnd: HWND) {
@@ -526,4 +538,5 @@ pub(super) unsafe fn apply_fonts(hwnd: HWND) {
             }
         }
     });
+    super::plugin_pages::apply_fonts(hwnd);
 }

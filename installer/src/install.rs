@@ -19,6 +19,7 @@ pub fn finalize(
     payload: &InstallerPayload,
     uninstaller_bytes: &[u8],
     zip_bytes: &[u8],
+    plugin_inputs: &common::plugin::InputsByPlugin,
 ) -> Result<()> {
     // Data dir is keyed by the registry-safe product_id (stable across
     // versions). Fall back to the app dir only if %LOCALAPPDATA% can't resolve.
@@ -145,7 +146,7 @@ pub fn finalize(
     )?;
     // Post-install plugins run last, from the data dir, with everything in
     // place and recorded.
-    run_post_install_plugins(&data_dir, payload, install_dir)?;
+    run_post_install_plugins(&data_dir, payload, install_dir, plugin_inputs)?;
 
     // Copy the live %TEMP% log next to the uninstaller for support.
     if let Some(src) = common::log::current_path() {
@@ -181,22 +182,26 @@ fn run_post_install_plugins(
     data_dir: &Path,
     payload: &InstallerPayload,
     install_dir: &Path,
+    plugin_inputs: &common::plugin::InputsByPlugin,
 ) -> Result<()> {
-    let items: Vec<_> = payload
+    let mut items = Vec::new();
+    for p in payload
         .plugins
         .iter()
         .filter(|p| p.phase == PluginPhase::PostInstall)
-        .map(|p| (p.clone(), data_dir.join(&p.file)))
-        .collect();
+    {
+        let inputs_json = match plugin_inputs.get(&p.name) {
+            Some(m) => serde_json::to_string(m)?,
+            None => String::new(),
+        };
+        items.push((p.clone(), data_dir.join(&p.file), inputs_json));
+    }
     if items.is_empty() {
         return Ok(());
     }
     let pctx = crate::extract::plugin_ctx(payload, install_dir);
-    let ctx_path = common::plugin::write_ctx(&pctx)?;
     let self_exe = std::env::current_exe()?;
-    let res = common::plugin::run_each(&self_exe, &ctx_path, &items, "up", true);
-    let _ = fs::remove_file(&ctx_path);
-    res
+    common::plugin::run_each(&self_exe, &pctx, &items, "up", true)
 }
 
 /// Precomputed install-context values for the `%TOKEN%` templates shared by

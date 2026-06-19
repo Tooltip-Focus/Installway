@@ -8,11 +8,15 @@ const INSTALLWAY_ABI_VERSION: u32 = 1;
 pub struct InstallwayContext {
     abi_version: u32,
     install_dir: *const u16,
+    data_dir: *const u16,
     product: *const u16,
     product_id: *const u16,
     version: *const u16,
     exe: *const u16,
     log: Option<extern "system" fn(*const u16, *const u16)>,
+    // Used only by custom-page plugins (see country_picker); unused here.
+    inputs_json: *const u16,
+    emit_pages: Option<extern "system" fn(*const u16)>,
 }
 
 fn wide(s: &str) -> Vec<u16> {

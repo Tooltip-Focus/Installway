@@ -86,6 +86,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
             blake3: hash,
             phase: p.phase,
             required: p.required,
+            ui: p.ui,
         });
     }
 
