@@ -88,6 +88,68 @@ associations, wizard trimming), and **packaging without a Rust toolchain** are
 all covered in the
 [documentation](https://tooltip-focus.github.io/Installway/).
 
+## Building & testing
+
+### Build
+
+```pwsh
+# debug build (all crates)
+cargo build
+
+# release build (all crates)
+cargo build --release
+
+# release build (builder only — what you ship to release machines)
+cargo build --release -p installer_builder
+```
+
+### Run all tests
+
+```pwsh
+cargo test
+```
+
+91 tests across four crates:
+
+| Crate | Tests | Coverage areas |
+|---|---|---|
+| `common` | 41 | i18n, model round-trips, BLAKE3, file utils, registry encoding, shortcuts, paths |
+| `installer` | 30 | payload verification, extract/rollback/repair, path validation, plugin wizard, UI helpers |
+| `installer_builder` | 18 | CLI arg parsing, pack options, version info, association rules |
+| `uninstaller` | 2 | cleanup file removal, directory pruning |
+
+To test a single crate:
+
+```pwsh
+cargo test -p common
+cargo test -p installer
+cargo test -p installer_builder
+cargo test -p uninstaller
+```
+
+To run a specific test by name:
+
+```pwsh
+cargo test -p installer recover_rolls_back
+```
+
+### Preview the installer UI
+
+The installer binary ships a `--preview` flag for rendering any wizard view without a real signed payload:
+
+```pwsh
+cargo build
+.\target\debug\installer.exe --preview license
+.\target\debug\installer.exe --preview license-patch   # patch-mode banner
+.\target\debug\installer.exe --preview choose
+.\target\debug\installer.exe --preview choose-patch
+.\target\debug\installer.exe --preview progress
+.\target\debug\installer.exe --preview done
+.\target\debug\installer.exe --preview error
+.\target\debug\installer.exe --preview plugin          # canned one-page wizard
+.\target\debug\installer.exe --preview minimal         # compact updater UI
+```
+
 ## License
 
 MIT © 2026 Gaëtan Dezeiraud, Louis Pinaud. See [LICENSE](LICENSE).

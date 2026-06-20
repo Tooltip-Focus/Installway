@@ -6,9 +6,9 @@
 
 use super::{
     BANNER_H, ID_ACCEPT_CHK, ID_BACK_BTN, ID_BANNER, ID_BROWSE_BTN, ID_CANCEL_BTN, ID_CLOSE_BTN,
-    ID_HEADER, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_LICENSE_EDIT, ID_NEXT_BTN, ID_PATH_EDIT,
-    ID_PATH_LABEL, ID_PATH_WARN, ID_PATH_WARN_ICON, ID_PROGRESS, ID_STATUS, ID_SUBHEADER, PAD,
-    STATE, WIN_H, WIN_W, tr,
+    ID_ERROR_BOX, ID_ERROR_ICON, ID_HEADER, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_LICENSE_EDIT,
+    ID_NEXT_BTN, ID_PATH_EDIT, ID_PATH_LABEL, ID_PATH_WARN, ID_PATH_WARN_ICON, ID_PROGRESS,
+    ID_STATUS, ID_SUBHEADER, PAD, STATE, WIN_H, WIN_W, tr,
 };
 use crate::ui::helpers::{self};
 use common::model::installer_payload::InstallerPayload;
@@ -59,6 +59,7 @@ pub(super) unsafe fn build_controls(hwnd: HWND, payload: &InstallerPayload, defa
         build_license(hwnd, hinst, payload);
         build_choose(hwnd, hinst, default_path);
         build_progress(hwnd, hinst);
+        build_error_box(hwnd, hinst);
         build_done(hwnd, hinst);
         build_buttons(hwnd, hinst);
         apply_fonts(hwnd);
@@ -300,6 +301,22 @@ unsafe fn stock_warning_icon() -> Option<windows::Win32::UI::WindowsAndMessaging
     Some(sii.hIcon)
 }
 
+/// The shell's stock error icon (large/32px), themed for the running Windows
+/// version. Leaked for the process lifetime; the OS reclaims it at exit.
+unsafe fn stock_error_icon() -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
+    use windows::Win32::UI::Shell::{
+        SHGSI_ICON, SHGSI_LARGEICON, SHGetStockIconInfo, SHSTOCKICONINFO, SIID_ERROR,
+    };
+    let mut sii = SHSTOCKICONINFO {
+        cbSize: std::mem::size_of::<SHSTOCKICONINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        SHGetStockIconInfo(SIID_ERROR, SHGSI_ICON | SHGSI_LARGEICON, &mut sii).ok()?;
+    }
+    Some(sii.hIcon)
+}
+
 /// Progress view: progress bar + status label.
 unsafe fn build_progress(hwnd: HWND, hinst: HINSTANCE) {
     unsafe {
@@ -328,6 +345,60 @@ unsafe fn build_progress(hwnd: HWND, hinst: HINSTANCE) {
             48,
             Some(hwnd),
             Some(HMENU(ID_STATUS as *mut _)),
+            Some(hinst),
+            None,
+        );
+    }
+}
+
+/// Error view: modern-Windows error icon on the left + scrollable read-only
+/// multiline edit on the right showing the full error detail.
+unsafe fn build_error_box(hwnd: HWND, hinst: HINSTANCE) {
+    const ICON_SZ: i32 = 32;
+    const ICON_GAP: i32 = 12;
+    let error_top = BANNER_H + PAD + 16;
+    let error_h = WIN_H - 148 - error_top;
+    let box_x = PAD + ICON_SZ + ICON_GAP;
+    let box_w = WIN_W - PAD * 2 - ICON_SZ - ICON_GAP;
+    unsafe {
+        let icon = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!(""),
+            WS_CHILD | WS_CLIPSIBLINGS | WINDOW_STYLE(SS_ICON | SS_REALSIZECONTROL),
+            PAD,
+            error_top,
+            ICON_SZ,
+            ICON_SZ,
+            Some(hwnd),
+            Some(HMENU(ID_ERROR_ICON as *mut _)),
+            Some(hinst),
+            None,
+        );
+        if let Ok(h) = icon
+            && let Some(hicon) = stock_error_icon()
+        {
+            SendMessageW(
+                h,
+                STM_SETICON,
+                Some(WPARAM(hicon.0 as usize)),
+                Some(LPARAM(0)),
+            );
+        }
+        let _ = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            w!(""),
+            WS_CHILD
+                | WS_CLIPSIBLINGS
+                | WS_VSCROLL
+                | WINDOW_STYLE(ES_MULTILINE | ES_READONLY | ES_LEFT),
+            box_x,
+            error_top,
+            box_w,
+            error_h,
+            Some(hwnd),
+            Some(HMENU(ID_ERROR_BOX as *mut _)),
             Some(hinst),
             None,
         );
@@ -491,6 +562,14 @@ pub(super) unsafe fn relayout(hwnd: HWND, dpi: i32) {
         ),
         (ID_PROGRESS, PAD, BANNER_H + PAD + 16, WIN_W - PAD * 2, 22),
         (ID_STATUS, PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 48),
+        (ID_ERROR_ICON, PAD, BANNER_H + PAD + 16, 32, 32),
+        (
+            ID_ERROR_BOX,
+            PAD + 32 + 12,
+            BANNER_H + PAD + 16,
+            WIN_W - PAD * 2 - 32 - 12,
+            WIN_H - 148 - (BANNER_H + PAD + 16),
+        ),
         (ID_LAUNCH_CHK, PAD, WIN_H - 124, WIN_W - PAD * 2, 22),
         (ID_BACK_BTN, PAD, btn_y, 100, 32),
         (ID_NEXT_BTN, WIN_W - PAD - 240, btn_y, 110, 32),
@@ -528,6 +607,7 @@ pub(super) unsafe fn apply_fonts(hwnd: HWND) {
                 ID_CANCEL_BTN,
                 ID_PROGRESS,
                 ID_STATUS,
+                ID_ERROR_BOX,
                 ID_CLOSE_BTN,
                 ID_LICENSE_EDIT,
                 ID_ACCEPT_CHK,

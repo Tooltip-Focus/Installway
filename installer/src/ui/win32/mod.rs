@@ -58,6 +58,8 @@ pub(super) const ID_LAUNCH_CHK: usize = 1015;
 pub(super) const ID_BANNER: usize = 1016;
 pub(super) const ID_PATH_WARN: usize = 1017;
 pub(super) const ID_PATH_WARN_ICON: usize = 1018;
+pub(super) const ID_ERROR_BOX: usize = 1019;
+pub(super) const ID_ERROR_ICON: usize = 1020;
 
 /// First dialog id for dynamically-built plugin-page controls. Kept well clear
 /// of the built-in ids (1001-1018); allocated sequentially in `plugin_pages`.
@@ -97,6 +99,7 @@ pub(super) struct UiState {
     pub font_header: HFONT,
     pub banner_brush: HBRUSH,
     pub card_brush: HBRUSH,
+    pub error_brush: HBRUSH,
     pub license_accepted: bool,
     pub chosen_path: Option<PathBuf>,
     /// Runtime-built controls for plugin-contributed pages (empty with no UI
@@ -253,6 +256,7 @@ unsafe fn create_window(
         let font_header = helpers::create_font("Segoe UI Semibold", 22, FW_SEMIBOLD.0 as i32);
         let banner_brush = CreateSolidBrush(COLORREF(ACCENT_LIGHT));
         let card_brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
+        let error_brush = CreateSolidBrush(COLORREF(0x00F2F2FF));
 
         let title = wide(&tr().fmt(
             "install.window_title",
@@ -276,6 +280,7 @@ unsafe fn create_window(
             font_header,
             banner_brush,
             card_brush,
+            error_brush,
             license_accepted: false,
             chosen_path: Some(default_path.to_path_buf()),
             plugin_fields: Vec::new(),
@@ -473,11 +478,10 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
                 handlers::update_progress(hwnd);
             }
             Phase::Error => {
-                let msg = "Sample error: the disk became full while writing bin/app.exe.";
                 helpers::set_dlg_text(
                     hwnd,
-                    ID_STATUS,
-                    &format!("{}{}", tr().get("install.err_prefix"), msg),
+                    ID_ERROR_BOX,
+                    "Sample error: the disk became full while writing bin/app.exe.",
                 );
             }
             _ => {}
@@ -531,6 +535,13 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
         }
     }
 
+    if phase == Phase::Error {
+        unsafe {
+            helpers::set_dlg_text(hwnd, ID_HEADER, &tr().get("install.err_title"));
+            helpers::set_dlg_text(hwnd, ID_SUBHEADER, &tr().get("install.err_sub"));
+        }
+    }
+
     show(ID_LICENSE_EDIT, lic);
     show(ID_ACCEPT_CHK, lic);
 
@@ -545,10 +556,9 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     }
 
     show(ID_PROGRESS, prog);
-    show(
-        ID_STATUS,
-        matches!(phase, Phase::Progress | Phase::Done | Phase::Error),
-    );
+    show(ID_STATUS, matches!(phase, Phase::Progress | Phase::Done));
+    show(ID_ERROR_BOX, phase == Phase::Error);
+    show(ID_ERROR_ICON, phase == Phase::Error);
 
     show(ID_LAUNCH_CHK, phase == Phase::Done);
 
@@ -699,6 +709,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     .unwrap_or(0)
             }))
         },
+        WM_CTLCOLOREDIT => unsafe {
+            let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
+            let ctrl = HWND(lparam.0 as *mut _);
+            let error_box = GetDlgItem(Some(hwnd), ID_ERROR_BOX as i32).unwrap_or_default();
+            if ctrl == error_box {
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, COLORREF(0x000000AA));
+                return LRESULT(STATE.with(|s| {
+                    s.borrow()
+                        .as_ref()
+                        .map(|st| st.borrow().error_brush.0 as isize)
+                        .unwrap_or(0)
+                }));
+            }
+            LRESULT(DefWindowProcW(hwnd, msg, wparam, lparam).0)
+        },
         WM_COMMAND => unsafe {
             let id = wparam.0 & 0xFFFF;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
@@ -727,16 +753,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         },
         m if m == helpers::WM_APP_ERROR => unsafe {
+            let text = if lparam.0 != 0 {
+                *Box::from_raw(lparam.0 as *mut String)
+            } else {
+                String::new()
+            };
             STATE.with(|s| {
                 if let Some(state) = s.borrow().as_ref() {
-                    let text = state.borrow().error_text.clone();
-                    helpers::set_dlg_text(
-                        hwnd,
-                        ID_STATUS,
-                        &format!("{}{}", tr().get("install.err_prefix"), text),
-                    );
+                    state.borrow_mut().error_text = text.clone();
                 }
             });
+            helpers::set_dlg_text(hwnd, ID_ERROR_BOX, &text);
             apply_phase(hwnd, Phase::Error);
             LRESULT(0)
         },
@@ -762,6 +789,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let _ = DeleteObject(st.font_header.into());
                     let _ = DeleteObject(st.banner_brush.into());
                     let _ = DeleteObject(st.card_brush.into());
+                    let _ = DeleteObject(st.error_brush.into());
                 }
             });
             PostQuitMessage(0);
