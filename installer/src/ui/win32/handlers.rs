@@ -562,12 +562,15 @@ pub(super) unsafe fn update_progress(hwnd: HWND) {
 }
 
 fn push_error(hwnd_isize: isize, msg: &str) {
-    STATE.with(|s| {
-        if let Some(state) = s.borrow().as_ref() {
-            state.borrow_mut().error_text = msg.to_string();
-        }
-    });
-    helpers::post(hwnd_isize, WM_APP_ERROR);
+    let ptr = Box::into_raw(Box::new(msg.to_string())) as isize;
+    let _ = unsafe {
+        PostMessageW(
+            Some(HWND(hwnd_isize as *mut _)),
+            WM_APP_ERROR,
+            WPARAM(0),
+            LPARAM(ptr),
+        )
+    };
 }
 
 #[cfg(test)]

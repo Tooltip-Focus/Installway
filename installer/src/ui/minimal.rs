@@ -66,7 +66,6 @@ struct Prog {
 struct State {
     cancel: Arc<AtomicBool>,
     prog: Arc<Mutex<Prog>>,
-    error: String,
     font_title: HFONT,
     font_body: HFONT,
     bg: HBRUSH,
@@ -162,7 +161,6 @@ unsafe fn build_window(
             total: 0,
             name: String::new(),
         })),
-        error: String::new(),
         font_title: create_font("Segoe UI Semibold", 20, FW_SEMIBOLD.0 as i32),
         font_body: create_font("Segoe UI", 15, FW_NORMAL.0 as i32),
         bg: unsafe { CreateSolidBrush(COLORREF(0x00FFFFFF)) },
@@ -291,12 +289,15 @@ fn spawn_worker(
 }
 
 fn post_err(hwnd_isize: isize, msg: &str) {
-    STATE.with(|s| {
-        if let Some(st) = s.borrow().as_ref() {
-            st.borrow_mut().error = msg.to_string();
-        }
-    });
-    post(hwnd_isize, WM_APP_ERROR);
+    let ptr = Box::into_raw(Box::new(msg.to_string())) as isize;
+    let _ = unsafe {
+        PostMessageW(
+            Some(HWND(hwnd_isize as *mut _)),
+            WM_APP_ERROR,
+            WPARAM(0),
+            LPARAM(ptr),
+        )
+    };
 }
 
 /// Recreate the two fonts at the given DPI and store them (deleting the old).
@@ -516,16 +517,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         },
         m if m == WM_APP_ERROR => unsafe {
-            STATE.with(|s| {
-                if let Some(st) = s.borrow().as_ref() {
-                    let e = st.borrow().error.clone();
-                    set_dlg_text(
-                        hwnd,
-                        ID_STATUS,
-                        &format!("{}{}", tr().get("install.err_prefix"), e),
-                    );
-                }
-            });
+            let text = if lparam.0 != 0 {
+                *Box::from_raw(lparam.0 as *mut String)
+            } else {
+                String::new()
+            };
+            set_dlg_text(
+                hwnd,
+                ID_STATUS,
+                &format!("{}{}", tr().get("install.err_prefix"), text),
+            );
             LRESULT(0)
         },
         WM_CLOSE => unsafe {
