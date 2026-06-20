@@ -16,6 +16,18 @@ use zip::ZipArchive;
 
 const FULL_PREFIX: &str = "full/";
 
+/// The install dir is not writable due to OS permissions; elevation may help.
+#[derive(Debug)]
+pub struct PermissionDeniedError;
+
+impl std::fmt::Display for PermissionDeniedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("permission denied")
+    }
+}
+
+impl std::error::Error for PermissionDeniedError {}
+
 /// A patch was run against the wrong installed version. The install was not
 /// modified.
 #[derive(Debug)]
@@ -540,17 +552,21 @@ fn acquire_install_lock(install_dir: &Path) -> Result<InstallLock> {
 }
 
 /// Pre-flight: make sure we can create the install dir and write into it.
-/// Catches "user picked C:\Program Files" (needs admin) up front with a clear
-/// message instead of a mid-install permission error.
+/// Catches "user picked C:\Program Files" (needs admin) up front — returns
+/// `PermissionDeniedError` so the UI can offer UAC elevation instead of a
+/// plain error message.
 fn check_writable(dir: &Path) -> Result<()> {
-    fs::create_dir_all(dir).map_err(|e| {
+    if let Err(e) = fs::create_dir_all(dir) {
         common::log::error(format!("cannot create {}: {}", dir.display(), e));
-        anyhow::anyhow!(
+        if common::elevation::is_permission_denied(&e) {
+            return Err(anyhow::Error::new(PermissionDeniedError));
+        }
+        anyhow::bail!(
             "Cannot create the install folder:\n{}\n\nChoose a folder you can write to (e.g. under your user folder). ({})",
             dir.display(),
             e
-        )
-    })?;
+        );
+    }
     let probe = long_path(&dir.join(".write_test"));
     match File::create(&probe) {
         Ok(_) => {
@@ -559,6 +575,9 @@ fn check_writable(dir: &Path) -> Result<()> {
         }
         Err(e) => {
             common::log::error(format!("not writable: {} ({})", dir.display(), e));
+            if common::elevation::is_permission_denied(&e) {
+                return Err(anyhow::Error::new(PermissionDeniedError));
+            }
             bail!(
                 "No permission to write to:\n{}\n\nThis location may require administrator rights. Choose another folder (e.g. under your user folder). ({})",
                 dir.display(),

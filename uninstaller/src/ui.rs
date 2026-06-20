@@ -737,8 +737,4 @@ impl StepCounter {
         let d = self.done.fetch_add(1, Ordering::Relaxed) + 1;
         (self.cb)(d, self.total, label);
     }
-    pub fn report(&self, label: &str) {
-        let d = self.done.load(Ordering::Relaxed);
-        (self.cb)(d, self.total, label);
-    }
 }

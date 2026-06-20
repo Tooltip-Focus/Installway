@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 pub mod assoc;
+pub mod elevation;
 pub mod i18n;
 pub mod log;
 pub mod model;

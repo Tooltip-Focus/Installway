@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Per-user install-metadata paths.
+//! Install-metadata directory paths.
 //!
 //! The uninstaller and its `installer_info.json` / `installer_manifest.json`
-//! live OUTSIDE the application folder, so deleting the app folder by hand
-//! never orphans the Add/Remove Programs entry (mirrors InstallShield's
-//! "Installation Information" folder, but per-user / no admin).
+//! live OUTSIDE the application folder so a manual delete of the app folder
+//! never orphans the Add/Remove Programs entry.
 //!
-//! Layout: `%LOCALAPPDATA%\<publisher>\Uninstall\<product>\`
+//! Per-user install:    `%LOCALAPPDATA%\<publisher>\Uninstall\<product>\`
+//! Machine-wide install: `%ProgramData%\<publisher>\Uninstall\<product>\`
 
 use std::path::PathBuf;
 
-/// Folder holding `uninstall.exe` + install metadata for one product, keyed by
-/// the registry-safe `product_id` (stable across versions). `None` only if
-/// `%LOCALAPPDATA%` can't be resolved. `sanitize_component` stays as
-/// defense-in-depth — a validated id passes through unchanged.
+/// Per-user uninstall data dir (`%LOCALAPPDATA%`). `None` if env var missing.
 pub fn uninstall_dir(publisher: &str, product_id: &str) -> Option<PathBuf> {
     let base = dirs::data_local_dir()?;
     Some(
@@ -23,6 +20,25 @@ pub fn uninstall_dir(publisher: &str, product_id: &str) -> Option<PathBuf> {
             .join("Uninstall")
             .join(sanitize_component(product_id)),
     )
+}
+
+/// Machine-wide uninstall data dir (`%ProgramData%`). `None` if env var missing.
+pub fn uninstall_dir_machine(publisher: &str, product_id: &str) -> Option<PathBuf> {
+    let base = PathBuf::from(std::env::var("PROGRAMDATA").ok()?);
+    Some(
+        base.join(sanitize_component(publisher))
+            .join("Uninstall")
+            .join(sanitize_component(product_id)),
+    )
+}
+
+/// Select the correct uninstall data dir based on whether admin is required.
+pub fn uninstall_dir_for(publisher: &str, product_id: &str, machine: bool) -> Option<PathBuf> {
+    if machine {
+        uninstall_dir_machine(publisher, product_id)
+    } else {
+        uninstall_dir(publisher, product_id)
+    }
 }
 
 /// Make a string safe to use as a single path component: drop characters

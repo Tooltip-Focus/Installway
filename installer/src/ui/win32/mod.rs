@@ -767,6 +767,48 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             apply_phase(hwnd, Phase::Error);
             LRESULT(0)
         },
+        m if m == helpers::WM_APP_PERM_ERROR => unsafe {
+            // Unbox the payload (path + plugin_inputs).
+            let payload = if lparam.0 != 0 {
+                *Box::from_raw(lparam.0 as *mut handlers::PermErrorPayload)
+            } else {
+                return LRESULT(0);
+            };
+            // Retrieve progress state so the orchestration thread can update it.
+            let progress_shared =
+                STATE.with(|s| s.borrow().as_ref().map(|st| st.borrow().progress.clone()));
+            let Some(progress_shared) = progress_shared else {
+                return LRESULT(0);
+            };
+            // Directly trigger UAC — the UAC dialog IS the user's yes/no.
+            handlers::start_elevated_install(hwnd.0 as isize, payload, progress_shared);
+            LRESULT(0)
+        },
+        m if m == helpers::WM_APP_PERM_DENIED => unsafe {
+            // UAC was cancelled or the worker failed to start.
+            let path = if lparam.0 != 0 {
+                *Box::from_raw(lparam.0 as *mut PathBuf)
+            } else {
+                PathBuf::new()
+            };
+            if !skip_path() {
+                apply_phase(hwnd, Phase::Choose);
+                message_box(hwnd, &tr().get("install.perm_denied_path"), MB_ICONWARNING);
+            } else {
+                let msg = format!(
+                    "No permission to write to:\n{}\n\nThis location requires administrator rights.",
+                    path.display()
+                );
+                STATE.with(|s| {
+                    if let Some(state) = s.borrow().as_ref() {
+                        state.borrow_mut().error_text = msg.clone();
+                    }
+                });
+                helpers::set_dlg_text(hwnd, ID_ERROR_BOX, &msg);
+                apply_phase(hwnd, Phase::Error);
+            }
+            LRESULT(0)
+        },
         m if m == helpers::WM_APP_PLUGIN_STEP => unsafe {
             handlers::on_plugin_step(hwnd);
             LRESULT(0)

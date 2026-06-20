@@ -14,23 +14,25 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Write the uninstaller + metadata to a per-user data folder outside the app
-/// directory and register the product under HKCU Uninstall.
+/// Write the uninstaller + metadata to a data folder outside the app directory
+/// and register the product in Add/Remove Programs.
 ///
-/// Keeping the uninstaller + metadata in `%LOCALAPPDATA%\<publisher>\Uninstall\
-/// <product>` means deleting the app folder by hand never orphans the
-/// Add/Remove entry.
+/// When `requires_admin` is true the data folder is `%ProgramData%\<publisher>\
+/// Uninstall\<product>` and the ARP entry goes under `HKLM`; otherwise it is
+/// `%LOCALAPPDATA%\..` and `HKCU`. This lets any user see and run the
+/// uninstaller for machine-wide installs, while keeping per-user installs
+/// invisible to other accounts.
 pub fn finalize(
     install_dir: &Path,
     payload: &InstallerPayload,
     uninstaller_bytes: &[u8],
     zip_bytes: &[u8],
     plugin_inputs: &common::plugin::InputsByPlugin,
+    requires_admin: bool,
 ) -> Result<()> {
-    // Data dir is keyed by the registry-safe product_id (stable across
-    // versions). Fall back to the app dir only if %LOCALAPPDATA% can't resolve.
-    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product_id)
-        .unwrap_or_else(|| install_dir.to_path_buf());
+    let data_dir =
+        common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, requires_admin)
+            .unwrap_or_else(|| install_dir.to_path_buf());
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("create uninstall data dir {}", data_dir.display()))?;
 
@@ -64,8 +66,7 @@ pub fn finalize(
     common::utils::write_atomic(&uninstaller_path, uninstaller_bytes)
         .with_context(|| format!("write {}", uninstaller_path.display()))?;
 
-    // The HKCU Uninstall subkey IS the product_id (validated registry-safe at
-    // build time) — no on-the-fly sanitization of the display name.
+    // Uninstall subkey = product_id (validated registry-safe at build time).
     let key = payload.product_id.clone();
     let info = InstallInfo {
         product: payload.product.clone(),
@@ -84,6 +85,7 @@ pub fn finalize(
         registry: registry.clone(),
         plugins: payload.plugins.clone(),
         show_uninstall_complete: payload.show_uninstall_complete,
+        requires_admin,
     };
 
     // Extract the plugin DLLs into the data dir so the uninstaller (and the
@@ -92,7 +94,7 @@ pub fn finalize(
 
     // Register the Add/Remove Programs entry. Uses the in-memory `info`, not
     // the json file, so the json can safely be written last.
-    register_uninstall(&info, &uninstaller_path)?;
+    register_uninstall(&info, &uninstaller_path, requires_admin)?;
 
     // Registry / shortcut side effects, performed BEFORE the state files are
     // written. Reconcile associations: drop any the previous install
@@ -374,12 +376,18 @@ fn remove_shortcut(e: &ShortcutEntry) {
     }
 }
 
-fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path) -> Result<()> {
+fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path, machine: bool) -> Result<()> {
     use windows::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCloseKey, RegCreateKeyExW,
+        HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE, REG_OPTION_NON_VOLATILE,
+        RegCloseKey, RegCreateKeyExW,
     };
     use windows::core::PCWSTR;
 
+    let root = if machine {
+        HKEY_LOCAL_MACHINE
+    } else {
+        HKEY_CURRENT_USER
+    };
     let sub = format!(
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
         info.registry_key
@@ -389,7 +397,7 @@ fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path) -> Result<()>
     unsafe {
         let mut hkey = HKEY::default();
         RegCreateKeyExW(
-            HKEY_CURRENT_USER,
+            root,
             PCWSTR(sub_w.as_ptr()),
             None,
             PCWSTR::null(),

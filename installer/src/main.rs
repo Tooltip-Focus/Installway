@@ -3,6 +3,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod elevation;
 mod extract;
 mod install;
 mod payload;
@@ -95,6 +96,23 @@ fn main() {
 fn parse_args() -> Cli {
     // Full argv (incl. argv[0]) so clap can name itself in any diagnostics.
     let mut argv: Vec<String> = std::env::args().collect();
+
+    if let Some(idx) = argv.iter().position(|a| a == "--elevated-worker") {
+        let code = match argv.get(idx + 1) {
+            Some(pipe_name) => match crate::elevation::run_as_worker(pipe_name) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("elevated-worker error: {e:#}");
+                    1
+                }
+            },
+            None => {
+                eprintln!("--elevated-worker requires a pipe name");
+                2
+            }
+        };
+        std::process::exit(code);
+    }
 
     if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
         // `--run-plugin <dll> <func> [<pipe>]`. The context arrives on stdin; the
@@ -196,7 +214,14 @@ fn run(cli: Cli) -> Result<()> {
 
     let prior = previous_install_dir(&loaded.payload);
     let already_installed = prior.is_some();
-    let default_path = prior.unwrap_or_else(|| default_install_path(&loaded.payload));
+    // cli.install_dir is set when the wizard re-launches itself as admin so
+    // the elevated process pre-fills the path the user originally chose.
+    let default_path = cli
+        .install_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .or(prior)
+        .unwrap_or_else(|| default_install_path(&loaded.payload));
 
     // Opt-in: an upgrade over an existing install uses the compact UI when the
     // new payload asks for it. First install always uses the full wizard.
@@ -261,6 +286,7 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         &loaded.uninstaller_bytes,
         loaded.zip(),
         &plugin_inputs,
+        false,
     )?;
 
     if launch && !loaded.payload.manifest.exe.is_empty() {
@@ -311,13 +337,23 @@ fn default_install_path(payload: &common::model::installer_payload::InstallerPay
     PathBuf::from(format!(r"C:\Users\Public\{}", product))
 }
 
-/// The folder this product was last installed to, read from `installer_info.json`
-/// in the per-user data dir. `None` if never installed or the record is missing
-/// / empty.
+/// The folder this product was last installed to. Checks the machine-wide data
+/// dir (`%ProgramData%`) first, then the per-user one (`%LOCALAPPDATA%`).
+/// `None` if never installed or the record is missing / empty.
 fn previous_install_dir(
     payload: &common::model::installer_payload::InstallerPayload,
 ) -> Option<PathBuf> {
-    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product_id)?;
+    for machine in [true, false] {
+        let data_dir =
+            common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, machine)?;
+        if let Some(dir) = read_install_dir(&data_dir) {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+fn read_install_dir(data_dir: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(data_dir.join("installer_info.json")).ok()?;
     let info: common::model::install_info::InstallInfo = serde_json::from_str(&text).ok()?;
     if info.install_dir.trim().is_empty() {

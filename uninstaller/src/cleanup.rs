@@ -10,9 +10,8 @@ use common::utils::{FS_RETRIES, FS_RETRY_DELAY, wide};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The folder this uninstaller runs from: the data dir
-/// (`%LOCALAPPDATA%\<publisher>\Uninstall\<product>`), not the app dir. The app
-/// dir is read from `installer_info.json`.
+/// The folder this uninstaller runs from (the data dir), not the app dir.
+/// The app dir is read from `installer_info.json`.
 pub fn self_dir() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
     exe.parent()
@@ -147,16 +146,21 @@ pub fn remove_empty_subdirs(install_dir: &Path) {
     common::utils::prune_empty_dirs(install_dir);
 }
 
-pub fn unregister(key: &str) {
-    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteTreeW};
+pub fn unregister(key: &str, machine: bool) {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RegDeleteTreeW};
     use windows::core::PCWSTR;
     let sub = format!(
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
         key
     );
     let sub_w = wide(&sub);
+    let root = if machine {
+        HKEY_LOCAL_MACHINE
+    } else {
+        HKEY_CURRENT_USER
+    };
     unsafe {
-        let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(sub_w.as_ptr()));
+        let _ = RegDeleteTreeW(root, PCWSTR(sub_w.as_ptr()));
     }
 }
 

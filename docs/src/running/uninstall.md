@@ -1,29 +1,39 @@
 # Uninstall
 
-`uninstall.exe` and its metadata live **outside** the application folder, in a
-per-user data dir (mirroring InstallShield's "Installation Information" folder):
+`uninstall.exe` and its metadata live **outside** the application folder so a
+manual delete never orphans the Add/Remove Programs entry.
+
+The data dir location depends on whether admin rights were required at install
+time:
+
+| Install type | Data dir | ARP entry |
+|---|---|---|
+| Per-user (default) | `%LOCALAPPDATA%\<publisher>\Uninstall\<product-id>\` | `HKCU\...\Uninstall\` |
+| Machine-wide (Program Files) | `%ProgramData%\<publisher>\Uninstall\<product-id>\` | `HKLM\...\Uninstall\` |
 
 ```text
-%LOCALAPPDATA%\<publisher>\Uninstall\<product-id>\
+<data-dir>\
     uninstall.exe
     installer_info.json        (holds the real install_dir + associations)
     installer_manifest.json
 ```
 
-So a user who deletes the app folder by hand still has a working uninstaller —
-**no orphan Add/Remove Programs entry**, like a commercial installer.
+Machine-wide installs appear in **Settings → Apps → Installed apps** for every
+user on the machine. Per-user installs are visible only to the installing user.
 
 The product appears in **Settings → Apps → Installed apps** (and classic
 Add/Remove Programs). Uninstalling runs that `uninstall.exe`, which:
 
 1. Reads `installer_info.json` to find the real `install_dir`.
-2. Walks `installer_manifest.json` and removes every tracked file.
+2. Walks `installer_manifest.json` and removes every tracked file. If
+   `requires_admin` is set and the current user is not elevated, a UAC prompt
+   is shown first and the file operations run in a hidden elevated subprocess.
 3. Removes the [shortcuts](../packaging/shortcuts.md) it created, file
    associations (only `.ext` defaults that still point at our ProgID), and any
    free-form [registry entries](../packaging/registry.md) (anti-stomp; empty
    created keys pruned).
 4. Removes `version.json` + `installer_manifest.json` and empty subdirs.
-5. Deletes the HKCU `Uninstall` registry entry.
+5. Deletes the `Uninstall` registry entry (`HKCU` or `HKLM` to match install).
 6. Spawns a `%TEMP%` stage-2 copy of itself that deletes the **app dir** and the
    **data dir** (including `uninstall.exe`), then schedules its own removal via
    `MoveFileExW(MOVEFILE_DELAY_UNTIL_REBOOT)`. No `cmd.exe`, no console flash.

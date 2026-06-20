@@ -278,6 +278,7 @@ fn spawn_worker(
             &loaded.uninstaller_bytes,
             loaded.zip(),
             &plugin_inputs,
+            false,
         ) {
             return post_err(hwnd_isize, &format!("finalize: {e}"));
         }

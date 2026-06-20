@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Uninstall step: runs from `<install_dir>\uninstall.exe`. Shows confirm dialog,
-//! then does the bulk of cleanup (files, shortcuts, registry, empty subdirs).
-//! When done, copies itself into `%TEMP%` and spawns the finalize step, then exits
-//! so finalize can delete `uninstall.exe` and the install_dir without lock issues.
-
 use crate::cleanup;
-use crate::ui::{self, StepCounter, UninstallParams};
+use crate::ui::{self, UninstallParams};
 use anyhow::{Context, Result};
 use common::model::manifest::Manifest;
 use std::os::windows::process::CommandExt;
@@ -82,13 +77,13 @@ pub fn run(silent: bool) -> Result<()> {
         return run_silent(&app_dir, &data_dir, &info, &manifest);
     }
 
-    let total_steps = manifest.files.len() as u64 + 3 /* shortcuts + state + registry */;
-
     let app_dir_owned = app_dir.clone();
     let data_dir_owned = data_dir.clone();
     let info_owned = info.clone();
     let manifest_owned = manifest.clone();
     let tr = ui::tr();
+
+    let needs_elevation = info_owned.requires_admin && !common::elevation::is_already_elevated();
 
     let params = UninstallParams {
         title: tr.fmt("uninstall.title", &[("product", &info.product)]),
@@ -102,43 +97,28 @@ pub fn run(silent: bool) -> Result<()> {
             ],
         ),
         worker: Box::new(move |progress: ui::Progress| {
-            let counter = StepCounter::new(total_steps, progress);
+            if needs_elevation {
+                if let Err(e) = run_elevated(progress) {
+                    ui::fatal(&format!("{e:#}"));
+                }
+                return;
+            }
             let tr = ui::tr();
-
-            // 0. Plugins: each `down` (reverse order), before files are removed.
-            run_down_plugins(&info_owned, &data_dir_owned);
-
-            // 1. Payload files - robust removal (retry locks, then reboot-delete).
-            for rel in manifest_owned.files.keys() {
-                let p = app_dir_owned.join(rel);
-                counter.step(&tr.fmt("uninstall.removing", &[("file", rel)]));
-                cleanup::remove_one_payload(&p);
-            }
-
-            // 2. Shortcuts + file associations. ProgID keyed by product_id;
-            //    old records (no id) fall back to the display name.
-            counter.step(&tr.get("uninstall.removing_shortcuts"));
-            cleanup::remove_shortcuts(&info_owned);
-            common::assoc::unregister(assoc_id(&info_owned), &info_owned.associations);
-            for e in &info_owned.registry {
-                common::registry::remove_if_ours(e);
-            }
-
-            // 3. App-dir state files (version.json, installer_manifest.json)
-            counter.step(&tr.get("uninstall.removing_state"));
-            cleanup::remove_app_state_files(&app_dir_owned);
-
-            // 4. Empty subdirectories in the app dir
-            counter.report(&tr.get("uninstall.finalizing"));
-            cleanup::remove_empty_subdirs(&app_dir_owned);
-
-            // 5. Registry - last so the entry stays visible until cleanup ran.
-            cleanup::unregister(&info_owned.registry_key);
-
-            // 6. Finalize: deletes app dir + data dir (incl. this exe) + itself.
-            //    The "uninstall complete" message box (when enabled) is shown by
-            //    finalize at the very end, so it appears after this window and the
-            //    finalize progress window are gone - not racing behind them.
+            do_cleanup(
+                &info_owned,
+                &manifest_owned,
+                &app_dir_owned,
+                &data_dir_owned,
+                |done, total, label| {
+                    let msg = match label {
+                        "shortcuts" => tr.get("uninstall.removing_shortcuts"),
+                        "state" => tr.get("uninstall.removing_state"),
+                        "registry" => tr.get("uninstall.finalizing"),
+                        file => tr.fmt("uninstall.removing", &[("file", file)]),
+                    };
+                    progress(done, total, &msg);
+                },
+            );
             common::log::info("spawning finalize step");
             if let Err(e) = spawn_finalize(
                 Some(&app_dir_owned),
@@ -155,6 +135,46 @@ pub fn run(silent: bool) -> Result<()> {
 
     ui::run(params);
     Ok(())
+}
+
+/// Core uninstall operations shared by the interactive and elevated-worker paths.
+/// `on_step(done, total, label)` is called before each unit of work; label is a
+/// file path for payload files, or "shortcuts" / "state" / "registry" for the
+/// three fixed phases.
+pub(crate) fn do_cleanup(
+    info: &common::model::install_info::InstallInfo,
+    manifest: &Manifest,
+    app_dir: &Path,
+    data_dir: &Path,
+    mut on_step: impl FnMut(u64, u64, &str),
+) {
+    let total = manifest.files.len() as u64 + 3;
+    let mut done = 0u64;
+    let mut step = |label: &str| {
+        done += 1;
+        on_step(done, total, label);
+    };
+
+    run_down_plugins(info, data_dir);
+
+    for rel in manifest.files.keys() {
+        step(rel);
+        cleanup::remove_one_payload(&app_dir.join(rel));
+    }
+
+    step("shortcuts");
+    cleanup::remove_shortcuts(info);
+    common::assoc::unregister(assoc_id(info), &info.associations);
+    for e in &info.registry {
+        common::registry::remove_if_ours(e);
+    }
+
+    step("state");
+    cleanup::remove_app_state_files(app_dir);
+    cleanup::remove_empty_subdirs(app_dir);
+
+    step("registry");
+    cleanup::unregister(&info.registry_key, info.requires_admin);
 }
 
 fn run_silent(
@@ -175,18 +195,47 @@ fn run_silent(
     let s = cleanup::remove_app_state_files(app_dir);
     common::log::info(format!("removed {} app state files", s));
     cleanup::remove_empty_subdirs(app_dir);
-    cleanup::unregister(&info.registry_key);
+    cleanup::unregister(&info.registry_key, info.requires_admin);
     common::log::info(format!(
-        "unregistered HKCU Uninstall\\{}",
+        "unregistered {}\\Uninstall\\{}",
+        if info.requires_admin { "HKLM" } else { "HKCU" },
         info.registry_key
     ));
-    // Silent uninstall: never show the completion box.
     spawn_finalize(Some(app_dir), data_dir, None, false)
 }
 
-/// Run each plugin's `down` (reverse install order) in isolated child
-/// processes, from the data dir. Best-effort: failures are logged, never block
-/// the uninstall.
+fn run_elevated(progress: ui::Progress) -> anyhow::Result<()> {
+    use anyhow::bail;
+    use common::elevation::{WorkerEvent, recv};
+
+    let pipe_name = common::elevation::pipe_name(std::process::id());
+    let pipe_handle = common::elevation::create_pipe_server(&pipe_name)?;
+
+    if common::elevation::spawn_elevated_worker(&pipe_name).is_err() {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(pipe_handle);
+        }
+        bail!("{}", ui::tr().get("uninstall.uac_cancelled"));
+    }
+
+    common::elevation::wait_for_client(pipe_handle)?;
+    let pipe_file = common::elevation::open_pipe_handle(pipe_handle);
+    let mut reader = common::elevation::event_reader(pipe_file);
+
+    loop {
+        match recv::<WorkerEvent, _>(&mut reader) {
+            Ok(Some(WorkerEvent::Progress { done, total, name })) => {
+                progress(done, total, &name);
+            }
+            Ok(Some(WorkerEvent::Done)) => break,
+            Ok(Some(WorkerEvent::Error { msg })) => bail!("{msg}"),
+            Ok(None) => bail!("elevated worker exited unexpectedly"),
+            Err(e) => bail!("pipe read error: {e:#}"),
+        }
+    }
+    Ok(())
+}
+
 fn run_down_plugins(info: &common::model::install_info::InstallInfo, data_dir: &Path) {
     if info.plugins.is_empty() {
         return;
@@ -217,17 +266,14 @@ fn run_down_plugins(info: &common::model::install_info::InstallInfo, data_dir: &
     }
 }
 
-/// Spawn the %TEMP% finalize step that deletes the app dir, the data dir, and
-/// itself. `app_dir` is `None` when the metadata was unreadable (skips app-dir
-/// removal). `display_name` + `show_complete` drive the optional "uninstall
-/// complete" message box finalize shows at the very end.
-fn spawn_finalize(
+/// Copies this exe to %TEMP% and spawns the finalize step detached. `app_dir`
+/// is `None` when metadata was unreadable (skips app-dir removal).
+pub(crate) fn spawn_finalize(
     app_dir: Option<&Path>,
     data_dir: &Path,
     display_name: Option<&str>,
     show_complete: bool,
 ) -> Result<()> {
-    // Hint = data-dir folder name (the product_id), so finalize's log matches.
     let product = data_dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -250,7 +296,6 @@ fn spawn_finalize(
     if let Some(dir) = app_dir {
         cmd.arg("--app-dir").arg(dir);
     }
-    // Show the completion box only when enabled and we have a display name.
     if show_complete && let Some(name) = display_name {
         cmd.arg("--display-name").arg(name).arg("--show-complete");
     }
