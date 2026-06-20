@@ -135,9 +135,19 @@ pub struct PackCli {
     #[arg(long)]
     pub priv_key: Option<PathBuf>,
 
+    /// Ed25519 private key as a hex string (useful in CI/CD pipelines).
+    /// Mutually exclusive with `--priv-key`.
+    #[arg(long, conflicts_with = "priv_key")]
+    pub priv_key_literal: Option<String>,
+
     /// Path to the Ed25519 public key file. Required only in toolchain mode.
     #[arg(long)]
     pub pub_key: Option<PathBuf>,
+
+    /// Ed25519 public key as a hex string (useful in CI/CD pipelines).
+    /// Mutually exclusive with `--pub-key`.
+    #[arg(long, conflicts_with = "pub_key")]
+    pub pub_key_literal: Option<String>,
 
     /// Prebuilt installer stub (`installer.exe`) with the key already compiled
     /// in. Requires `--uninstaller`; no Rust toolchain needed.
@@ -245,7 +255,9 @@ pub struct PackFile {
     pub show_uninstall_complete: bool,
     pub default_install_dir: Option<String>,
     pub priv_key: Option<PathBuf>,
+    pub priv_key_literal: Option<String>,
     pub pub_key: Option<PathBuf>,
+    pub pub_key_literal: Option<String>,
     pub installer_stub: Option<PathBuf>,
     pub uninstaller: Option<PathBuf>,
     pub out: Option<PathBuf>,
@@ -284,8 +296,10 @@ pub struct PackArgs {
     pub upgrade_minimal_ui: bool,
     pub show_uninstall_complete: bool,
     pub default_install_dir: Option<String>,
-    pub priv_key: PathBuf,
+    pub priv_key: Option<PathBuf>,
+    pub priv_key_literal: Option<String>,
     pub pub_key: Option<PathBuf>,
+    pub pub_key_literal: Option<String>,
     pub installer_stub: Option<PathBuf>,
     pub uninstaller: Option<PathBuf>,
     pub out: PathBuf,
@@ -310,6 +324,14 @@ impl PackArgs {
         // A missing required value (neither CLI nor config) is a clear error.
         let req = |name: &str| format!("missing '{name}' (pass --{name} or set it in --config)");
 
+        let merged_priv_key = cli.priv_key.or(file.priv_key.clone());
+        let merged_priv_key_literal = cli.priv_key_literal.or(file.priv_key_literal.clone());
+        if merged_priv_key.is_none() && merged_priv_key_literal.is_none() {
+            anyhow::bail!(
+                "missing private key: pass --priv-key <path> or --priv-key-literal <hex>"
+            );
+        }
+
         Ok(PackArgs {
             product: cli
                 .product
@@ -329,10 +351,8 @@ impl PackArgs {
                 .with_context(|| req("to-version"))?,
             input: cli.input.or(file.input).with_context(|| req("input"))?,
             exe: cli.exe.or(file.exe).with_context(|| req("exe"))?,
-            priv_key: cli
-                .priv_key
-                .or(file.priv_key)
-                .with_context(|| req("priv-key"))?,
+            priv_key: merged_priv_key,
+            priv_key_literal: merged_priv_key_literal,
             out: cli.out.or(file.out).with_context(|| req("out"))?,
 
             from_dir: cli.from_dir.or(file.from_dir),
@@ -340,6 +360,7 @@ impl PackArgs {
             license: cli.license.or(file.license),
             default_install_dir: cli.default_install_dir.or(file.default_install_dir),
             pub_key: cli.pub_key.or(file.pub_key),
+            pub_key_literal: cli.pub_key_literal.or(file.pub_key_literal),
             installer_stub: cli.installer_stub.or(file.installer_stub),
             uninstaller: cli.uninstaller.or(file.uninstaller),
 
@@ -558,7 +579,9 @@ mod tests {
             show_uninstall_complete: false,
             default_install_dir: None,
             priv_key: None,
+            priv_key_literal: None,
             pub_key: None,
+            pub_key_literal: None,
             installer_stub: None,
             uninstaller: None,
             out: None,
@@ -618,7 +641,9 @@ force_reinstall = true
     /// Missing a required field (no CLI, no file) errors naming the field.
     #[test]
     fn missing_required_errors() {
-        let err = PackArgs::resolve(empty_cli()).unwrap_err().to_string();
+        let mut cli = empty_cli();
+        cli.priv_key_literal = Some("aa".repeat(32)); // satisfy key check so product fires
+        let err = PackArgs::resolve(cli).unwrap_err().to_string();
         assert!(err.contains("product"), "got: {err}");
     }
 
@@ -783,5 +808,73 @@ force_reinstall = true
         );
         // Unknown value errors.
         assert!(resolve_with("\ninstall_dir_restriction = 'nope'\n").is_err());
+    }
+
+    // SAMPLE without a priv_key line — used to test the literal-key path.
+    const SAMPLE_NO_KEY: &str = "\
+product = 'myapp'
+product_id = 'myapp'
+publisher = 'Acme'
+to_version = '1.0'
+input = 'build/myapp'
+exe = 'myapp.exe'
+out = 'dist/setup.exe'
+";
+
+    #[test]
+    fn priv_key_literal_via_cli() {
+        let (_dir, cfg) = write_cfg(SAMPLE_NO_KEY);
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        cli.priv_key_literal = Some("ff".repeat(32));
+        let r = PackArgs::resolve(cli).unwrap();
+        assert!(r.priv_key.is_none());
+        assert_eq!(r.priv_key_literal, Some("ff".repeat(32)));
+    }
+
+    #[test]
+    fn priv_key_literal_via_file() {
+        let hex = "aa".repeat(32);
+        let (_dir, cfg) = write_cfg(&format!("{SAMPLE_NO_KEY}\npriv_key_literal = '{hex}'\n"));
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        let r = PackArgs::resolve(cli).unwrap();
+        assert!(r.priv_key.is_none());
+        assert_eq!(r.priv_key_literal, Some(hex));
+    }
+
+    #[test]
+    fn missing_priv_key_errors() {
+        let (_dir, cfg) = write_cfg(SAMPLE_NO_KEY);
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        let err = PackArgs::resolve(cli).unwrap_err().to_string();
+        assert!(err.contains("private key"), "got: {err}");
+    }
+
+    #[test]
+    fn pub_key_literal_via_cli() {
+        let (_dir, cfg) = write_cfg(SAMPLE_NO_KEY);
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        cli.priv_key_literal = Some("aa".repeat(32));
+        cli.pub_key_literal = Some("bb".repeat(32));
+        let r = PackArgs::resolve(cli).unwrap();
+        assert!(r.pub_key.is_none());
+        assert_eq!(r.pub_key_literal, Some("bb".repeat(32)));
+    }
+
+    #[test]
+    fn pub_key_literal_via_file() {
+        let hex = "cc".repeat(32);
+        let (_dir, cfg) = write_cfg(&format!(
+            "{SAMPLE_NO_KEY}\npriv_key_literal = '{}'\npub_key_literal = '{hex}'\n",
+            "aa".repeat(32)
+        ));
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        let r = PackArgs::resolve(cli).unwrap();
+        assert!(r.pub_key.is_none());
+        assert_eq!(r.pub_key_literal, Some(hex));
     }
 }

@@ -35,11 +35,16 @@ Required fields are checked after merging. See [Config file](../building/config.
 
 | Option | Required | Meaning |
 |---|---|---|
-| `--priv-key <FILE>` | yes | Ed25519 private key that signs the payload. |
-| `--pub-key <FILE>` | toolchain mode only | Public key compiled into the stub. Omit when using `--installer-stub`. |
+| `--priv-key <FILE>` | yes¹ | Ed25519 private key path that signs the payload. |
+| `--priv-key-literal <HEX>` | yes¹ | Ed25519 private key as a hex string (CI/CD pipelines). Mutually exclusive with `--priv-key`. |
+| `--pub-key <FILE>` | toolchain mode only² | Public key path compiled into the stub. Omit when using `--installer-stub`. |
+| `--pub-key-literal <HEX>` | toolchain mode only² | Public key as a hex string (CI/CD pipelines). Mutually exclusive with `--pub-key`. |
 | `--installer-stub <FILE>` | with `--uninstaller` | Prebuilt stub; switches to [toolchain-free mode](../building/toolchain.md). |
 | `--uninstaller <FILE>` | with `--installer-stub` | Prebuilt uninstaller. |
 | `--reuse-stub` | no | Skip rebuilding the stub/uninstaller if they already exist (toolchain mode). |
+
+¹ Exactly one of `--priv-key` / `--priv-key-literal` is required.
+² Exactly one of `--pub-key` / `--pub-key-literal` is required in toolchain mode (omit both when using `--installer-stub`).
 
 ### Patch mode
 

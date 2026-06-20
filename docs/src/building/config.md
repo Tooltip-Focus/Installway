@@ -17,8 +17,8 @@ input      = "build/myapp-1.0"
 exe        = "myapp.exe"
 license    = "legal/EULA-myapp-en.txt"
 assoc      = [".myx:MyApp Document", ".myz:MyApp Archive"]
-priv_key   = "keys/priv.key"
-pub_key    = "keys/pub.key"
+priv_key   = "keys/priv.key"   # path to key file; or use priv_key_literal (see below)
+pub_key    = "keys/pub.key"    # path to key file; or use pub_key_literal (see below)
 out        = "dist/setup-myapp-1.0.exe"
 
 # default install dir the UI proposes (per-app); %VAR% tokens are expanded.
@@ -47,9 +47,14 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # from_version = "0.9"
 # from_dir     = "build/myapp-0.9"
 
+# CI/CD: pass keys as hex strings instead of file paths (each mutually exclusive
+# with its path counterpart).
+# priv_key_literal = "a1b2c3..."   # 64 hex chars (32 bytes)
+# pub_key_literal  = "a1b2c3..."   # 64 hex chars (32 bytes)
+
 # toolchain-free mode (optional) — see the toolchain chapter.
 # With these set, pub_key above is IGNORED: the stub carries its own baked-in
-# key, and priv_key must match it (pack self-verifies and fails if it doesn't).
+# key, and priv_key / priv_key_literal must match it (pack self-verifies and fails if it doesn't).
 # installer_stub = "kit/installer.exe"
 # uninstaller    = "kit/uninstall.exe"
 
@@ -86,8 +91,9 @@ Run it:
 ## Required keys
 
 Via CLI **or** file: `product`, `product_id`, `publisher`, `to_version`,
-`input`, `exe`, `priv_key`, `out`. A missing one fails with a message naming it.
-An invalid `product_id` (see [Full installer](full.md)) also fails the build.
+`input`, `exe`, `out`, and exactly one of `priv_key` / `priv_key_literal`. A
+missing one fails with a message naming it. An invalid `product_id` (see [Full
+installer](full.md)) also fails the build.
 
 ## Merge rules
 
