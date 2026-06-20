@@ -124,6 +124,10 @@ pub struct InstallCtx<'a> {
     /// Collected plugin-page answers, routed per plugin name. Empty when no UI
     /// plugin contributed pages. Passed to each plugin's `up` via `inputs_json`.
     pub plugin_inputs: common::plugin::InputsByPlugin,
+    /// Machine-wide install (shared location, or the elevated worker). Selects
+    /// the data dir plugins see (`%ProgramData%` vs `%LOCALAPPDATA%`) and the
+    /// lock namespace, matching where `install::finalize` writes the metadata.
+    pub requires_admin: bool,
 }
 
 pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
@@ -153,7 +157,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
 
     // Single-instance lock per install dir, so two runs can't race on the temp
     // dirs. OS frees it on exit or crash.
-    let _install_lock = acquire_install_lock(&ctx.install_dir)?;
+    let _install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
 
     if ctx.payload.force_reinstall {
         common::log::info("force_reinstall set: skipping version check, reinstalling from scratch");
@@ -165,8 +169,9 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
             .from_version
             .as_deref()
             .context("patch payload missing from_version")?;
-        // Current version lives in the per-user data dir (not the app folder).
-        let current = data_dir_of(ctx.payload).and_then(|d| read_local_version(&d));
+        // Current version lives in the data dir (not the app folder), which is
+        // machine-wide or per-user depending on how it was installed.
+        let current = installed_version(ctx.payload);
         let current_ref = current.as_deref().unwrap_or("");
         if current_ref != expected_from {
             common::log::error(format!(
@@ -519,7 +524,7 @@ impl Drop for InstallLock {
     }
 }
 
-fn acquire_install_lock(install_dir: &Path) -> Result<InstallLock> {
+fn acquire_install_lock(install_dir: &Path, machine: bool) -> Result<InstallLock> {
     use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
     use windows::Win32::System::Threading::CreateMutexW;
     use windows::core::PCWSTR;
@@ -530,8 +535,10 @@ fn acquire_install_lock(install_dir: &Path) -> Result<InstallLock> {
         .to_lowercase()
         .replace('/', "\\");
     let hash = blake3::hash(key.as_bytes()).to_hex();
-    // Local\ namespace = per-session, which matches our per-user installs.
-    let name = format!("Local\\Installway-Install-{}", &hash.as_str()[..32]);
+    // Machine-wide installs use the Global\ namespace so two users can't race on
+    // the same shared folder; per-user installs stay in the per-session Local\.
+    let scope = if machine { "Global" } else { "Local" };
+    let name = format!("{}\\Installway-Install-{}", scope, &hash.as_str()[..32]);
     let wide = common::utils::wide(&name);
 
     unsafe {
@@ -555,7 +562,7 @@ fn acquire_install_lock(install_dir: &Path) -> Result<InstallLock> {
 /// Catches "user picked C:\Program Files" (needs admin) up front — returns
 /// `PermissionDeniedError` so the UI can offer UAC elevation instead of a
 /// plain error message.
-fn check_writable(dir: &Path) -> Result<()> {
+pub(crate) fn check_writable(dir: &Path) -> Result<()> {
     if let Err(e) = fs::create_dir_all(dir) {
         common::log::error(format!("cannot create {}: {}", dir.display(), e));
         if common::elevation::is_permission_denied(&e) {
@@ -773,10 +780,21 @@ fn recover_if_interrupted(temp_dir: &Path, install_dir: &Path) {
     common::log::warn("recovery complete: install rolled back to previous state");
 }
 
-/// Per-user data dir for this payload (where version.json / manifest / info /
-/// uninstall.exe / log live). `None` only if %LOCALAPPDATA% can't be resolved.
-fn data_dir_of(payload: &InstallerPayload) -> Option<PathBuf> {
-    common::paths::uninstall_dir(&payload.publisher, &payload.product_id)
+/// Recorded installed version, checking the machine-wide data dir
+/// (`%ProgramData%`) first, then the per-user one (`%LOCALAPPDATA%`). A
+/// machine-wide install records its version under ProgramData, so a per-user-only
+/// lookup would wrongly report "not installed" and refuse every patch. `None` if
+/// neither holds a version. Mirrors `main::previous_install_dir`'s precedence.
+fn installed_version(payload: &InstallerPayload) -> Option<String> {
+    for machine in [true, false] {
+        if let Some(dir) =
+            common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, machine)
+            && let Some(v) = read_local_version(&dir)
+        {
+            return Some(v);
+        }
+    }
+    None
 }
 
 /// Extract the `phase` plugins from the payload zip to `%TEMP%`, run their `up`
@@ -816,7 +834,7 @@ fn run_zip_plugins(
         };
         items.push((p, dst, inputs_json));
     }
-    let pctx = plugin_ctx(ctx.payload, &ctx.install_dir);
+    let pctx = plugin_ctx(ctx.payload, &ctx.install_dir, ctx.requires_admin);
     let self_exe = std::env::current_exe()?;
     let res = common::plugin::run_each(&self_exe, &pctx, &items, "up", true);
     let _ = fs::remove_dir_all(&tmp);
@@ -824,10 +842,17 @@ fn run_zip_plugins(
 }
 
 /// Build the plugin context from a payload + chosen install dir. Shared with
-/// the post-install (finalize) and uninstall paths.
-pub fn plugin_ctx(payload: &InstallerPayload, install_dir: &Path) -> common::plugin::PluginCtx {
-    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product_id)
-        .unwrap_or_else(|| install_dir.to_path_buf());
+/// the post-install (finalize) and uninstall paths. `requires_admin` selects the
+/// data dir (`%ProgramData%` vs `%LOCALAPPDATA%`) so plugins see the same dir
+/// `install::finalize` writes to and the uninstaller later reads from.
+pub fn plugin_ctx(
+    payload: &InstallerPayload,
+    install_dir: &Path,
+    requires_admin: bool,
+) -> common::plugin::PluginCtx {
+    let data_dir =
+        common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, requires_admin)
+            .unwrap_or_else(|| install_dir.to_path_buf());
     common::plugin::PluginCtx {
         install_dir: install_dir.to_string_lossy().into_owned(),
         data_dir: data_dir.to_string_lossy().into_owned(),
@@ -917,7 +942,10 @@ pub fn extract_ui_plugins(
     }
     Some(UiPlugins {
         plugins,
-        base_ctx: plugin_ctx(payload, install_dir),
+        // UI pages run in the main process before elevation is decided; they
+        // describe choices and don't persist state, so the per-user data dir is
+        // fine here.
+        base_ctx: plugin_ctx(payload, install_dir, false),
         self_exe: self_exe.to_path_buf(),
         tmp,
     })

@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::BST_CHECKED;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -469,6 +469,11 @@ unsafe fn commit_install(hwnd: HWND) {
                 helpers::post(hwnd_isize, WM_APP_PROGRESS);
             })
         };
+        // Machine-wide iff the target is a shared location (e.g. Program Files);
+        // catches an already-admin run that doesn't trip the PermissionDenied
+        // elevation path. A non-machine dir that still needs admin is handled by
+        // the elevated worker (which forces requires_admin = true).
+        let requires_admin = common::paths::is_machine_location(&pb);
         let ctx = InstallCtx {
             install_dir: pb.clone(),
             payload: &loaded.payload,
@@ -476,6 +481,7 @@ unsafe fn commit_install(hwnd: HWND) {
             cancel: cancel.clone(),
             on_progress: progress_cb,
             plugin_inputs: plugin_inputs.clone(),
+            requires_admin,
         };
         if let Err(e) = install(ctx) {
             if e.downcast_ref::<crate::extract::PermissionDeniedError>()
@@ -493,7 +499,7 @@ unsafe fn commit_install(hwnd: HWND) {
             &loaded.uninstaller_bytes,
             loaded.zip(),
             &plugin_inputs,
-            false,
+            requires_admin,
         ) {
             push_error(hwnd_isize, &format!("finalize: {e}"));
             return;
@@ -614,89 +620,32 @@ pub(super) fn start_elevated_install(
     progress_shared: Arc<Mutex<super::ProgressState>>,
 ) {
     thread::spawn(move || {
-        let pipe_name = common::elevation::pipe_name(std::process::id());
-
-        let pipe_handle = match common::elevation::create_pipe_server(&pipe_name) {
-            Ok(h) => h,
-            Err(e) => {
-                push_error(hwnd_isize, &format!("pipe setup failed: {e:#}"));
-                return;
+        let result = crate::elevation::run_elevated_install(
+            &payload.path,
+            &payload.plugin_inputs,
+            |done, total, name| {
+                if let Ok(mut g) = progress_shared.lock() {
+                    g.done = done;
+                    g.total = total;
+                    g.name = name.to_string();
+                }
+                helpers::post(hwnd_isize, WM_APP_PROGRESS);
+            },
+        );
+        match result {
+            Ok(()) => helpers::post(hwnd_isize, WM_APP_DONE),
+            Err(e) if e.is::<crate::elevation::UacCancelledError>() => {
+                let ptr = Box::into_raw(Box::new(payload.path)) as isize;
+                let _ = unsafe {
+                    PostMessageW(
+                        Some(HWND(hwnd_isize as *mut _)),
+                        WM_APP_PERM_DENIED,
+                        WPARAM(0),
+                        LPARAM(ptr),
+                    )
+                };
             }
-        };
-
-        // Trigger UAC — blocks until the user accepts or cancels.
-        if common::elevation::spawn_elevated_worker(&pipe_name).is_err() {
-            // User cancelled UAC.
-            unsafe {
-                let _ = CloseHandle(pipe_handle);
-            }
-            let ptr = Box::into_raw(Box::new(payload.path)) as isize;
-            let _ = unsafe {
-                PostMessageW(
-                    Some(HWND(hwnd_isize as *mut _)),
-                    WM_APP_PERM_DENIED,
-                    WPARAM(0),
-                    LPARAM(ptr),
-                )
-            };
-            return;
-        }
-
-        // UAC approved — wait for the worker process to connect.
-        if let Err(e) = common::elevation::wait_for_client(pipe_handle) {
-            push_error(hwnd_isize, &format!("worker connect failed: {e:#}"));
-            unsafe {
-                let _ = CloseHandle(pipe_handle);
-            }
-            return;
-        }
-
-        let mut pipe = common::elevation::open_pipe_handle(pipe_handle);
-
-        // Send the install command.
-        let cmd = common::elevation::InstallWorkerCommand {
-            install_dir: payload.path,
-            plugin_inputs: payload.plugin_inputs,
-        };
-        if let Err(e) = (|| -> anyhow::Result<()> {
-            use std::io::Write;
-            serde_json::to_writer(&mut pipe, &cmd)?;
-            pipe.write_all(b"\n")?;
-            Ok(())
-        })() {
-            push_error(hwnd_isize, &format!("send command failed: {e:#}"));
-            return;
-        }
-
-        // Read progress events until done or error.
-        let mut reader = common::elevation::event_reader(pipe);
-        loop {
-            match common::elevation::recv::<common::elevation::WorkerEvent, _>(&mut reader) {
-                Ok(Some(common::elevation::WorkerEvent::Progress { done, total, name })) => {
-                    if let Ok(mut g) = progress_shared.lock() {
-                        g.done = done;
-                        g.total = total;
-                        g.name = name;
-                    }
-                    helpers::post(hwnd_isize, WM_APP_PROGRESS);
-                }
-                Ok(Some(common::elevation::WorkerEvent::Done)) => {
-                    helpers::post(hwnd_isize, WM_APP_DONE);
-                    break;
-                }
-                Ok(Some(common::elevation::WorkerEvent::Error { msg })) => {
-                    push_error(hwnd_isize, &msg);
-                    break;
-                }
-                Ok(None) => {
-                    push_error(hwnd_isize, "elevated worker exited unexpectedly");
-                    break;
-                }
-                Err(e) => {
-                    push_error(hwnd_isize, &format!("pipe read error: {e:#}"));
-                    break;
-                }
-            }
+            Err(e) => push_error(hwnd_isize, &format!("{e:#}")),
         }
     });
 }

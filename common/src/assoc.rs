@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! File-type associations under `HKCU\Software\Classes` (per-user, no admin).
+//! File-type associations under `Software\Classes`, in `HKCU` (per-user, no
+//! admin) or `HKLM` (machine-wide install, needs admin) — see the `machine`
+//! arg on [`register`] / [`unregister`].
 //!
 //! Layout written per association (extension `.myx`, product `MyApp`):
 //! ```text
-//! HKCU\Software\Classes\.myx                       (default) = "MyApp.myx"
-//! HKCU\Software\Classes\MyApp.myx                  (default) = "<description>"
-//! HKCU\Software\Classes\MyApp.myx\DefaultIcon      (default) = "<exe>",0
-//! HKCU\Software\Classes\MyApp.myx\shell\open\command (default) = "<exe>" "%1"
+//! Software\Classes\.myx                       (default) = "MyApp.myx"
+//! Software\Classes\MyApp.myx                  (default) = "<description>"
+//! Software\Classes\MyApp.myx\DefaultIcon      (default) = "<exe>",0
+//! Software\Classes\MyApp.myx\shell\open\command (default) = "<exe>" "%1"
 //! ```
 //! `progid_for` is shared by installer + uninstaller so both agree on the key
 //! names. Uninstall only clears the `.ext` default when it still points at our
@@ -49,29 +51,37 @@ pub fn stale(prior: &[FileAssoc], current: &[FileAssoc]) -> Vec<FileAssoc> {
         .collect()
 }
 
-pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc]) {
+/// Register associations. `machine` writes under `HKLM\Software\Classes`
+/// (system-wide, needs admin) instead of `HKCU\Software\Classes`, so a
+/// machine-wide install is visible to every user — not just the (elevated) admin
+/// account that ran the installer.
+pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc], machine: bool) {
     if assocs.is_empty() {
         return;
     }
+    let root = class_root(machine);
     for a in assocs {
         let ext = normalize_ext(&a.ext);
         let progid = progid_for(product_id, &ext);
 
         // ProgID class
-        if let Some(h) = create_key(&format!(r"Software\Classes\{}", progid)) {
+        if let Some(h) = create_key(root, &format!(r"Software\Classes\{}", progid)) {
             set_default(h, &a.description);
             close(h);
         }
-        if let Some(h) = create_key(&format!(r"Software\Classes\{}\DefaultIcon", progid)) {
+        if let Some(h) = create_key(root, &format!(r"Software\Classes\{}\DefaultIcon", progid)) {
             set_default(h, &format!("\"{}\",0", exe_path));
             close(h);
         }
-        if let Some(h) = create_key(&format!(r"Software\Classes\{}\shell\open\command", progid)) {
+        if let Some(h) = create_key(
+            root,
+            &format!(r"Software\Classes\{}\shell\open\command", progid),
+        ) {
             set_default(h, &format!("\"{}\" \"%1\"", exe_path));
             close(h);
         }
         // Extension -> ProgID
-        if let Some(h) = create_key(&format!(r"Software\Classes\{}", ext)) {
+        if let Some(h) = create_key(root, &format!(r"Software\Classes\{}", ext)) {
             set_default(h, &progid);
             close(h);
         }
@@ -81,19 +91,24 @@ pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc]) {
     notify_assoc_changed();
 }
 
-pub fn unregister(product_id: &str, assocs: &[FileAssoc]) {
+/// Remove associations. `machine` must match the value used at `register` time so
+/// the right hive is cleaned (`HKLM` for machine-wide, else `HKCU`).
+pub fn unregister(product_id: &str, assocs: &[FileAssoc], machine: bool) {
     if assocs.is_empty() {
         return;
     }
+    let root = class_root(machine);
     for a in assocs {
         let ext = normalize_ext(&a.ext);
         let progid = progid_for(product_id, &ext);
 
         // Only clear the extension default if it still points at us.
-        if read_default(&format!(r"Software\Classes\{}", ext)).as_deref() == Some(progid.as_str()) {
-            delete_tree(&format!(r"Software\Classes\{}", ext));
+        if read_default(root, &format!(r"Software\Classes\{}", ext)).as_deref()
+            == Some(progid.as_str())
+        {
+            delete_tree(root, &format!(r"Software\Classes\{}", ext));
         }
-        delete_tree(&format!(r"Software\Classes\{}", progid));
+        delete_tree(root, &format!(r"Software\Classes\{}", progid));
         crate::log::info(format!("removed association {} ({})", ext, progid));
     }
     notify_assoc_changed();
@@ -101,18 +116,26 @@ pub fn unregister(product_id: &str, assocs: &[FileAssoc]) {
 
 // ---- Windows registry helpers -------------------------------------------
 
-use windows::Win32::System::Registry::HKEY;
+use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
-fn create_key(sub: &str) -> Option<HKEY> {
-    use windows::Win32::System::Registry::{
-        HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCreateKeyExW,
-    };
+/// Root for the `Software\Classes` tree: `HKLM` for a machine-wide (admin)
+/// install, else the per-user `HKCU`.
+fn class_root(machine: bool) -> HKEY {
+    if machine {
+        HKEY_LOCAL_MACHINE
+    } else {
+        HKEY_CURRENT_USER
+    }
+}
+
+fn create_key(root: HKEY, sub: &str) -> Option<HKEY> {
+    use windows::Win32::System::Registry::{KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCreateKeyExW};
     use windows::core::PCWSTR;
     let w = wide(sub);
     unsafe {
         let mut hkey = HKEY::default();
         let rc = RegCreateKeyExW(
-            HKEY_CURRENT_USER,
+            root,
             PCWSTR(w.as_ptr()),
             None,
             PCWSTR::null(),
@@ -144,23 +167,15 @@ fn close(hkey: HKEY) {
     }
 }
 
-fn read_default(sub: &str) -> Option<String> {
+fn read_default(root: HKEY, sub: &str) -> Option<String> {
     use windows::Win32::System::Registry::{
-        HKEY_CURRENT_USER, KEY_READ, REG_VALUE_TYPE, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
+        KEY_READ, REG_VALUE_TYPE, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
     };
     use windows::core::PCWSTR;
     let w = wide(sub);
     unsafe {
         let mut hkey = HKEY::default();
-        if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            PCWSTR(w.as_ptr()),
-            None,
-            KEY_READ,
-            &mut hkey,
-        )
-        .is_err()
-        {
+        if RegOpenKeyExW(root, PCWSTR(w.as_ptr()), None, KEY_READ, &mut hkey).is_err() {
             return None;
         }
         let mut buf = [0u16; 512];
@@ -184,12 +199,12 @@ fn read_default(sub: &str) -> Option<String> {
     }
 }
 
-fn delete_tree(sub: &str) {
-    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteTreeW};
+fn delete_tree(root: HKEY, sub: &str) {
+    use windows::Win32::System::Registry::RegDeleteTreeW;
     use windows::core::PCWSTR;
     let w = wide(sub);
     unsafe {
-        let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(w.as_ptr()));
+        let _ = RegDeleteTreeW(root, PCWSTR(w.as_ptr()));
     }
 }
 

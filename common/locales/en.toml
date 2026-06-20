@@ -31,6 +31,7 @@ perm_denied_path = "This path requires administrator rights.\n\nPlease choose a 
 minimal_title = "Applying update"
 minimal_sub = "{product} {version}"
 minimal_done = "Update complete"
+uac_cancelled = "Administrator rights are required to install to this folder."
 
 [uninstall]
 title = "Uninstall {product}"

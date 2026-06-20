@@ -57,7 +57,7 @@ pub fn finalize(
     // Resolve the registry token templates against this install.
     let registry = expand_registry(payload, install_dir);
     // Resolve shortcut templates to absolute dir/target/args.
-    let shortcuts = expand_shortcuts(payload, install_dir);
+    let shortcuts = expand_shortcuts(payload, install_dir, requires_admin);
 
     // Atomic + retrying write: a fresh `.exe` is the prime Defender trigger
     // (it locks the new file to scan it), so a bare write could fail the
@@ -103,7 +103,7 @@ pub fn finalize(
     // Runs unconditionally (even if the new set is empty or there's no exe).
     let stale = common::assoc::stale(&prior_assocs, &payload.associations);
     if !stale.is_empty() {
-        common::assoc::unregister(&payload.product_id, &stale);
+        common::assoc::unregister(&payload.product_id, &stale, requires_admin);
     }
     if !payload.manifest.exe.is_empty() && !payload.associations.is_empty() {
         // ProgIDs are keyed by product_id. Normalize separators so the registry
@@ -112,7 +112,12 @@ pub fn finalize(
             .join(&payload.manifest.exe)
             .to_string_lossy()
             .replace('/', "\\");
-        common::assoc::register(&payload.product_id, &exe_str, &payload.associations);
+        common::assoc::register(
+            &payload.product_id,
+            &exe_str,
+            &payload.associations,
+            requires_admin,
+        );
     }
 
     // Shortcuts: config-driven. Drop `.lnk` files the previous install created
@@ -154,7 +159,13 @@ pub fn finalize(
     )?;
     // Post-install plugins run last, from the data dir, with everything in
     // place and recorded.
-    run_post_install_plugins(&data_dir, payload, install_dir, plugin_inputs)?;
+    run_post_install_plugins(
+        &data_dir,
+        payload,
+        install_dir,
+        plugin_inputs,
+        requires_admin,
+    )?;
 
     // Copy the live %TEMP% log next to the uninstaller for support.
     if let Some(src) = common::log::current_path() {
@@ -191,6 +202,7 @@ fn run_post_install_plugins(
     payload: &InstallerPayload,
     install_dir: &Path,
     plugin_inputs: &common::plugin::InputsByPlugin,
+    requires_admin: bool,
 ) -> Result<()> {
     let mut items = Vec::new();
     for p in payload
@@ -207,7 +219,7 @@ fn run_post_install_plugins(
     if items.is_empty() {
         return Ok(());
     }
-    let pctx = crate::extract::plugin_ctx(payload, install_dir);
+    let pctx = crate::extract::plugin_ctx(payload, install_dir, requires_admin);
     let self_exe = std::env::current_exe()?;
     common::plugin::run_each(&self_exe, &pctx, &items, "up", true)
 }
@@ -276,25 +288,57 @@ fn expand_registry(payload: &InstallerPayload, install_dir: &Path) -> Vec<RegEnt
 }
 
 /// Resolve each declared shortcut's token templates against this install into
-/// absolute `dir` / `target` strings (plus the verbatim `args`). Tokens:
-/// `%DESKTOP%`, `%START_MENU%` (per-user Programs), `%INSTALL_DIR%`, `%EXE%`,
-/// `%VERSION%`, `%PRODUCT%`, `%PRODUCT_ID%`, `%PUBLISHER%`, then `%VAR%` env
-/// vars. A relative `target` resolves against the install dir. A shortcut whose
-/// `dir` uses an unavailable `%DESKTOP%`/`%START_MENU%` location is skipped.
-fn expand_shortcuts(payload: &InstallerPayload, install_dir: &Path) -> Vec<ShortcutEntry> {
+/// absolute `dir` / `target` strings (plus the verbatim `args`). Location tokens:
+/// `%DESKTOP%` / `%START_MENU%` resolve to the All-Users location when the install
+/// is machine-wide and the per-user one otherwise; `%COMMON_DESKTOP%` /
+/// `%COMMON_START_MENU%` force All-Users and `%USER_DESKTOP%` / `%USER_START_MENU%`
+/// force per-user. Plus `%INSTALL_DIR%`, `%EXE%`, `%VERSION%`, `%PRODUCT%`,
+/// `%PRODUCT_ID%`, `%PUBLISHER%`, then `%VAR%` env vars. A relative `target`
+/// resolves against the install dir. A shortcut whose `dir` uses an unavailable
+/// location is skipped.
+fn expand_shortcuts(
+    payload: &InstallerPayload,
+    install_dir: &Path,
+    machine: bool,
+) -> Vec<ShortcutEntry> {
     if payload.shortcuts.is_empty() {
         return Vec::new();
     }
     let tk = Tokens::new(payload, install_dir);
-    let desktop = common::shortcuts::desktop_dir().map(|p| p.to_string_lossy().into_owned());
-    let start = common::shortcuts::start_menu_dir().map(|p| p.to_string_lossy().into_owned());
+    let s_of = |o: Option<std::path::PathBuf>| o.map(|p| p.to_string_lossy().into_owned());
+    let user_desktop = s_of(common::shortcuts::desktop_dir());
+    let user_start = s_of(common::shortcuts::start_menu_dir());
+    let common_desktop = s_of(common::shortcuts::common_desktop_dir());
+    let common_start = s_of(common::shortcuts::common_start_menu_dir());
+    // `%DESKTOP%` / `%START_MENU%` follow the install scope.
+    let desktop = if machine {
+        &common_desktop
+    } else {
+        &user_desktop
+    };
+    let start = if machine { &common_start } else { &user_start };
 
-    // Shared tokens + the location tokens, then expand %VAR% env tokens.
+    // Leave the token in place when its folder can't be resolved, so the loop
+    // below detects it as unavailable and skips that shortcut.
+    let pick = |o: &Option<String>, tok: &str| o.clone().unwrap_or_else(|| tok.to_string());
+
+    // Shared tokens + the location tokens (specific before generic), then expand
+    // %VAR% env tokens.
     let sub = |s: &str| -> String {
         let r = tk
             .base(s)
-            .replace("%DESKTOP%", desktop.as_deref().unwrap_or("%DESKTOP%"))
-            .replace("%START_MENU%", start.as_deref().unwrap_or("%START_MENU%"));
+            .replace(
+                "%COMMON_DESKTOP%",
+                &pick(&common_desktop, "%COMMON_DESKTOP%"),
+            )
+            .replace("%USER_DESKTOP%", &pick(&user_desktop, "%USER_DESKTOP%"))
+            .replace(
+                "%COMMON_START_MENU%",
+                &pick(&common_start, "%COMMON_START_MENU%"),
+            )
+            .replace("%USER_START_MENU%", &pick(&user_start, "%USER_START_MENU%"))
+            .replace("%DESKTOP%", &pick(desktop, "%DESKTOP%"))
+            .replace("%START_MENU%", &pick(start, "%START_MENU%"));
         common::utils::expand_env(&r)
     };
 
@@ -302,7 +346,8 @@ fn expand_shortcuts(payload: &InstallerPayload, install_dir: &Path) -> Vec<Short
     for s in &payload.shortcuts {
         let dir = sub(&s.dir);
         // An unresolved location token means the folder isn't available - skip.
-        if dir.contains("%DESKTOP%") || dir.contains("%START_MENU%") {
+        // Every location token ends in `DESKTOP%` or `START_MENU%`.
+        if dir.contains("DESKTOP%") || dir.contains("START_MENU%") {
             common::log::warn(format!(
                 "shortcut '{}': location {} unavailable - skipped",
                 s.name, s.dir
@@ -515,7 +560,7 @@ mod tests {
             target: "%EXE%".into(),
             args: "--name %PRODUCT% --v %VERSION%".into(),
         }]);
-        let out = expand_shortcuts(&p, dir);
+        let out = expand_shortcuts(&p, dir, false);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].dir, r"C:\Apps\MyApp\sub");
         assert_eq!(out[0].target, r"C:\Apps\MyApp\a.exe");
@@ -531,7 +576,7 @@ mod tests {
             target: "bin/helper.exe".into(),
             args: String::new(),
         }]);
-        let out = expand_shortcuts(&p, dir);
+        let out = expand_shortcuts(&p, dir, false);
         assert_eq!(out[0].target, r"C:\Apps\MyApp\bin\helper.exe");
     }
 
@@ -544,13 +589,13 @@ mod tests {
             target: r"C:\Windows\notepad.exe".into(),
             args: String::new(),
         }]);
-        let out = expand_shortcuts(&p, dir);
+        let out = expand_shortcuts(&p, dir, false);
         assert_eq!(out[0].target, r"C:\Windows\notepad.exe");
     }
 
     #[test]
     fn expand_empty_is_empty() {
         let p = payload_with(Vec::new());
-        assert!(expand_shortcuts(&p, Path::new(r"C:\x")).is_empty());
+        assert!(expand_shortcuts(&p, Path::new(r"C:\x"), false).is_empty());
     }
 }

@@ -19,6 +19,26 @@ pub fn self_dir() -> Result<PathBuf> {
         .context("locate uninstaller parent dir")
 }
 
+/// True if removing files under `dir` is blocked by OS permissions (a real ACL
+/// wall) and elevation would help. Probes by creating a throwaway file:
+/// `ERROR_ACCESS_DENIED` on *create* means we lack write rights. A sharing
+/// violation (an AV/indexer lock) is never raised by creating a new file — those
+/// are handled by the per-file retry loop, not by elevating — so this stays a
+/// clean signal. `false` when the dir is missing or already writable.
+pub fn perm_denied(dir: &Path) -> bool {
+    if !dir.exists() {
+        return false;
+    }
+    let probe = dir.join(".uninstall_write_test");
+    match fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            false
+        }
+        Err(e) => common::elevation::is_permission_denied(&e),
+    }
+}
+
 /// What happened to a file we tried to remove.
 enum Removal {
     /// Path didn't exist - nothing to do.

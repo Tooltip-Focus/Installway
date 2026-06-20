@@ -2,8 +2,13 @@
 
 You declare which `.lnk` shortcuts the installer creates in the config file.
 The installer creates them, the uninstaller removes them, and an upgrade
-reconciles the set — like associations and registry entries, **per-user, no
-admin**.
+reconciles the set — like associations and registry entries.
+
+> **Per-user vs All-Users.** A per-user install drops shortcuts in your own
+> Desktop / Start Menu; a **machine-wide install** (one that lands in a shared
+> location such as `Program Files`, so it elevates) uses the **All-Users**
+> Desktop / Start Menu, so every account sees them. The `%DESKTOP%` /
+> `%START_MENU%` tokens follow the install scope automatically (see below).
 
 > **No automatic shortcut.** Nothing is created unless you declare a
 > `[[shortcut]]`.
@@ -38,8 +43,12 @@ can reference the chosen install dir):
 
 | Token | Expands to |
 |---|---|
-| `%DESKTOP%` | the per-user Desktop folder |
-| `%START_MENU%` | the per-user Start Menu **Programs** folder |
+| `%DESKTOP%` | Desktop folder — **All-Users** for a machine-wide install, else per-user |
+| `%START_MENU%` | Start Menu **Programs** folder — All-Users for a machine-wide install, else per-user |
+| `%COMMON_DESKTOP%` | the All-Users (public) Desktop, always (needs admin) |
+| `%COMMON_START_MENU%` | the All-Users Start Menu Programs folder, always (needs admin) |
+| `%USER_DESKTOP%` | the per-user Desktop, always |
+| `%USER_START_MENU%` | the per-user Start Menu Programs folder, always |
 | `%INSTALL_DIR%` | the chosen install directory |
 | `%EXE%` | full path to the installed main exe (`--exe`) |
 | `%VERSION%` | `to-version` |
@@ -47,10 +56,12 @@ can reference the chosen install dir):
 | `%PRODUCT_ID%` | the registry-safe id |
 | `%PUBLISHER%` | publisher (sanitized) |
 
-After those, any remaining `%VAR%` is expanded as an **environment variable**
-(e.g. `%APPDATA%`, `%LOCALAPPDATA%`), so you can place a shortcut anywhere the
-user can write. A shortcut whose `dir` uses a `%DESKTOP%` / `%START_MENU%`
-location the system can't resolve is skipped (logged), not fatal.
+Use `%DESKTOP%` / `%START_MENU%` to follow the install scope automatically, or
+the `%COMMON_*%` / `%USER_*%` variants to force a specific location without
+writing the full path. After those, any remaining `%VAR%` is expanded as an
+**environment variable** (e.g. `%APPDATA%`, `%LOCALAPPDATA%`), so you can place a
+shortcut anywhere the user can write. A shortcut whose `dir` uses a location the
+system can't resolve is skipped (logged), not fatal.
 
 ## Examples
 

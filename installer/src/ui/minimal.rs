@@ -245,6 +245,31 @@ fn spawn_worker(
             Ok(l) => l,
             Err(e) => return post_err(hwnd_isize, &format!("{e}")),
         };
+        // Compact UI is non-interactive: plugin pages use their declared defaults.
+        let plugin_inputs = match crate::ui::headless_plugin_inputs(&loaded, &install_dir) {
+            Ok(m) => m,
+            Err(e) => return post_err(hwnd_isize, &format!("{e}")),
+        };
+
+        // Pre-flight write test — same check as the interactive wizard.
+        let needs_elevation = !common::elevation::is_already_elevated()
+            && matches!(
+                crate::extract::check_writable(&install_dir),
+                Err(ref e) if e.is::<crate::extract::PermissionDeniedError>()
+            );
+
+        if needs_elevation {
+            run_elevated_worker(
+                hwnd_isize,
+                &install_dir,
+                &plugin_inputs,
+                launch_flag,
+                &prog,
+                &loaded,
+            );
+            return;
+        }
+
         let prog_cb: common::ProgressFn = {
             let prog = prog.clone();
             Arc::new(move |done, total, name| {
@@ -256,11 +281,11 @@ fn spawn_worker(
                 post(hwnd_isize, WM_APP_PROGRESS);
             })
         };
-        // Compact UI is non-interactive: plugin pages use their declared defaults.
-        let plugin_inputs = match crate::ui::headless_plugin_inputs(&loaded, &install_dir) {
-            Ok(m) => m,
-            Err(e) => return post_err(hwnd_isize, &format!("{e}")),
-        };
+        // Reached when writable without elevation, or already running elevated.
+        // Machine-wide iff the target is a shared location (catches an
+        // already-admin run into Program Files); the elevated worker handles the
+        // needs-elevation path with requires_admin = true.
+        let requires_admin = common::paths::is_machine_location(&install_dir);
         let ctx = InstallCtx {
             install_dir: install_dir.clone(),
             payload: &loaded.payload,
@@ -268,6 +293,7 @@ fn spawn_worker(
             cancel,
             on_progress: prog_cb,
             plugin_inputs: plugin_inputs.clone(),
+            requires_admin,
         };
         if let Err(e) = install(ctx) {
             return post_err(hwnd_isize, &format!("{e}"));
@@ -278,7 +304,7 @@ fn spawn_worker(
             &loaded.uninstaller_bytes,
             loaded.zip(),
             &plugin_inputs,
-            false,
+            requires_admin,
         ) {
             return post_err(hwnd_isize, &format!("finalize: {e}"));
         }
@@ -287,6 +313,37 @@ fn spawn_worker(
         }
         post(hwnd_isize, WM_APP_DONE);
     });
+}
+
+fn run_elevated_worker(
+    hwnd_isize: isize,
+    install_dir: &std::path::Path,
+    plugin_inputs: &common::plugin::InputsByPlugin,
+    launch_flag: bool,
+    prog: &Arc<Mutex<Prog>>,
+    loaded: &crate::payload::LoadedPayload,
+) {
+    let result =
+        crate::elevation::run_elevated_install(install_dir, plugin_inputs, |done, total, name| {
+            if let Ok(mut p) = prog.lock() {
+                p.done = done;
+                p.total = total;
+                p.name = name.to_string();
+            }
+            post(hwnd_isize, WM_APP_PROGRESS);
+        });
+    match result {
+        Ok(()) => {
+            if launch_flag && !loaded.payload.manifest.exe.is_empty() {
+                let _ = crate::install::launch_product(install_dir, &loaded.payload.manifest.exe);
+            }
+            post(hwnd_isize, WM_APP_DONE);
+        }
+        Err(e) if e.is::<crate::elevation::UacCancelledError>() => {
+            post_err(hwnd_isize, &tr().get("install.uac_cancelled"));
+        }
+        Err(e) => post_err(hwnd_isize, &format!("{e:#}")),
+    }
 }
 
 fn post_err(hwnd_isize: isize, msg: &str) {

@@ -180,11 +180,21 @@ fn run(cli: Cli) -> Result<()> {
     }
 
     // Diagnostic: re-hash installed files against the manifest in the data dir.
+    // The metadata lives in the machine-wide (%ProgramData%) or per-user
+    // (%LOCALAPPDATA%) dir depending on how it was installed; check both.
     if cli.verify_install {
         attach_console();
-        let data_dir =
-            common::paths::uninstall_dir(&loaded.payload.publisher, &loaded.payload.product_id)
-                .context("resolve data dir")?;
+        let data_dir = [true, false]
+            .into_iter()
+            .filter_map(|machine| {
+                common::paths::uninstall_dir_for(
+                    &loaded.payload.publisher,
+                    &loaded.payload.product_id,
+                    machine,
+                )
+            })
+            .find(|d| d.join("installer_info.json").exists())
+            .context("resolve data dir - is this product installed?")?;
         return extract::verify_install(&data_dir);
     }
 
@@ -271,6 +281,9 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
     // No interactive UI: plugin pages fall back to their declared defaults.
     let plugin_inputs = ui::headless_plugin_inputs(loaded, &install_dir)?;
 
+    // Machine-wide iff the target is a shared location (Program Files, etc.).
+    // Silent runs have no auto-elevation, so location is the only signal.
+    let requires_admin = common::paths::is_machine_location(&install_dir);
     let ctx = extract::InstallCtx {
         install_dir: install_dir.clone(),
         payload: &loaded.payload,
@@ -278,6 +291,7 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         cancel: Arc::new(AtomicBool::new(false)),
         on_progress: progress,
         plugin_inputs: plugin_inputs.clone(),
+        requires_admin,
     };
     extract::install(ctx)?;
     install::finalize(
@@ -286,7 +300,7 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         &loaded.uninstaller_bytes,
         loaded.zip(),
         &plugin_inputs,
-        false,
+        requires_admin,
     )?;
 
     if launch && !loaded.payload.manifest.exe.is_empty() {
