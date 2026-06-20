@@ -454,6 +454,8 @@ unsafe fn commit_install(hwnd: HWND) {
         let loaded = match crate::payload::load_and_verify() {
             Ok(l) => l,
             Err(e) => {
+                #[cfg(feature = "hintway")]
+                crate::analytics::error(crate::analytics::classify_error(&e));
                 push_error(hwnd_isize, &format!("{e}"));
                 return;
             }
@@ -483,16 +485,24 @@ unsafe fn commit_install(hwnd: HWND) {
             plugin_inputs: plugin_inputs.clone(),
             requires_admin,
         };
+        #[cfg(feature = "hintway")]
+        crate::analytics::stage("extract");
         if let Err(e) = install(ctx) {
             if e.downcast_ref::<crate::extract::PermissionDeniedError>()
                 .is_some()
             {
+                #[cfg(feature = "hintway")]
+                crate::analytics::error("permission_denied");
                 push_perm_error(hwnd_isize, pb, plugin_inputs);
             } else {
+                #[cfg(feature = "hintway")]
+                crate::analytics::error(crate::analytics::classify_error(&e));
                 push_error(hwnd_isize, &format!("{e}"));
             }
             return;
         }
+        #[cfg(feature = "hintway")]
+        crate::analytics::stage("finalize");
         if let Err(e) = install_mod::finalize(
             &pb,
             &loaded.payload,
@@ -501,9 +511,13 @@ unsafe fn commit_install(hwnd: HWND) {
             &plugin_inputs,
             requires_admin,
         ) {
+            #[cfg(feature = "hintway")]
+            crate::analytics::error(crate::analytics::classify_error(&e));
             push_error(hwnd_isize, &format!("finalize: {e}"));
             return;
         }
+        #[cfg(feature = "hintway")]
+        crate::analytics::stage("done");
         helpers::post(hwnd_isize, WM_APP_DONE);
     });
 }
@@ -633,8 +647,14 @@ pub(super) fn start_elevated_install(
             },
         );
         match result {
-            Ok(()) => helpers::post(hwnd_isize, WM_APP_DONE),
+            Ok(()) => {
+                #[cfg(feature = "hintway")]
+                crate::analytics::stage("done");
+                helpers::post(hwnd_isize, WM_APP_DONE);
+            }
             Err(e) if e.is::<crate::elevation::UacCancelledError>() => {
+                #[cfg(feature = "hintway")]
+                crate::analytics::error("elevation_cancelled");
                 let ptr = Box::into_raw(Box::new(payload.path)) as isize;
                 let _ = unsafe {
                     PostMessageW(
@@ -645,7 +665,11 @@ pub(super) fn start_elevated_install(
                     )
                 };
             }
-            Err(e) => push_error(hwnd_isize, &format!("{e:#}")),
+            Err(e) => {
+                #[cfg(feature = "hintway")]
+                crate::analytics::error(crate::analytics::classify_error(&e));
+                push_error(hwnd_isize, &format!("{e:#}"));
+            }
         }
     });
 }

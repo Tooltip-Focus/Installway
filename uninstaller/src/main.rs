@@ -3,6 +3,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(feature = "hintway")]
+mod analytics;
 mod cleanup;
 mod stages;
 mod ui;
@@ -70,9 +72,16 @@ enum Cmd {
 
 fn main() {
     if let Err(e) = run() {
+        #[cfg(feature = "hintway")]
+        {
+            analytics::error("unknown");
+            analytics::shutdown();
+        }
         ui::fatal(&format!("{e:#}"));
         std::process::exit(1);
     }
+    #[cfg(feature = "hintway")]
+    analytics::shutdown();
 }
 
 fn run() -> Result<()> {
@@ -144,6 +153,18 @@ fn run() -> Result<()> {
             display_name,
             show_complete,
         ),
-        None => stages::uninstall::run(cli.silent),
+        None => {
+            #[cfg(feature = "hintway")]
+            {
+                let mode = if cli.silent { "silent" } else { "interactive" };
+                let data_dir = cleanup::self_dir().unwrap_or_default();
+                let privilege = match std::env::var("ProgramData") {
+                    Ok(pd) if !pd.is_empty() && data_dir.starts_with(&pd) => "admin",
+                    _ => "user",
+                };
+                analytics::init(mode, privilege);
+            }
+            stages::uninstall::run(cli.silent)
+        }
     }
 }
