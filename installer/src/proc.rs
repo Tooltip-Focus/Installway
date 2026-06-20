@@ -20,7 +20,7 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    QueryFullProcessImageNameW, WaitForSingleObject,
+    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GetWindow, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
@@ -239,6 +239,29 @@ fn is_alive(pid: u32) -> bool {
             _ => false, // can't open → treat as gone
         }
     }
+}
+
+/// Kill every process running from `path`. Returns `true` if at least one was
+/// found (regardless of whether `TerminateProcess` succeeded). Used when the
+/// uninstaller exe is locked by a leftover running instance during re-install.
+pub fn kill_if_running(path: &Path) -> bool {
+    let target_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let pids = find_pids(path, &target_name);
+    if pids.is_empty() {
+        return false;
+    }
+    for pid in pids {
+        unsafe {
+            if let Ok(h) = OpenProcess(PROCESS_TERMINATE, false, pid) {
+                let _ = TerminateProcess(h, 1);
+                let _ = CloseHandle(h);
+            }
+        }
+    }
+    true
 }
 
 fn wide_to_string(buf: &[u16]) -> String {
