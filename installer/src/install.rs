@@ -26,6 +26,7 @@ pub fn finalize(
     uninstaller_bytes: &[u8],
     zip_bytes: &[u8],
     plugin_inputs: &common::plugin::InputsByPlugin,
+    requires_admin: bool,
 ) -> Result<()> {
     // Data dir is keyed by the registry-safe product_id (stable across
     // versions). Fall back to the app dir only if %LOCALAPPDATA% can't resolve.
@@ -84,6 +85,7 @@ pub fn finalize(
         registry: registry.clone(),
         plugins: payload.plugins.clone(),
         show_uninstall_complete: payload.show_uninstall_complete,
+        requires_admin,
     };
 
     // Extract the plugin DLLs into the data dir so the uninstaller (and the

@@ -6,6 +6,7 @@
 mod cleanup;
 mod stages;
 mod ui;
+mod worker;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -79,6 +80,25 @@ fn run() -> Result<()> {
     // in any error messages. Then normalise the NSIS-style `/S` silent flag to
     // `--silent` in-place (only for indices ≥ 1 to leave the binary name alone).
     let mut argv: Vec<String> = std::env::args().collect();
+
+    // Elevated worker: `--elevated-worker <pipe>`. Performs the uninstall with
+    // admin rights, streaming events back via named pipe.
+    if let Some(idx) = argv.iter().position(|a| a == "--elevated-worker") {
+        let code = match argv.get(idx + 1) {
+            Some(pipe_name) => match worker::run(pipe_name) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("elevated-worker error: {e:#}");
+                    1
+                }
+            },
+            None => {
+                eprintln!("--elevated-worker requires a pipe name");
+                2
+            }
+        };
+        std::process::exit(code);
+    }
 
     // Plugin-host child: `--run-plugin <dll> <up|down>`. The context arrives on
     // stdin. Runs before clap so the raw args aren't rejected; exits with the

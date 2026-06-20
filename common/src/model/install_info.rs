@@ -43,4 +43,8 @@ pub struct InstallInfo {
     /// interactive uninstall. Off by default; set per-app at build time.
     #[serde(default)]
     pub show_uninstall_complete: bool,
+    /// `true` when the install directory required administrator rights. The
+    /// uninstaller reads this to know upfront whether to request elevation.
+    #[serde(default)]
+    pub requires_admin: bool,
 }

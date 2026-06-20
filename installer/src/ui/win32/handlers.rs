@@ -13,15 +13,16 @@ use super::{
 use crate::extract::{InstallCtx, install};
 use crate::install as install_mod;
 use crate::ui::helpers::{
-    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PLUGIN_PROGRESS, WM_APP_PLUGIN_STEP, WM_APP_PROGRESS,
-    get_window_text, post_wparam, scale_progress, set_dlg_text, set_progress,
+    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PERM_DENIED, WM_APP_PERM_ERROR, WM_APP_PLUGIN_PROGRESS,
+    WM_APP_PLUGIN_STEP, WM_APP_PROGRESS, get_window_text, post_wparam, scale_progress,
+    set_dlg_text, set_progress,
 };
 use common::model::install_dir_restriction::InstallDirRestriction;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::BST_CHECKED;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -477,7 +478,13 @@ unsafe fn commit_install(hwnd: HWND) {
             plugin_inputs: plugin_inputs.clone(),
         };
         if let Err(e) = install(ctx) {
-            push_error(hwnd_isize, &format!("{e}"));
+            if e.downcast_ref::<crate::extract::PermissionDeniedError>()
+                .is_some()
+            {
+                push_perm_error(hwnd_isize, pb, plugin_inputs);
+            } else {
+                push_error(hwnd_isize, &format!("{e}"));
+            }
             return;
         }
         if let Err(e) = install_mod::finalize(
@@ -486,6 +493,7 @@ unsafe fn commit_install(hwnd: HWND) {
             &loaded.uninstaller_bytes,
             loaded.zip(),
             &plugin_inputs,
+            false,
         ) {
             push_error(hwnd_isize, &format!("finalize: {e}"));
             return;
@@ -571,6 +579,126 @@ fn push_error(hwnd_isize: isize, msg: &str) {
             LPARAM(ptr),
         )
     };
+}
+
+/// Payload carried in `WM_APP_PERM_ERROR` LPARAM.
+pub(super) struct PermErrorPayload {
+    pub path: PathBuf,
+    pub plugin_inputs: common::plugin::InputsByPlugin,
+}
+
+fn push_perm_error(
+    hwnd_isize: isize,
+    path: PathBuf,
+    plugin_inputs: common::plugin::InputsByPlugin,
+) {
+    let ptr = Box::into_raw(Box::new(PermErrorPayload {
+        path,
+        plugin_inputs,
+    })) as isize;
+    let _ = unsafe {
+        PostMessageW(
+            Some(HWND(hwnd_isize as *mut _)),
+            WM_APP_PERM_ERROR,
+            WPARAM(0),
+            LPARAM(ptr),
+        )
+    };
+}
+
+/// Spawn the orchestration thread that creates a pipe, triggers UAC, and
+/// relays install progress from the elevated worker to the UI.
+pub(super) fn start_elevated_install(
+    hwnd_isize: isize,
+    payload: PermErrorPayload,
+    progress_shared: Arc<Mutex<super::ProgressState>>,
+) {
+    thread::spawn(move || {
+        let pipe_name = common::elevation::pipe_name(std::process::id());
+
+        let pipe_handle = match common::elevation::create_pipe_server(&pipe_name) {
+            Ok(h) => h,
+            Err(e) => {
+                push_error(hwnd_isize, &format!("pipe setup failed: {e:#}"));
+                return;
+            }
+        };
+
+        // Trigger UAC — blocks until the user accepts or cancels.
+        if common::elevation::spawn_elevated_worker(&pipe_name).is_err() {
+            // User cancelled UAC.
+            unsafe {
+                let _ = CloseHandle(pipe_handle);
+            }
+            let ptr = Box::into_raw(Box::new(payload.path)) as isize;
+            let _ = unsafe {
+                PostMessageW(
+                    Some(HWND(hwnd_isize as *mut _)),
+                    WM_APP_PERM_DENIED,
+                    WPARAM(0),
+                    LPARAM(ptr),
+                )
+            };
+            return;
+        }
+
+        // UAC approved — wait for the worker process to connect.
+        if let Err(e) = common::elevation::wait_for_client(pipe_handle) {
+            push_error(hwnd_isize, &format!("worker connect failed: {e:#}"));
+            unsafe {
+                let _ = CloseHandle(pipe_handle);
+            }
+            return;
+        }
+
+        let mut pipe = common::elevation::open_pipe_handle(pipe_handle);
+
+        // Send the install command.
+        let cmd = common::elevation::InstallWorkerCommand {
+            install_dir: payload.path,
+            plugin_inputs: payload.plugin_inputs,
+        };
+        if let Err(e) = (|| -> anyhow::Result<()> {
+            use std::io::Write;
+            serde_json::to_writer(&mut pipe, &cmd)?;
+            pipe.write_all(b"\n")?;
+            Ok(())
+        })() {
+            push_error(hwnd_isize, &format!("send command failed: {e:#}"));
+            return;
+        }
+
+        // Read progress events until done or error.
+        let mut reader = common::elevation::event_reader(pipe);
+        loop {
+            match common::elevation::recv::<common::elevation::WorkerEvent, _>(&mut reader) {
+                Ok(Some(common::elevation::WorkerEvent::Progress { done, total, name })) => {
+                    if let Ok(mut g) = progress_shared.lock() {
+                        g.done = done;
+                        g.total = total;
+                        g.name = name;
+                    }
+                    helpers::post(hwnd_isize, WM_APP_PROGRESS);
+                }
+                Ok(Some(common::elevation::WorkerEvent::Done)) => {
+                    helpers::post(hwnd_isize, WM_APP_DONE);
+                    break;
+                }
+                Ok(Some(common::elevation::WorkerEvent::Error { msg })) => {
+                    push_error(hwnd_isize, &msg);
+                    break;
+                }
+                Ok(None) => {
+                    push_error(hwnd_isize, "elevated worker exited unexpectedly");
+                    break;
+                }
+                Err(e) => {
+                    push_error(hwnd_isize, &format!("pipe read error: {e:#}"));
+                    break;
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]

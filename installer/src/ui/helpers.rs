@@ -31,6 +31,12 @@ pub const WM_APP_ERROR: u32 = WM_APP + 3;
 pub const WM_APP_PLUGIN_STEP: u32 = WM_APP + 4;
 /// Posted by the progress pipe reader thread; WPARAM carries the 0–100 value.
 pub const WM_APP_PLUGIN_PROGRESS: u32 = WM_APP + 5;
+/// Permission denied on the install dir; elevation may help. LPARAM is a
+/// `Box<PermErrorPayload>` (path + plugin_inputs).
+pub const WM_APP_PERM_ERROR: u32 = WM_APP + 6;
+/// UAC was cancelled or the elevated worker failed to start. LPARAM is a
+/// `Box<PathBuf>` (the rejected install dir, for go-back-to-Choose).
+pub const WM_APP_PERM_DENIED: u32 = WM_APP + 7;
 
 /// Register the progress-bar common control class.
 pub fn init_progress_class() {
