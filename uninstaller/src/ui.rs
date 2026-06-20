@@ -10,8 +10,8 @@
 use common::utils::wide;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -50,6 +50,20 @@ const BANNER_H: i32 = 72;
 const PAD: i32 = 24;
 const BANNER_BG: u32 = 0x00F3F3F3;
 
+struct ProgressData {
+    done: u64,
+    total: u64,
+    status: String,
+}
+
+static PROGRESS: LazyLock<Mutex<ProgressData>> = LazyLock::new(|| {
+    Mutex::new(ProgressData {
+        done: 0,
+        total: 0,
+        status: String::new(),
+    })
+});
+
 #[derive(Clone, Copy, PartialEq)]
 enum Phase {
     Confirm,
@@ -59,9 +73,6 @@ enum Phase {
 
 struct State {
     phase: Phase,
-    progress_done: u64,
-    progress_total: u64,
-    status: String,
     font_body: HFONT,
     font_header: HFONT,
     banner_brush: HBRUSH,
@@ -130,9 +141,6 @@ pub fn run(params: UninstallParams) -> bool {
         let title_w = wide(&params.title);
         let state = Rc::new(RefCell::new(State {
             phase: Phase::Confirm,
-            progress_done: 0,
-            progress_total: 0,
-            status: String::new(),
             font_body: create_font("Segoe UI", 16, FW_NORMAL.0 as i32),
             font_header: create_font("Segoe UI Semibold", 22, FW_SEMIBOLD.0 as i32),
             banner_brush: CreateSolidBrush(COLORREF(BANNER_BG)),
@@ -142,15 +150,17 @@ pub fn run(params: UninstallParams) -> bool {
         }));
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
 
+        let style = WS_OVERLAPPED | WS_SYSMENU | WS_CAPTION;
+        let (ww, wh) = window_outer_size(WIN_W, WIN_H, style);
         let hwnd = match CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class_name,
             PCWSTR(title_w.as_ptr()),
-            WS_OVERLAPPED | WS_SYSMENU | WS_CAPTION,
+            style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            WIN_W,
-            WIN_H,
+            ww,
+            wh,
             None,
             None,
             Some(HINSTANCE(hinstance.0)),
@@ -180,15 +190,8 @@ pub fn run(params: UninstallParams) -> bool {
         // different scale stays crisp instead of dropping/clipping controls.
         let dpi = dpi_for(hwnd);
         rebuild_fonts(dpi);
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            scale(WIN_W, dpi),
-            scale(WIN_H, dpi),
-            SWP_NOMOVE | SWP_NOZORDER,
-        );
+        let (sw, sh) = window_outer_size(scale(WIN_W, dpi), scale(WIN_H, dpi), style);
+        let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
         center(hwnd);
         build_controls(hwnd, &params);
         relayout(hwnd, dpi);
@@ -631,42 +634,46 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 }
 
 fn set_progress(done: u64, total: u64, name: &str) {
-    STATE.with(|s| {
-        if let Some(state) = s.borrow().as_ref() {
-            let mut st = state.borrow_mut();
-            st.progress_done = done;
-            st.progress_total = total;
-            st.status = name.to_string();
-        }
-    });
+    if let Ok(mut p) = PROGRESS.lock() {
+        p.done = done;
+        p.total = total;
+        p.status = name.to_string();
+    }
 }
 
 unsafe fn update_progress(hwnd: HWND) {
-    STATE.with(|s| {
-        let Some(state) = s.borrow().as_ref().cloned() else {
-            return;
-        };
-        let st = state.borrow();
-        let bar = unsafe { GetDlgItem(Some(hwnd), ID_PROGRESS as i32).unwrap_or_default() };
-        let label = unsafe { GetDlgItem(Some(hwnd), ID_STATUS as i32).unwrap_or_default() };
-        let total = if st.progress_total == 0 {
-            1
-        } else {
-            st.progress_total
-        };
-        let scaled = ((st.progress_done as u128 * 10000u128) / total as u128) as i32;
-        unsafe {
-            SendMessageW(bar, PBM_SETRANGE32, Some(WPARAM(0)), Some(LPARAM(10000)));
-            SendMessageW(
-                bar,
-                PBM_SETPOS,
-                Some(WPARAM(scaled as usize)),
-                Some(LPARAM(0)),
-            );
-            let label_text = wide(&st.status);
-            let _ = SetWindowTextW(label, PCWSTR(label_text.as_ptr()));
-        }
-    });
+    let (done, total, status) = {
+        let p = PROGRESS.lock().unwrap_or_else(|e| e.into_inner());
+        (p.done, p.total, p.status.clone())
+    };
+    let bar = unsafe { GetDlgItem(Some(hwnd), ID_PROGRESS as i32).unwrap_or_default() };
+    let label = unsafe { GetDlgItem(Some(hwnd), ID_STATUS as i32).unwrap_or_default() };
+    let total_nz = if total == 0 { 1 } else { total };
+    let scaled = ((done as u128 * 10000u128) / total_nz as u128) as i32;
+    unsafe {
+        SendMessageW(bar, PBM_SETRANGE32, Some(WPARAM(0)), Some(LPARAM(10000)));
+        SendMessageW(
+            bar,
+            PBM_SETPOS,
+            Some(WPARAM(scaled as usize)),
+            Some(LPARAM(0)),
+        );
+        let label_text = wide(&status);
+        let _ = SetWindowTextW(label, PCWSTR(label_text.as_ptr()));
+    }
+}
+
+/// Total window size whose *client area* is `client_w × client_h` for the given
+/// style. Use this so control layout (in client coords) gets symmetric margins.
+fn window_outer_size(client_w: i32, client_h: i32, style: WINDOW_STYLE) -> (i32, i32) {
+    let mut r = RECT {
+        left: 0,
+        top: 0,
+        right: client_w,
+        bottom: client_h,
+    };
+    let _ = unsafe { AdjustWindowRectEx(&mut r, style, false, WINDOW_EX_STYLE(0)) };
+    (r.right - r.left, r.bottom - r.top)
 }
 
 unsafe fn center(hwnd: HWND) {
