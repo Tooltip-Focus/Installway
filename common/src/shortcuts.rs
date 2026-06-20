@@ -26,6 +26,33 @@ pub fn desktop_dir() -> Option<PathBuf> {
     dirs::desktop_dir()
 }
 
+/// All-Users (public) Desktop directory. Used for machine-wide installs so the
+/// shortcut is visible to every user, not just the elevated account that ran the
+/// installer. Needs admin to write.
+pub fn common_desktop_dir() -> Option<PathBuf> {
+    known_folder(&windows::Win32::UI::Shell::FOLDERID_PublicDesktop)
+}
+
+/// All-Users Start Menu Programs directory (machine-wide installs). Needs admin.
+pub fn common_start_menu_dir() -> Option<PathBuf> {
+    known_folder(&windows::Win32::UI::Shell::FOLDERID_CommonPrograms)
+}
+
+/// Resolve a Known Folder by id to a path. `None` if the shell can't resolve it.
+fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+    unsafe {
+        let pwstr = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
+        if pwstr.is_null() {
+            return None;
+        }
+        let s = pwstr.to_string().ok();
+        CoTaskMemFree(Some(pwstr.0 as *const core::ffi::c_void));
+        s.map(PathBuf::from)
+    }
+}
+
 /// The `.lnk` file path of a resolved entry: `<dir>\<name>.lnk`.
 pub fn lnk_path(e: &ShortcutEntry) -> PathBuf {
     PathBuf::from(&e.dir).join(format!("{}.lnk", e.name))

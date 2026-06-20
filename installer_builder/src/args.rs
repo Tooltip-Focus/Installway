@@ -482,15 +482,23 @@ fn build_shortcuts(raw: Vec<ShortcutFileEntry>) -> Result<Vec<ShortcutEntry>> {
     Ok(out)
 }
 
-/// Convert + validate `[[registry]]` entries. HKCU only; type/value must agree;
-/// key non-empty and not starting with `\`.
+/// Convert + validate `[[registry]]` entries. HKCU or HKLM (HKLM needs an
+/// elevated / machine-wide install); type/value must agree; key non-empty and
+/// not starting with `\`.
 fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegEntry>> {
     let mut out = Vec::with_capacity(raw.len());
     for (i, e) in raw.into_iter().enumerate() {
         let n = i + 1;
-        if !e.hive.eq_ignore_ascii_case("HKCU") {
-            bail!("registry #{n}: hive '{}' unsupported (HKCU only)", e.hive);
-        }
+        let hive = if e.hive.eq_ignore_ascii_case("HKCU") {
+            "HKCU"
+        } else if e.hive.eq_ignore_ascii_case("HKLM") {
+            "HKLM"
+        } else {
+            bail!(
+                "registry #{n}: hive '{}' unsupported (HKCU or HKLM)",
+                e.hive
+            );
+        };
         let key = e.key.trim().to_string();
         if key.is_empty() {
             bail!("registry #{n}: empty key");
@@ -514,7 +522,7 @@ fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegEntry>> {
             )
         })?;
         out.push(RegEntry {
-            hive: "HKCU".to_string(),
+            hive: hive.to_string(),
             key,
             name: e.name,
             kind,
@@ -689,9 +697,9 @@ force_reinstall = true
         assert!(
             resolve_with("\n[[registry]]\nhive='HKCU'\nkey='K'\ntype='nope'\nvalue=1\n").is_err()
         );
-        // HKLM not allowed
+        // unknown hive (only HKCU / HKLM allowed)
         assert!(
-            resolve_with("\n[[registry]]\nhive='HKLM'\nkey='K'\ntype='sz'\nvalue='x'\n").is_err()
+            resolve_with("\n[[registry]]\nhive='HKXX'\nkey='K'\ntype='sz'\nvalue='x'\n").is_err()
         );
         // dword given a string
         assert!(
@@ -711,6 +719,14 @@ force_reinstall = true
         assert!(
             resolve_with("\n[[registry]]\nhive='HKCU'\nkey='\\X'\ntype='sz'\nvalue='x'\n").is_err()
         );
+    }
+
+    #[test]
+    fn registry_accepts_hklm() {
+        let r =
+            resolve_with("\n[[registry]]\nhive='hklm'\nkey='Software\\X'\ntype='sz'\nvalue='y'\n")
+                .unwrap();
+        assert_eq!(r.registry[0].hive, "HKLM");
     }
 
     #[test]

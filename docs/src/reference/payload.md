@@ -40,9 +40,9 @@ parses `InstallerPayload` from them — avoiding any serializer-determinism trap
 | `created_at_unix` | `i64` | |
 | `manifest` | `Manifest` | per-file table (below) |
 | `license_text` | `Option<String>` | EULA shown on the License page |
-| `associations` | `Vec<FileAssoc>` | file types to register under HKCU |
+| `associations` | `Vec<FileAssoc>` | file types to register under `Software\Classes` (HKLM if machine-wide, else HKCU) |
 | `shortcuts` | `Vec<ShortcutEntry>` | [shortcuts](../packaging/shortcuts.md) to create (`dir`/`target`/`args` are token templates); none created unless declared |
-| `registry` | `Vec<RegEntry>` | free-form HKCU [registry entries](../packaging/registry.md) (key/value are token templates) |
+| `registry` | `Vec<RegEntry>` | free-form HKCU/HKLM [registry entries](../packaging/registry.md) (key/value are token templates) |
 | `force_reinstall` | `bool` | dev: rewrite all, remove orphans, skip from-check |
 | `purge_unknown_files` | `bool` | Full installs: remove unknown/leftover files (known files still hash-skipped); ignored for patches |
 | `skip_license` / `skip_path` | `bool` | trim the wizard |

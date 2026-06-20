@@ -2,12 +2,13 @@
 
 Beyond [file associations](associations.md), you can declare arbitrary registry
 entries in the config file. The installer writes them, the uninstaller removes
-them, and an upgrade reconciles the set — InstallShield/MSI-style, but
-**per-user (HKCU) only**, so no admin / no UAC.
+them, and an upgrade reconciles the set — InstallShield/MSI-style.
 
-> **HKCU only.** The installer runs `asInvoker` (never elevates), so HKLM
-> (machine-wide) is not supported — declaring it fails the build. Use `HKCU`;
-> per-user `HKCR` lives under `HKCU\Software\Classes`.
+> **HKCU or HKLM.** `HKCU` (per-user) needs no admin. `HKLM` (machine-wide) is
+> written only when the install is machine-wide (it lands in a shared location
+> such as `Program Files`, so it elevates); on a per-user install an `HKLM`
+> entry can't be written and is logged and skipped. Per-user `HKCR` lives under
+> `HKCU\Software\Classes`.
 
 ## Schema
 
@@ -34,8 +35,9 @@ value = "%INSTALL_DIR%"
 | `multi_sz` | array of strings | `REG_MULTI_SZ` |
 | `binary` | hex string (even length) | `REG_BINARY` |
 
-A `type`/`value` mismatch, an unknown `type`, an `HKLM` hive, an empty `key`, or
-a key starting with `\` all fail the build with a message naming the entry.
+A `type`/`value` mismatch, an unknown `type`, an unsupported hive (only `HKCU` /
+`HKLM`), an empty `key`, or a key starting with `\` all fail the build with a
+message naming the entry.
 
 ## Tokens
 

@@ -2,8 +2,15 @@
 
 Register file types so double-clicking a document opens your app. Pass
 `--assoc ".ext:Description"` (repeatable). Associations are written under
-`HKCU\Software\Classes` — **per-user, no admin** — and the shell `open` verb
-points at the installed `manifest.exe` with `"%1"`.
+`Software\Classes` and the shell `open` verb points at the installed
+`manifest.exe` with `"%1"`.
+
+> **Per-user vs machine-wide.** A per-user install writes under
+> `HKCU\Software\Classes` (no admin). A **machine-wide install** (one that lands
+> in a shared location such as `Program Files`, so it elevates) writes under
+> `HKLM\Software\Classes` instead, so the association is visible to every user —
+> not just the elevated account that ran the installer. The uninstaller cleans
+> whichever hive was used.
 
 ```pwsh
 installer_builder.exe pack `
@@ -32,7 +39,8 @@ assoc = [".myx:MyApp Document", ".myz:MyApp Archive"]
 
 ## Keys written
 
-Per association (ProgID = `<product-id>.<ext>`):
+Per association (ProgID = `<product-id>.<ext>`), under `HKCU` (per-user) or
+`HKLM` (machine-wide install):
 
 ```text
 HKCU\Software\Classes\.myx                          (default) = MyApp.myx

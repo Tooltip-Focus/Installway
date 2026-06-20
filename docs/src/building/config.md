@@ -69,7 +69,7 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # [[shortcut]]
 # dir = "%DESKTOP%"; name = "My App"; target = "%EXE%"; args = ""
 
-# free-form registry keys (HKCU) - see the Registry keys page
+# free-form registry keys (HKCU, or HKLM when machine-wide) - see the Registry keys page
 # [[registry]]
 # hive = "HKCU"; key = "%APP_KEY%"; name = "InstallDir"; type = "sz"; value = "%INSTALL_DIR%"
 ```

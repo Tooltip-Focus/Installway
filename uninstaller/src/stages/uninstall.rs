@@ -83,7 +83,14 @@ pub fn run(silent: bool) -> Result<()> {
     let manifest_owned = manifest.clone();
     let tr = ui::tr();
 
-    let needs_elevation = info_owned.requires_admin && !common::elevation::is_already_elevated();
+    // Elevate when the install was recorded machine-wide, OR when the app/data
+    // dir is actually permission-walled (an admin install to a custom ACL'd
+    // folder that wasn't flagged machine-wide). The probe distinguishes a real
+    // ACL wall from a transient AV lock, which the retry loop handles instead.
+    let needs_elevation = !common::elevation::is_already_elevated()
+        && (info_owned.requires_admin
+            || cleanup::perm_denied(&app_dir)
+            || cleanup::perm_denied(&data_dir));
 
     let params = UninstallParams {
         title: tr.fmt("uninstall.title", &[("product", &info.product)]),
@@ -164,7 +171,7 @@ pub(crate) fn do_cleanup(
 
     step("shortcuts");
     cleanup::remove_shortcuts(info);
-    common::assoc::unregister(assoc_id(info), &info.associations);
+    common::assoc::unregister(assoc_id(info), &info.associations, info.requires_admin);
     for e in &info.registry {
         common::registry::remove_if_ours(e);
     }
@@ -187,7 +194,7 @@ fn run_silent(
     let n = cleanup::remove_payload_files(app_dir, manifest);
     common::log::info(format!("removed {} payload files", n));
     cleanup::remove_shortcuts(info);
-    common::assoc::unregister(assoc_id(info), &info.associations);
+    common::assoc::unregister(assoc_id(info), &info.associations, info.requires_admin);
     for e in &info.registry {
         common::registry::remove_if_ours(e);
     }

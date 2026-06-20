@@ -12,9 +12,11 @@ when the manifest has an exe); Finish launches it.
 No admin elevation by default (`asInvoker` manifest). If the chosen install
 folder requires administrator rights (e.g. `C:\Program Files\...`), a UAC
 prompt is shown automatically: the main UI stays visible while a hidden elevated
-subprocess performs the file operations. In that case the uninstaller data and
-the Add/Remove Programs entry are registered machine-wide (`%ProgramData%` +
-`HKLM`) so every user on the machine can uninstall. Segoe UI, Common Controls
+subprocess performs the file operations. In that case the install is recorded
+machine-wide so every user on the machine sees it: the uninstaller data and the
+Add/Remove Programs entry (`%ProgramData%` + `HKLM`), file associations
+(`HKLM\Software\Classes`), `HKLM` registry entries, and All-Users shortcuts.
+Segoe UI, Common Controls
 v6 visual styles, DPI-aware (`PerMonitorV2`). See
 [Trimming the wizard](../packaging/wizard.md) to hide pages.
 
@@ -42,6 +44,12 @@ message.
 Progress prints to stderr; `--launch` runs the installed exe afterward. Branch
 on the [exit code](../reference/exit-codes.md) — notably `10` means "wrong
 installed version for this patch."
+
+> **Silent has no UAC prompt.** Unlike the wizard and minimal modes, silent
+> never auto-elevates (a prompt would defeat "silent"). Installing to a machine
+> location such as `Program Files` therefore fails with a permission error unless
+> you run the silent installer from an already-elevated context (e.g. an admin
+> shell or deployment tool). For a per-user location no elevation is needed.
 
 ## Runtime behavior (every mode)
 

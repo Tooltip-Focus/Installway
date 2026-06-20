@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Free-form registry entries under `HKCU` (per-user, no admin), beyond file
-//! associations. Each [`RegEntry`] is written at install and removed at
-//! uninstall. Removal is anti-stomp (only deletes a value that still equals
-//! what we wrote) and prunes the keys we created once they're empty — it never
-//! deletes a key that still holds anything (so shared keys like `...\Run` keep
-//! their other values).
+//! Free-form registry entries beyond file associations, in `HKCU` (per-user, no
+//! admin) or `HKLM` (machine-wide install, needs admin) per the entry's `hive`.
+//! Each [`RegEntry`] is written at install and removed at uninstall. Removal is
+//! anti-stomp (only deletes a value that still equals what we wrote) and prunes
+//! the keys we created once they're empty — it never deletes a key that still
+//! holds anything (so shared keys like `...\Run` keep their other values).
 
 use crate::model::reg_entry::RegEntry;
 use crate::model::reg_kind::RegKind;
@@ -14,31 +14,42 @@ use crate::model::reg_value::RegValue;
 use crate::utils::wide;
 use std::collections::HashSet;
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD, REG_EXPAND_SZ,
-    REG_MULTI_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SZ, REG_VALUE_TYPE, RegCloseKey,
-    RegCreateKeyExW, RegDeleteKeyW, RegDeleteValueW, RegOpenKeyExW, RegQueryInfoKeyW,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD,
+    REG_EXPAND_SZ, REG_MULTI_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SZ, REG_VALUE_TYPE,
+    RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteValueW, RegOpenKeyExW, RegQueryInfoKeyW,
     RegQueryValueExW, RegSetValueExW,
 };
 use windows::core::PCWSTR;
 
-fn is_hkcu(e: &RegEntry) -> bool {
-    e.hive.eq_ignore_ascii_case("HKCU")
+/// Root hive for an entry: `HKCU` or `HKLM` (machine-wide, needs admin). `None`
+/// for any other hive string, which the caller treats as a no-op.
+fn hive_root(hive: &str) -> Option<HKEY> {
+    if hive.eq_ignore_ascii_case("HKCU") {
+        Some(HKEY_CURRENT_USER)
+    } else if hive.eq_ignore_ascii_case("HKLM") {
+        Some(HKEY_LOCAL_MACHINE)
+    } else {
+        None
+    }
 }
 
-/// Write one entry. No-op on a non-HKCU hive or a value that can't be encoded.
+/// Write one entry. No-op on an unsupported hive or a value that can't be
+/// encoded. An `HKLM` entry needs the process to be elevated; if it isn't, the
+/// create simply fails and is logged.
 pub fn write(e: &RegEntry) {
-    if !is_hkcu(e) {
+    let Some(root) = hive_root(&e.hive) else {
         return;
-    }
+    };
     let Some((ty, bytes)) = encode(e.kind, &e.value) else {
         crate::log::warn(format!("registry: skip {} (bad value for type)", e.key));
         return;
     };
-    if let Some(h) = create_key(&e.key) {
+    if let Some(h) = create_key(root, &e.key) {
         set_value(h, &e.name, ty, &bytes);
         close(h);
         crate::log::info(format!(
-            "registry: set HKCU\\{}\\{}",
+            "registry: set {}\\{}\\{}",
+            e.hive.to_ascii_uppercase(),
             e.key,
             if e.name.is_empty() {
                 "(Default)"
@@ -52,16 +63,21 @@ pub fn write(e: &RegEntry) {
 /// Remove one entry: delete the value only if it still equals what we wrote,
 /// then prune now-empty keys we created.
 pub fn remove_if_ours(e: &RegEntry) {
-    if !is_hkcu(e) {
+    let Some(root) = hive_root(&e.hive) else {
         return;
-    }
+    };
     if let Some((ty, bytes)) = encode(e.kind, &e.value)
-        && read_value(&e.key, &e.name) == Some((ty, bytes))
+        && read_value(root, &e.key, &e.name) == Some((ty, bytes))
     {
-        delete_value(&e.key, &e.name);
-        crate::log::info(format!("registry: removed HKCU\\{}\\{}", e.key, e.name));
+        delete_value(root, &e.key, &e.name);
+        crate::log::info(format!(
+            "registry: removed {}\\{}\\{}",
+            e.hive.to_ascii_uppercase(),
+            e.key,
+            e.name
+        ));
     }
-    prune_empty(&e.key);
+    prune_empty(root, &e.key);
 }
 
 /// Entries present in `prior` but no longer in `current`, compared by
@@ -152,7 +168,7 @@ fn hexv(c: u8) -> Option<u8> {
     }
 }
 
-// ---- Win32 registry helpers (HKCU) --------------------------------------
+// ---- Win32 registry helpers (HKCU / HKLM) -------------------------------
 
 /// Value-name pointer: `(Default)` (null) for an empty name.
 fn name_ptr(name_w: &[u16], name: &str) -> PCWSTR {
@@ -163,12 +179,12 @@ fn name_ptr(name_w: &[u16], name: &str) -> PCWSTR {
     }
 }
 
-fn create_key(sub: &str) -> Option<HKEY> {
+fn create_key(root: HKEY, sub: &str) -> Option<HKEY> {
     let w = wide(sub);
     unsafe {
         let mut hkey = HKEY::default();
         let rc = RegCreateKeyExW(
-            HKEY_CURRENT_USER,
+            root,
             PCWSTR(w.as_ptr()),
             None,
             PCWSTR::null(),
@@ -189,20 +205,12 @@ fn set_value(hkey: HKEY, name: &str, ty: REG_VALUE_TYPE, bytes: &[u8]) {
     }
 }
 
-fn read_value(sub: &str, name: &str) -> Option<(REG_VALUE_TYPE, Vec<u8>)> {
+fn read_value(root: HKEY, sub: &str, name: &str) -> Option<(REG_VALUE_TYPE, Vec<u8>)> {
     let w = wide(sub);
     let name_w = wide(name);
     unsafe {
         let mut hkey = HKEY::default();
-        if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            PCWSTR(w.as_ptr()),
-            None,
-            KEY_READ,
-            &mut hkey,
-        )
-        .is_err()
-        {
+        if RegOpenKeyExW(root, PCWSTR(w.as_ptr()), None, KEY_READ, &mut hkey).is_err() {
             return None;
         }
         let name_pcwstr = name_ptr(&name_w, name);
@@ -231,20 +239,12 @@ fn read_value(sub: &str, name: &str) -> Option<(REG_VALUE_TYPE, Vec<u8>)> {
     }
 }
 
-fn delete_value(sub: &str, name: &str) {
+fn delete_value(root: HKEY, sub: &str, name: &str) {
     let w = wide(sub);
     let name_w = wide(name);
     unsafe {
         let mut hkey = HKEY::default();
-        if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            PCWSTR(w.as_ptr()),
-            None,
-            KEY_WRITE,
-            &mut hkey,
-        )
-        .is_ok()
-        {
+        if RegOpenKeyExW(root, PCWSTR(w.as_ptr()), None, KEY_WRITE, &mut hkey).is_ok() {
             let _ = RegDeleteValueW(hkey, name_ptr(&name_w, name));
             let _ = RegCloseKey(hkey);
         }
@@ -252,19 +252,11 @@ fn delete_value(sub: &str, name: &str) {
 }
 
 /// True if the subkey exists with no subkeys and no values.
-fn key_is_empty(sub: &str) -> bool {
+fn key_is_empty(root: HKEY, sub: &str) -> bool {
     let w = wide(sub);
     unsafe {
         let mut hkey = HKEY::default();
-        if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            PCWSTR(w.as_ptr()),
-            None,
-            KEY_READ,
-            &mut hkey,
-        )
-        .is_err()
-        {
+        if RegOpenKeyExW(root, PCWSTR(w.as_ptr()), None, KEY_READ, &mut hkey).is_err() {
             return false;
         }
         let mut subkeys: u32 = 0;
@@ -288,23 +280,23 @@ fn key_is_empty(sub: &str) -> bool {
     }
 }
 
-fn delete_key(sub: &str) {
+fn delete_key(root: HKEY, sub: &str) {
     let w = wide(sub);
     unsafe {
-        let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(w.as_ptr()));
+        let _ = RegDeleteKeyW(root, PCWSTR(w.as_ptr()));
     }
 }
 
 /// Delete `key` and walk up its parents while each is empty. Stops at a
 /// top-level key (no backslash, e.g. `Software`), which is never deleted, and
 /// at the first non-empty key (so shared keys keep their other content).
-fn prune_empty(key: &str) {
+fn prune_empty(root: HKEY, key: &str) {
     let mut cur = key.to_string();
     while cur.contains('\\') {
-        if !key_is_empty(&cur) {
+        if !key_is_empty(root, &cur) {
             break;
         }
-        delete_key(&cur);
+        delete_key(root, &cur);
         match cur.rsplit_once('\\') {
             Some((parent, _)) => cur = parent.to_string(),
             None => break,

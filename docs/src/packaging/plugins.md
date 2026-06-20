@@ -20,7 +20,7 @@ int32_t  installway_down(const InstallwayContext*); // at uninstall (0 = ok)
 int32_t  installway_pages(const InstallwayContext*); // optional — see below
 ```
 
-The host passes a context: `install_dir`, `data_dir` (the per-user folder holding
+The host passes a context: `install_dir`, `data_dir` (the folder holding
 `installer_info.json` — write persistent plugin state here), `product`,
 `product_id`, `version`, the full `exe` path, and a `log(level, message)` callback
 that writes to the install/uninstall log. Two more fields serve the
@@ -28,6 +28,17 @@ that writes to the install/uninstall log. Two more fields serve the
 answers, for `up`) and the `emit_pages(json)` callback (`installway_pages` hands
 its descriptor to it). A plugin without pages just leaves `installway_pages`
 out.
+
+> **Machine-wide installs run plugins elevated — mind per-user state.** For a
+> machine-wide install (a shared location such as `Program Files`), the host runs
+> in an **elevated subprocess under the admin account**, and your `up`/`down`
+> plugins run there too. `ctx->data_dir` correctly points at the machine-wide
+> folder (`%ProgramData%\…`) in that case, so prefer it for any state you persist.
+> But Windows per-user APIs (`%APPDATA%`, `%USERPROFILE%`, `HKEY_CURRENT_USER`,
+> the user's Desktop/Start Menu) resolve to the **elevated admin's** profile —
+> *not* the user who launched the installer — so don't write there expecting the
+> end user to see it. Use `ctx->data_dir`, `install_dir`, or explicit machine
+> locations (`HKLM`, All-Users folders) instead.
 
 The host↔plugin channel uses **no temp files**: the context is streamed to the
 child on stdin, and the descriptor comes back over a dedicated pipe the host owns
@@ -155,7 +166,9 @@ else                                          emit(first_page);
 
 This works the same **silently**: a first silent install fills widget `default`s
 and saves them; later silent upgrades read the file and skip. `data_dir` lives in
-`%LOCALAPPDATA%\<publisher>\Uninstall\<product_id>` and is **deleted by the
+`%LOCALAPPDATA%\<publisher>\Uninstall\<product_id>` (per-user) or
+`%ProgramData%\<publisher>\Uninstall\<product_id>` (machine-wide) — always read it
+from `ctx->data_dir` rather than hard-coding — and is **deleted by the
 uninstaller**, so your state is cleaned up automatically (your `down` runs first,
 before the folder is removed, if it needs to read it).
 

@@ -31,6 +31,7 @@ perm_denied_path = "Ce chemin nécessite des droits administrateur.\n\nVeuillez 
 minimal_title = "Application de la mise à jour"
 minimal_sub = "{product} {version}"
 minimal_done = "Mise à jour terminée"
+uac_cancelled = "Des droits administrateur sont requis pour installer dans ce dossier."
 
 [uninstall]
 title = "Désinstaller {product}"
