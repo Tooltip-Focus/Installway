@@ -9,9 +9,14 @@ Double-click the `.exe`. The wizard walks License → Choose location → Progre
 Done. The Done page offers a **"Run program now"** checkbox (checked by default
 when the manifest has an exe); Finish launches it.
 
-No admin elevation (`asInvoker` manifest). Segoe UI, Common Controls v6 visual
-styles, DPI-aware (`PerMonitorV2`). See [Trimming the wizard](../packaging/wizard.md)
-to hide pages.
+No admin elevation by default (`asInvoker` manifest). If the chosen install
+folder requires administrator rights (e.g. `C:\Program Files\...`), a UAC
+prompt is shown automatically: the main UI stays visible while a hidden elevated
+subprocess performs the file operations. In that case the uninstaller data and
+the Add/Remove Programs entry are registered machine-wide (`%ProgramData%` +
+`HKLM`) so every user on the machine can uninstall. Segoe UI, Common Controls
+v6 visual styles, DPI-aware (`PerMonitorV2`). See
+[Trimming the wizard](../packaging/wizard.md) to hide pages.
 
 ## Minimal (app-triggered self-update)
 

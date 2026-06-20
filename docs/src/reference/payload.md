@@ -31,7 +31,7 @@ parses `InstallerPayload` from them — avoiding any serializer-determinism trap
 |---|---|---|
 | `kind` | `Full` \| `Patch` | |
 | `product` | `String` | display name (ARP DisplayName, version-info, UI, shortcut) |
-| `product_id` | `String` | registry-safe id: HKCU Uninstall key, ProgIDs, data folder, upgrade detection |
+| `product_id` | `String` | registry-safe id: Uninstall key, ProgIDs, data folder, upgrade detection |
 | `publisher` | `String` | uninstall data folder + ARP "Publisher" |
 | `from_version` | `Option<String>` | set for patches; pins the target version |
 | `to_version` | `String` | |
@@ -84,12 +84,14 @@ struct PatchInfo {
 
 ## `InstallInfo`
 
-Persisted to `<install_dir>\installer_info.json` by the installer and read by
-the uninstaller: `product`, `product_id`, `publisher`, `version`,
-`install_dir`, `installed_at_unix`, `registry_key` (equal to `product_id`),
-`exe`, the `associations`, the resolved `shortcuts`, and the resolved `registry`
-entries to remove. Records written before the product/id split have no
-`product_id`; readers fall back to `registry_key` and a sanitized `product`.
+Persisted to `<data-dir>\installer_info.json` by the installer and read by the
+uninstaller: `product`, `product_id`, `publisher`, `version`, `install_dir`,
+`installed_at_unix`, `registry_key` (equal to `product_id`), `exe`, the
+`associations`, the resolved `shortcuts`, the resolved `registry` entries to
+remove, and `requires_admin` (drives the `HKLM`/`%ProgramData%` vs
+`HKCU`/`%LOCALAPPDATA%` choice). Records written before the product/id split
+have no `product_id`; readers fall back to `registry_key` and a sanitized
+`product`.
 
 In the payload, `registry` and `shortcuts` hold **token templates**; in
 `installer_info.json` they hold the **resolved** entries actually written

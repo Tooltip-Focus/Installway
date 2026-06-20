@@ -337,13 +337,23 @@ fn default_install_path(payload: &common::model::installer_payload::InstallerPay
     PathBuf::from(format!(r"C:\Users\Public\{}", product))
 }
 
-/// The folder this product was last installed to, read from `installer_info.json`
-/// in the per-user data dir. `None` if never installed or the record is missing
-/// / empty.
+/// The folder this product was last installed to. Checks the machine-wide data
+/// dir (`%ProgramData%`) first, then the per-user one (`%LOCALAPPDATA%`).
+/// `None` if never installed or the record is missing / empty.
 fn previous_install_dir(
     payload: &common::model::installer_payload::InstallerPayload,
 ) -> Option<PathBuf> {
-    let data_dir = common::paths::uninstall_dir(&payload.publisher, &payload.product_id)?;
+    for machine in [true, false] {
+        let data_dir =
+            common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, machine)?;
+        if let Some(dir) = read_install_dir(&data_dir) {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+fn read_install_dir(data_dir: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(data_dir.join("installer_info.json")).ok()?;
     let info: common::model::install_info::InstallInfo = serde_json::from_str(&text).ok()?;
     if info.install_dir.trim().is_empty() {

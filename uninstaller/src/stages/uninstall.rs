@@ -174,7 +174,7 @@ pub(crate) fn do_cleanup(
     cleanup::remove_empty_subdirs(app_dir);
 
     step("registry");
-    cleanup::unregister(&info.registry_key);
+    cleanup::unregister(&info.registry_key, info.requires_admin);
 }
 
 fn run_silent(
@@ -195,9 +195,10 @@ fn run_silent(
     let s = cleanup::remove_app_state_files(app_dir);
     common::log::info(format!("removed {} app state files", s));
     cleanup::remove_empty_subdirs(app_dir);
-    cleanup::unregister(&info.registry_key);
+    cleanup::unregister(&info.registry_key, info.requires_admin);
     common::log::info(format!(
-        "unregistered HKCU Uninstall\\{}",
+        "unregistered {}\\Uninstall\\{}",
+        if info.requires_admin { "HKLM" } else { "HKCU" },
         info.registry_key
     ));
     spawn_finalize(Some(app_dir), data_dir, None, false)
