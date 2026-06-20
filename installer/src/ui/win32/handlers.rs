@@ -306,16 +306,32 @@ unsafe fn pick_folder_com(hwnd: HWND) -> Option<String> {
     }
 }
 
-/// True when `path` is an existing directory that already holds entries. A
-/// missing path (the installer will create it) or an empty folder is safe.
+/// True when `path` is an existing directory that contains at least one file
+/// (at any depth). A missing path, a truly empty folder, or a folder that
+/// contains only empty sub-directories are all considered safe — the installer
+/// will create or populate them without clobbering user data.
 fn dir_has_entries(path: &str) -> bool {
     let p = path.trim();
     if p.is_empty() {
         return false;
     }
-    std::fs::read_dir(Path::new(p))
-        .map(|mut it| it.next().is_some())
-        .unwrap_or(false)
+    dir_has_files_recursive(Path::new(p))
+}
+
+fn dir_has_files_recursive(path: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let ep = entry.path();
+        if ep.is_file() {
+            return true;
+        }
+        if ep.is_dir() && dir_has_files_recursive(&ep) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Normalize a Windows path for a tolerant equality test: trim, unify slashes.
@@ -678,6 +694,22 @@ mod tests {
     fn dir_has_entries_true_when_populated() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("file.txt"), b"x").unwrap();
+        assert!(dir_has_entries(&dir.path().to_string_lossy()));
+    }
+
+    #[test]
+    fn dir_has_entries_false_when_only_empty_subdirs() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("subdir")).unwrap();
+        assert!(!dir_has_entries(&dir.path().to_string_lossy()));
+    }
+
+    #[test]
+    fn dir_has_entries_true_when_file_nested_in_subdir() {
+        let dir = tempdir().unwrap();
+        let sub = dir.path().join("subdir");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("file.txt"), b"x").unwrap();
         assert!(dir_has_entries(&dir.path().to_string_lossy()));
     }
 
