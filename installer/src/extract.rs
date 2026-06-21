@@ -128,6 +128,11 @@ pub struct InstallCtx<'a> {
     /// the data dir plugins see (`%ProgramData%` vs `%LOCALAPPDATA%`) and the
     /// lock namespace, matching where `install::finalize` writes the metadata.
     pub requires_admin: bool,
+    /// Installer window handle (as isize) for the blocking-process TaskDialog.
+    /// Pass 0 for headless / elevated-worker paths (triggers silent force-kill).
+    pub hwnd_parent: isize,
+    /// UI language for the blocking-process dialog strings.
+    pub translator: common::i18n::Translator,
 }
 
 pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
@@ -192,12 +197,16 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
 
     check_disk_space(&ctx.install_dir, manifest, ctx.payload.kind)?;
 
-    // Close any running copy of the target app first (WM_CLOSE, never killed).
+    // Close any process running from the install dir before writing files.
     {
         let pcb = ctx.on_progress.clone();
-        crate::proc::ensure_closed(&ctx.install_dir, &manifest.exe, &ctx.cancel, &move |msg| {
-            pcb(0, 0, msg)
-        })?;
+        crate::proc::ensure_closed(
+            &ctx.install_dir,
+            ctx.hwnd_parent,
+            ctx.translator,
+            &ctx.cancel,
+            &move |msg| pcb(0, 0, msg),
+        )?;
     }
 
     // Pre-install plugins run before any file is staged, so a required failure

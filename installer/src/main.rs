@@ -221,7 +221,7 @@ fn run(cli: Cli) -> Result<()> {
             },
             hintway_lang,
         );
-        return run_silent(&loaded, path, launch);
+        return run_silent(&loaded, path, launch, translator);
     }
 
     // Diagnostic: re-hash installed files against the manifest in the data dir.
@@ -342,7 +342,12 @@ fn attach_console() {
     }
 }
 
-fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: bool) -> Result<()> {
+fn run_silent(
+    loaded: &payload::LoadedPayload,
+    install_dir: PathBuf,
+    launch: bool,
+    translator: common::i18n::Translator,
+) -> Result<()> {
     attach_console();
     println!(
         "Silent install: {} {} -> {}",
@@ -370,6 +375,8 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         on_progress: progress,
         plugin_inputs: plugin_inputs.clone(),
         requires_admin,
+        hwnd_parent: 0,
+        translator,
     };
     #[cfg(feature = "hintway")]
     analytics::stage("extract");
