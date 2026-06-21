@@ -12,7 +12,8 @@ use common::model::shortcut_entry::ShortcutEntry;
 use common::utils::{days_to_ymd, wide};
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Write the uninstaller + metadata to a data folder outside the app directory
 /// and register the product in Add/Remove Programs.
@@ -63,8 +64,23 @@ pub fn finalize(
     // (it locks the new file to scan it), so a bare write could fail the
     // install after every product file is already in place.
     let uninstaller_path = data_dir.join("uninstall.exe");
-    common::utils::write_atomic(&uninstaller_path, uninstaller_bytes)
-        .with_context(|| format!("write {}", uninstaller_path.display()))?;
+    if let Err(e) = common::utils::write_atomic(&uninstaller_path, uninstaller_bytes) {
+        // The retry budget in write_atomic covers transient AV locks. If it is
+        // still failing here the uninstaller itself may be running (edge case:
+        // user triggered uninstall then immediately re-ran the installer). Kill
+        // it and retry once.
+        common::log::warn(format!(
+            "uninstaller write failed ({e:#}); checking for a running instance"
+        ));
+        if crate::proc::kill_if_running(&uninstaller_path) {
+            common::log::info("terminated running uninstaller; retrying write");
+            thread::sleep(Duration::from_millis(500));
+            common::utils::write_atomic(&uninstaller_path, uninstaller_bytes)
+                .with_context(|| format!("write {}", uninstaller_path.display()))?;
+        } else {
+            return Err(e).with_context(|| format!("write {}", uninstaller_path.display()));
+        }
+    }
 
     // Uninstall subkey = product_id (validated registry-safe at build time).
     let key = payload.product_id.clone();
