@@ -13,6 +13,7 @@
 - [Patch installer](building/patch.md)
 - [With vs. without the Rust toolchain](building/toolchain.md)
 - [Config file](building/config.md)
+- [Hintway analytics](building/hintway.md)
 
 # Packaging options
 

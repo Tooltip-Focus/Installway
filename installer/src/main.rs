@@ -3,6 +3,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(feature = "hintway")]
+mod analytics;
 mod elevation;
 mod extract;
 mod install;
@@ -77,6 +79,11 @@ fn main() {
         } else {
             1
         };
+        #[cfg(feature = "hintway")]
+        {
+            analytics::error(analytics::classify_error(&e));
+            analytics::shutdown();
+        }
         if console_mode {
             attach_console();
             eprintln!("Error: {e:#}");
@@ -85,6 +92,8 @@ fn main() {
         }
         std::process::exit(code);
     }
+    #[cfg(feature = "hintway")]
+    analytics::shutdown();
 }
 
 /// Normalise flags and parse argv into [`Cli`].
@@ -165,17 +174,53 @@ fn run(cli: Cli) -> Result<()> {
     let loaded = payload::load_and_verify()?;
     let launch = cli.launch;
 
+    // Determine analytics context now that payload is loaded (version + operation known).
+    #[cfg(feature = "hintway")]
+    let (hintway_version, hintway_operation, hintway_lang) = {
+        let already = previous_install_dir(&loaded.payload).is_some();
+        let op = match (&loaded.payload.kind, already) {
+            (common::model::payload_kind::PayloadKind::Patch, _)
+            | (common::model::payload_kind::PayloadKind::Full, true) => "update",
+            _ => "install",
+        };
+        (loaded.payload.to_version.as_str(), op, translator.lang())
+    };
+
     // Compact auto-start update UI (app-triggered self-update): no license,
     // path picker or buttons - just icon + progress.
     if cli.minimal {
         // Path resolved before `loaded` is moved into the UI: CLI positional,
         // then `INSTALLWAY_PATH`, then the per-app default.
         let path = resolve_install_path(cli.install_dir.as_deref(), &loaded.payload);
+        #[cfg(feature = "hintway")]
+        analytics::init(
+            hintway_version,
+            hintway_operation,
+            "minimal",
+            if common::paths::is_machine_location(&path) {
+                "admin"
+            } else {
+                "user"
+            },
+            hintway_lang,
+        );
         return ui::minimal::run(loaded, path, launch, translator);
     }
 
     if cli.silent {
         let path = resolve_install_path(cli.install_dir.as_deref(), &loaded.payload);
+        #[cfg(feature = "hintway")]
+        analytics::init(
+            hintway_version,
+            hintway_operation,
+            "silent",
+            if common::paths::is_machine_location(&path) {
+                "admin"
+            } else {
+                "user"
+            },
+            hintway_lang,
+        );
         return run_silent(&loaded, path, launch);
     }
 
@@ -239,6 +284,21 @@ fn run(cli: Cli) -> Result<()> {
         return ui::minimal::run(loaded, default_path, launch, translator);
     }
 
+    #[cfg(feature = "hintway")]
+    analytics::init(
+        hintway_version,
+        hintway_operation,
+        "interactive",
+        "unknown",
+        hintway_lang,
+    );
+
+    // Save before `loaded` is moved into the UI call below.
+    #[cfg(feature = "hintway")]
+    let loaded_publisher = loaded.payload.publisher.clone();
+    #[cfg(feature = "hintway")]
+    let loaded_product_id = loaded.payload.product_id.clone();
+
     // Extract any `ui = true` plugin DLLs for the wizard to query step by step.
     let self_exe = std::env::current_exe()?;
     let ui_plugins =
@@ -252,6 +312,24 @@ fn run(cli: Cli) -> Result<()> {
         translator,
         ui_plugins,
     )?;
+
+    // Privilege is determined inside the UI (path chosen by user + UAC).
+    // Read it from the written installer_info.json so app_exit carries the real value.
+    #[cfg(feature = "hintway")]
+    if let Some(info_path) = [true, false].into_iter().find_map(|machine| {
+        common::paths::uninstall_dir_for(&loaded_publisher, &loaded_product_id, machine)
+            .map(|d| d.join("installer_info.json"))
+            .filter(|p| p.exists())
+    }) {
+        if let Ok(text) = std::fs::read_to_string(&info_path) {
+            if let Ok(info) =
+                serde_json::from_str::<common::model::install_info::InstallInfo>(&text)
+            {
+                analytics::set_privilege(info.requires_admin);
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -293,7 +371,11 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         plugin_inputs: plugin_inputs.clone(),
         requires_admin,
     };
+    #[cfg(feature = "hintway")]
+    analytics::stage("extract");
     extract::install(ctx)?;
+    #[cfg(feature = "hintway")]
+    analytics::stage("finalize");
     install::finalize(
         &install_dir,
         &loaded.payload,
@@ -302,6 +384,8 @@ fn run_silent(loaded: &payload::LoadedPayload, install_dir: PathBuf, launch: boo
         &plugin_inputs,
         requires_admin,
     )?;
+    #[cfg(feature = "hintway")]
+    analytics::stage("done");
 
     if launch && !loaded.payload.manifest.exe.is_empty() {
         install::launch_product(&install_dir, &loaded.payload.manifest.exe)?;
