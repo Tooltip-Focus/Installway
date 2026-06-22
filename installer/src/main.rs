@@ -159,6 +159,8 @@ fn run(cli: Cli) -> Result<()> {
         Some(code) => common::i18n::Translator::for_lang(code),
         None => common::i18n::Translator::detect(&[]),
     };
+    // Record the resolved language process-wide so plugin contexts carry it.
+    translator.set_global();
 
     // Dev-only: render a single UI view with sample data, no payload needed.
     // e.g. `installer --preview minimal`, `--preview license`.

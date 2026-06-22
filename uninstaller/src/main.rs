@@ -129,11 +129,11 @@ fn run() -> Result<()> {
     }
 
     // Language detection uses the original user-visible arguments (no argv[0]).
-    ui::set_translator(common::i18n::Translator::detect(if argv.len() > 1 {
-        &argv[1..]
-    } else {
-        &[]
-    }));
+    let translator =
+        common::i18n::Translator::detect(if argv.len() > 1 { &argv[1..] } else { &[] });
+    // Record process-wide so the `down` plugin context carries the same language.
+    translator.set_global();
+    ui::set_translator(translator);
 
     let cli = Cli::parse_from(&argv);
 

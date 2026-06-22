@@ -22,12 +22,20 @@ int32_t  installway_pages(const InstallwayContext*); // optional — see below
 
 The host passes a context: `install_dir`, `data_dir` (the folder holding
 `installer_info.json` — write persistent plugin state here), `product`,
-`product_id`, `version`, the full `exe` path, and a `log(level, message)` callback
-that writes to the install/uninstall log. Two more fields serve the
+`product_id`, `version`, the full `exe` path, a `log(level, message)` callback
+that writes to the install/uninstall log, and `lang` — the host's resolved UI
+language code (e.g. `"en"`, `"fr"`, honoring its `--lang` / `INSTALLWAY_LANG`
+overrides). Two more fields serve the
 [custom-pages](#custom-wizard-pages-forms) feature: `inputs_json` (the user's
 answers, for `up`) and the `emit_pages(json)` callback (`installway_pages` hands
 its descriptor to it). A plugin without pages just leaves `installway_pages`
 out.
+
+> **Localizing a plugin.** There is no shared string table across the ABI — a
+> plugin ships its **own** strings and selects them by `ctx->lang` so its pages
+> and log match the installer's language (fall back to English for codes you
+> don't translate). See the `uninstall_msi` example, which localizes its page
+> title and subtitle this way.
 
 > **Machine-wide installs run plugins elevated — mind per-user state.** For a
 > machine-wide install (a shared location such as `Program Files`), the host runs
