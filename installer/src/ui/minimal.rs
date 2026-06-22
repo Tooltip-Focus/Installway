@@ -294,6 +294,8 @@ fn spawn_worker(
             on_progress: prog_cb,
             plugin_inputs: plugin_inputs.clone(),
             requires_admin,
+            hwnd_parent: hwnd_isize,
+            translator: tr(),
         };
         if let Err(e) = install(ctx) {
             return post_err(hwnd_isize, &format!("{e}"));

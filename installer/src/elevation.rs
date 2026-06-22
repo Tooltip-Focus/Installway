@@ -61,6 +61,8 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
         // This worker only runs after the main process needed elevation, i.e. a
         // machine-wide install.
         requires_admin: true,
+        hwnd_parent: 0, // elevated subprocess: no dialog, force-kill silently
+        translator: common::i18n::Translator::detect(&[]),
     };
 
     if let Err(e) = crate::extract::install(ctx) {

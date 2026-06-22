@@ -465,6 +465,7 @@ unsafe fn commit_install(hwnd: HWND) {
     let plugin_inputs =
         WIZARD.with(|w| w.borrow().as_ref().map(|z| z.inputs()).unwrap_or_default());
     let hwnd_isize = hwnd.0 as isize;
+    let translator = tr();
 
     thread::spawn(move || {
         let loaded = match crate::payload::load_and_verify() {
@@ -500,6 +501,8 @@ unsafe fn commit_install(hwnd: HWND) {
             on_progress: progress_cb,
             plugin_inputs: plugin_inputs.clone(),
             requires_admin,
+            hwnd_parent: hwnd_isize,
+            translator,
         };
         #[cfg(feature = "hintway")]
         crate::analytics::stage("extract");
