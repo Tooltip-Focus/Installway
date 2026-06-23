@@ -37,6 +37,9 @@ pub const WM_APP_PERM_ERROR: u32 = WM_APP + 6;
 /// UAC was cancelled or the elevated worker failed to start. LPARAM is a
 /// `Box<PathBuf>` (the rejected install dir, for go-back-to-Choose).
 pub const WM_APP_PERM_DENIED: u32 = WM_APP + 7;
+/// The user confirmed cancellation from the window's close button; the worker
+/// has rolled the install back, so the window can close cleanly (no error page).
+pub const WM_APP_CANCELLED: u32 = WM_APP + 8;
 
 /// Register the progress-bar common control class.
 pub fn init_progress_class() {
