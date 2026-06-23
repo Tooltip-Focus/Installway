@@ -2,10 +2,8 @@
 //! Example Installway plugin. Contributes a "choose your country" wizard page;
 //! the installer renders it, and `installway_up` acts on the answer. Mirrors
 //! `sdk/installway_plugin.h`.
-//!
-//! std-only: it emits the page descriptor and reads the answers as JSON by hand,
-//! so it needs no extra crates. A real plugin should use a JSON library.
 
+use widestring::{U16CStr, U16CString};
 
 const INSTALLWAY_ABI_VERSION: u32 = 1;
 
@@ -31,25 +29,16 @@ fn state_path(ctx: *const InstallwayContext) -> Option<std::path::PathBuf> {
     if data_dir.is_empty() {
         return None;
     }
-    Some(std::path::Path::new(&data_dir).join("country_picker.txt"))
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
+    Some(std::path::Path::new(&data_dir).join("country_picker.json"))
 }
 
 /// Copy a null-terminated wide string from the host into a `String`.
+/// Returns an empty string for a null pointer.
 unsafe fn from_wide(p: *const u16) -> String {
     if p.is_null() {
         return String::new();
     }
-    let mut len = 0;
-    unsafe {
-        while *p.add(len) != 0 {
-            len += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
-    }
+    unsafe { U16CStr::from_ptr_str(p) }.to_string_lossy()
 }
 
 /// Call the host log callback, if present.
@@ -58,7 +47,10 @@ unsafe fn log(ctx: *const InstallwayContext, level: &str, msg: &str) {
         return;
     }
     if let Some(cb) = unsafe { (*ctx).log } {
-        cb(wide(level).as_ptr(), wide(msg).as_ptr());
+        cb(
+            U16CString::from_str_truncate(level).as_ptr(),
+            U16CString::from_str_truncate(msg).as_ptr(),
+        );
     }
 }
 
@@ -81,13 +73,14 @@ pub extern "system" fn installway_pages(ctx: *const InstallwayContext) -> i32 {
     // Remembered from a previous install? Skip the whole flow (`up` reuses it).
     if state_path(ctx).and_then(|p| std::fs::read_to_string(p).ok()).is_some() {
         if let Some(emit) = unsafe { (*ctx).emit_pages } {
-            emit(wide(r#"{ "step": "done" }"#).as_ptr());
+            emit(U16CString::from_str_truncate(r#"{ "step": "done" }"#).as_ptr());
         }
         return 0;
     }
     let answers = unsafe { from_wide((*ctx).inputs_json) };
-    let country = extract_value(&answers, "region.country");
-    let territory = extract_value(&answers, "dom.territory");
+    let answers: serde_json::Value = serde_json::from_str(&answers).unwrap_or_default();
+    let country = answers["region.country"].as_str();
+    let territory = answers["dom.territory"].as_str();
 
     let step = if country.is_none() {
         // First page: pick a country.
@@ -104,7 +97,7 @@ pub extern "system" fn installway_pages(ctx: *const InstallwayContext) -> i32 {
                     { "label": "Other", "value": "XX" }
                   ] }
               ] } }"#
-    } else if country.as_deref() == Some("DOM") && territory.is_none() {
+    } else if country == Some("DOM") && territory.is_none() {
         // Dependent page: only shown when DOM-TOM was chosen on the first page.
         r#"{ "step": "page", "page": {
               "id": "dom",
@@ -125,7 +118,7 @@ pub extern "system" fn installway_pages(ctx: *const InstallwayContext) -> i32 {
 
     match unsafe { (*ctx).emit_pages } {
         Some(emit) => {
-            emit(wide(step).as_ptr());
+            emit(U16CString::from_str_truncate(step).as_ptr());
             0
         }
         None => 2,
@@ -135,7 +128,7 @@ pub extern "system" fn installway_pages(ctx: *const InstallwayContext) -> i32 {
 /// Act on the answers at install. `ctx->inputs_json` carries this run's answers;
 /// on an upgrade where the page was skipped it's empty, so we fall back to the
 /// remembered `state_path`. We then (re)write that state so the next upgrade can
-/// skip, and drop a `selected-country.txt` at the install root to show the result.
+/// skip, and drop a `selected-country.json` at the install root to show the result.
 /// Declare the plugin `phase = "post-install"` so `data_dir`/`install_dir` exist.
 #[no_mangle]
 pub extern "system" fn installway_up(ctx: *const InstallwayContext) -> i32 {
@@ -143,20 +136,23 @@ pub extern "system" fn installway_up(ctx: *const InstallwayContext) -> i32 {
         return 1;
     }
     let inputs = unsafe { from_wide((*ctx).inputs_json) };
+    let inputs: serde_json::Value = serde_json::from_str(&inputs).unwrap_or_default();
     let saved = state_path(ctx)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
+    let saved: serde_json::Value = serde_json::from_str(&saved).unwrap_or_default();
 
     // This run's answer, else the remembered one, else the default.
-    let country = extract_value(&inputs, "region.country")
-        .or_else(|| line_value(&saved, "country"))
+    let country = inputs["region.country"]
+        .as_str()
+        .or_else(|| saved["country"].as_str())
+        .map(str::to_owned)
         .unwrap_or_else(|| "FR".to_string());
-    let territory =
-        extract_value(&inputs, "dom.territory").or_else(|| line_value(&saved, "territory"));
-    let body = match &territory {
-        Some(t) => format!("country={country}\nterritory={t}\n"),
-        None => format!("country={country}\n"),
-    };
+    let territory = inputs["dom.territory"]
+        .as_str()
+        .or_else(|| saved["territory"].as_str())
+        .map(str::to_owned);
+    let body = serde_json::json!({ "country": country, "territory": territory }).to_string();
 
     // Remember it (data_dir) for next time, and show the result (install root).
     if let Some(p) = state_path(ctx) {
@@ -164,7 +160,7 @@ pub extern "system" fn installway_up(ctx: *const InstallwayContext) -> i32 {
     }
     let install_dir = unsafe { from_wide((*ctx).install_dir) };
     let _ = std::fs::create_dir_all(&install_dir);
-    let out = std::path::Path::new(&install_dir).join("selected-country.txt");
+    let out = std::path::Path::new(&install_dir).join("selected-country.json");
     if let Err(e) = std::fs::write(&out, &body) {
         unsafe { log(ctx, "ERROR", &format!("country_picker: write {} failed: {e}", out.display())) };
         return 4;
@@ -177,23 +173,6 @@ pub extern "system" fn installway_up(ctx: *const InstallwayContext) -> i32 {
 pub extern "system" fn installway_down(ctx: *const InstallwayContext) -> i32 {
     unsafe { log(ctx, "INFO", "country_picker: down (nothing to undo)") };
     0
-}
-
-/// Minimal `"key":"value"` extractor from a flat JSON object. Example-only — a
-/// real plugin should use a JSON parser.
-fn extract_value(json: &str, key: &str) -> Option<String> {
-    let i = json.find(&format!("\"{key}\""))? + key.len() + 2;
-    let rest = &json[i..];
-    let after = rest[rest.find(':')? + 1..].trim_start();
-    let after = after.strip_prefix('"')?;
-    Some(after[..after.find('"')?].to_string())
-}
-
-/// Read `key=value` from the remembered state file's lines.
-fn line_value(text: &str, key: &str) -> Option<String> {
-    text.lines()
-        .find_map(|l| l.strip_prefix(&format!("{key}=")))
-        .map(|v| v.trim().to_string())
 }
 
 #[cfg(test)]
@@ -235,28 +214,8 @@ mod tests {
         let dir: Vec<u16> = "C:\\data\0".encode_utf16().collect();
         let ctx = ctx_with_data_dir(dir.as_ptr());
         let p = state_path(&ctx).expect("data_dir set -> Some");
-        assert_eq!(p.file_name().unwrap(), "country_picker.txt");
+        assert_eq!(p.file_name().unwrap(), "country_picker.json");
         assert!(p.starts_with("C:\\data"));
-    }
-
-    #[test]
-    fn extract_value_reads_flat_json() {
-        let json = r#"{ "region.country":"FR", "dom.territory":"GP" }"#;
-        assert_eq!(extract_value(json, "region.country").as_deref(), Some("FR"));
-        assert_eq!(extract_value(json, "dom.territory").as_deref(), Some("GP"));
-    }
-
-    #[test]
-    fn extract_value_missing_key_is_none() {
-        assert!(extract_value(r#"{ "a":"b" }"#, "region.country").is_none());
-    }
-
-    #[test]
-    fn line_value_reads_state_lines() {
-        let saved = "country=FR\nterritory=GP\n";
-        assert_eq!(line_value(saved, "country").as_deref(), Some("FR"));
-        assert_eq!(line_value(saved, "territory").as_deref(), Some("GP"));
-        assert!(line_value(saved, "missing").is_none());
     }
 
     #[test]

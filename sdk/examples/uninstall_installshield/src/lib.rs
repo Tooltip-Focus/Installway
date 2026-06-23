@@ -11,6 +11,7 @@
 //!   phase = "pre-install"
 
 use std::process::Command;
+use widestring::U16CString;
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
@@ -31,16 +32,15 @@ pub struct InstallwayContext {
     log: Option<extern "system" fn(*const u16, *const u16)>,
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 unsafe fn log(ctx: *const InstallwayContext, level: &str, msg: &str) {
     if ctx.is_null() {
         return;
     }
     if let Some(cb) = unsafe { (*ctx).log } {
-        cb(wide(level).as_ptr(), wide(msg).as_ptr());
+        cb(
+            U16CString::from_str_truncate(level).as_ptr(),
+            U16CString::from_str_truncate(msg).as_ptr(),
+        );
     }
 }
 

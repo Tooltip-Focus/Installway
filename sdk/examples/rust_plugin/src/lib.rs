@@ -2,6 +2,8 @@
 //! Example Installway plugin in Rust. Mirrors `sdk/installway_plugin.h`.
 //! Logs a line via the host callback and succeeds.
 
+use widestring::U16CString;
+
 const INSTALLWAY_ABI_VERSION: u32 = 1;
 
 #[repr(C)]
@@ -19,17 +21,16 @@ pub struct InstallwayContext {
     emit_pages: Option<extern "system" fn(*const u16)>,
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 /// Call the host log callback, if present.
 unsafe fn log(ctx: *const InstallwayContext, level: &str, msg: &str) {
     if ctx.is_null() {
         return;
     }
     if let Some(cb) = unsafe { (*ctx).log } {
-        cb(wide(level).as_ptr(), wide(msg).as_ptr());
+        cb(
+            U16CString::from_str_truncate(level).as_ptr(),
+            U16CString::from_str_truncate(msg).as_ptr(),
+        );
     }
 }
 
