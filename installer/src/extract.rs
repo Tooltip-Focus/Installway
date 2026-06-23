@@ -12,6 +12,7 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use zip::ZipArchive;
 
 const FULL_PREFIX: &str = "full/";
@@ -372,7 +373,13 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
         // write/rename itself (bad sector, FS glitch). Still inside the
         // transaction, backups intact.
         (ctx.on_progress)(total_bytes, total_bytes, "Verifying...");
+        common::log::info(format!("verifying {} committed file(s)", to_commit.len()));
+        let verify_started = Instant::now();
         let mut corrupt = find_corrupt(&ctx.install_dir, manifest, &to_commit);
+        common::log::info(format!(
+            "verification finished in {:.1}s",
+            verify_started.elapsed().as_secs_f64()
+        ));
 
         // Repair before a full rollback: corrupt content is reproducible from
         // the payload, and rewriting to a fresh location dodges transient
@@ -677,10 +684,85 @@ fn run_hdiff(old: &Path, patch: &Path, out: &Path) -> bool {
 }
 
 fn hash_file(path: &Path) -> Result<String> {
-    // Memory-map + SIMD hash: zero-copy, full-throughput
+    hash_file_progress(path, &AtomicU64::new(0))
+}
+
+/// Like [`hash_file`] but adds each chunk's byte count to `progress`, so a
+/// watcher can tell a slow-but-advancing read from a fully stalled one.
+fn hash_file_progress(path: &Path, progress: &AtomicU64) -> Result<String> {
+    // Streaming read, not mmap: mmap-hashing a just-written file stalls behind
+    // Defender's on-access scan, and a flaky-disk fault surfaces as an
+    // un-catchable in-page exception. A plain read returns a normal `io::Error`.
+    let mut f = File::open(path).map_err(|e| anyhow::anyhow!("{}", io_msg("opening", path, &e)))?;
     let mut hasher = blake3::Hasher::new();
-    hasher.update_mmap(path)?;
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        let n = f
+            .read(&mut buf)
+            .map_err(|e| anyhow::anyhow!("{}", io_msg("reading", path, &e)))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        progress.fetch_add(n as u64, Ordering::Relaxed);
+    }
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Hash `path` on a helper thread, giving up if the read makes no progress for
+/// `stall`. Progress-based rather than a total timeout, so a huge file on a slow
+/// disk is fine as long as bytes keep flowing, while a read wedged behind
+/// antivirus isn't. The abandoned thread drains on its own. `None` means stalled.
+fn hash_within(path: &Path, stall: Duration) -> Option<Result<String>> {
+    use std::sync::mpsc::RecvTimeoutError;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let progress = Arc::new(AtomicU64::new(0));
+    let p = path.to_path_buf();
+    let prog = progress.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(hash_file_progress(&p, &prog));
+    });
+    let mut last_bytes = 0u64;
+    let mut last_advance = Instant::now();
+    let tick = Duration::from_secs(2).min(stall);
+    loop {
+        match rx.recv_timeout(tick) {
+            Ok(r) => return Some(r),
+            Err(RecvTimeoutError::Disconnected) => return None,
+            Err(RecvTimeoutError::Timeout) => {
+                let now = progress.load(Ordering::Relaxed);
+                if now != last_bytes {
+                    last_bytes = now;
+                    last_advance = Instant::now();
+                } else if last_advance.elapsed() >= stall {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+enum VerifyOutcome {
+    Match,
+    Mismatch {
+        got: String,
+    },
+    Missing,
+    /// Read stalled (no progress within the stall window).
+    Slow,
+    /// File exists but couldn't be read.
+    Error(String),
+}
+
+/// Hash one file, abandoning if the read stalls for `stall`, and classify it.
+fn verify_one(path: &Path, expected: &str, stall: Duration) -> VerifyOutcome {
+    match hash_within(path, stall) {
+        Some(Ok(got)) if got == expected => VerifyOutcome::Match,
+        Some(Ok(got)) => VerifyOutcome::Mismatch { got },
+        Some(Err(_)) if !path.exists() => VerifyOutcome::Missing,
+        Some(Err(e)) => VerifyOutcome::Error(format!("{e:#}")),
+        None => VerifyOutcome::Slow,
+    }
 }
 
 // ---- Two-phase commit primitives --------------------------------------
@@ -971,35 +1053,112 @@ fn cleanup(temp_dir: &Path) {
     common::utils::remove_dir_retry(temp_dir);
 }
 
-/// Re-hash each committed file and return those that don't match the manifest
-/// (corrupt, missing, or unreadable). Parallel; used inside the transaction.
+/// No-progress window before pass 1 gives up on a file and defers it to pass 2.
+/// A stall window, not a size-dependent total: a large file streaming off a slow
+/// disk keeps advancing and never trips it; a read stuck behind antivirus does.
+const VERIFY_STALL: Duration = Duration::from_secs(30);
+/// More patient stall window for the pass-2 re-test.
+const VERIFY_RETRY_STALL: Duration = Duration::from_secs(90);
+
+/// Short hash prefix for log lines.
+fn short(h: &str) -> &str {
+    &h[..16.min(h.len())]
+}
+
+enum Verdict {
+    Ok,
+    Corrupt,
+    Unconfirmed,
+}
+
+/// Classify a verify outcome, logging the reason. `retry` selects the pass-2
+/// wording (a still-unconfirmed file is a non-fatal "proceeding", not "retry").
+fn classify(rel: &str, expected: &str, outcome: VerifyOutcome, retry: bool) -> Verdict {
+    match outcome {
+        VerifyOutcome::Match => Verdict::Ok,
+        VerifyOutcome::Mismatch { got } => {
+            common::log::warn(format!(
+                "{rel} corrupt after writing (expected {}, got {})",
+                short(expected),
+                short(&got)
+            ));
+            Verdict::Corrupt
+        }
+        VerifyOutcome::Missing => {
+            common::log::warn(format!("{rel} missing after writing"));
+            Verdict::Corrupt
+        }
+        VerifyOutcome::Slow if retry => {
+            common::log::warn(format!(
+                "{rel} could not be verified (antivirus or slow disk) - proceeding without re-verification"
+            ));
+            Verdict::Unconfirmed
+        }
+        VerifyOutcome::Slow => {
+            common::log::warn(format!(
+                "{rel} stalled while verifying (antivirus or slow disk) - will retry"
+            ));
+            Verdict::Unconfirmed
+        }
+        VerifyOutcome::Error(e) if retry => {
+            common::log::warn(format!(
+                "{rel} could not be verified ({e}) - proceeding without re-verification"
+            ));
+            Verdict::Unconfirmed
+        }
+        VerifyOutcome::Error(e) => {
+            common::log::warn(format!("{rel} unreadable ({e}) - will retry"));
+            Verdict::Unconfirmed
+        }
+    }
+}
+
+/// Re-hash each committed file and return those that genuinely don't match the
+/// manifest (mismatch or missing) - the set the caller repairs / rolls back.
 fn find_corrupt(install_dir: &Path, manifest: &Manifest, committed: &[String]) -> Vec<String> {
-    committed
+    let outcomes: Vec<(String, VerifyOutcome, Duration)> = committed
         .par_iter()
-        .filter(|rel| {
-            let Some(entry) = manifest.files.get(*rel) else {
-                return false;
-            };
+        .filter_map(|rel| {
+            let entry = manifest.files.get(rel)?;
             let path = long_path(&install_dir.join(rel));
-            match hash_file(&path) {
-                Ok(got) if got == entry.hash => false,
-                Ok(got) => {
-                    common::log::warn(format!(
-                        "{} corrupt after writing (expected {}, got {})",
-                        rel,
-                        &entry.hash[..16.min(entry.hash.len())],
-                        &got[..16.min(got.len())]
-                    ));
-                    true
-                }
-                Err(e) => {
-                    common::log::warn(format!("{} unreadable after writing: {e:#}", rel));
-                    true
-                }
-            }
+            let t = Instant::now();
+            let outcome = verify_one(&path, &entry.hash, VERIFY_STALL);
+            Some((rel.clone(), outcome, t.elapsed()))
         })
-        .cloned()
-        .collect()
+        .collect();
+
+    let mut corrupt = Vec::new();
+    let mut deferred = Vec::new();
+    for (rel, outcome, elapsed) in outcomes {
+        let expected = manifest
+            .files
+            .get(&rel)
+            .map(|e| e.hash.as_str())
+            .unwrap_or("");
+        match classify(&rel, expected, outcome, false) {
+            Verdict::Ok if elapsed >= Duration::from_secs(5) => {
+                common::log::info(format!("verified {rel} ({:.1}s)", elapsed.as_secs_f64()));
+            }
+            Verdict::Ok => common::log::info(format!("verified {rel}")),
+            Verdict::Corrupt => corrupt.push(rel),
+            Verdict::Unconfirmed => deferred.push(rel),
+        }
+    }
+
+    for rel in deferred {
+        let Some(entry) = manifest.files.get(&rel) else {
+            continue;
+        };
+        let path = long_path(&install_dir.join(&rel));
+        let outcome = verify_one(&path, &entry.hash, VERIFY_RETRY_STALL);
+        match classify(&rel, &entry.hash, outcome, true) {
+            Verdict::Ok => common::log::info(format!("verified {rel} on retry")),
+            Verdict::Corrupt => corrupt.push(rel),
+            Verdict::Unconfirmed => {}
+        }
+    }
+
+    corrupt
 }
 
 /// Repair passes over the corrupt set before falling back to a full rollback.
