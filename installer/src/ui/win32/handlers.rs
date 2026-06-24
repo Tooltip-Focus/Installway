@@ -13,9 +13,9 @@ use super::{
 use crate::extract::{InstallCtx, install};
 use crate::install as install_mod;
 use crate::ui::helpers::{
-    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PERM_DENIED, WM_APP_PERM_ERROR, WM_APP_PLUGIN_PROGRESS,
-    WM_APP_PLUGIN_STEP, WM_APP_PROGRESS, get_window_text, post_wparam, scale_progress,
-    set_dlg_text, set_progress,
+    self, WM_APP_CANCELLED, WM_APP_DONE, WM_APP_ERROR, WM_APP_PERM_DENIED, WM_APP_PERM_ERROR,
+    WM_APP_PLUGIN_PROGRESS, WM_APP_PLUGIN_STEP, WM_APP_PROGRESS, get_window_text, post_wparam,
+    scale_progress, set_dlg_text, set_progress,
 };
 use common::model::install_dir_restriction::InstallDirRestriction;
 use std::path::{Path, PathBuf};
@@ -507,6 +507,13 @@ unsafe fn commit_install(hwnd: HWND) {
         #[cfg(feature = "hintway")]
         crate::analytics::stage("extract");
         if let Err(e) = install(ctx) {
+            // A user-confirmed cancel rolled the install back: close cleanly
+            // instead of surfacing it as an installation error.
+            if cancel.load(Ordering::Relaxed) {
+                common::log::info("install cancelled by user");
+                helpers::post(hwnd_isize, WM_APP_CANCELLED);
+                return;
+            }
             if e.downcast_ref::<crate::extract::PermissionDeniedError>()
                 .is_some()
             {

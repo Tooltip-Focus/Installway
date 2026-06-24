@@ -52,6 +52,14 @@ typedef struct InstallwayContext {
     /* For installway_pages: call this with your page-descriptor JSON (the host
      * forwards it). Call it once before returning 0. */
     void (*emit_pages)(const wchar_t* json);
+    /* For a `buttons: false` page with a deterministic bar (marquee: false):
+     * call with a 0-100 value to advance it. NULL when the host opened no
+     * progress channel (marquee/infinite bar). */
+    void (*emit_progress)(uint32_t percent);
+    /* Host UI language code (e.g. L"en", L"fr"), so the plugin can localize its
+     * pages and log to match the installer. Never NULL; empty when the host
+     * resolved none. Use it to pick strings; falling back to English is fine. */
+    const wchar_t* lang;
 } InstallwayContext;
 
 /* ABI version the plugin was built against. The host refuses to load a plugin

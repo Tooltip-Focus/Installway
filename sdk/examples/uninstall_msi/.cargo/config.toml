@@ -1,0 +1,4 @@
+# Statically link the C runtime: removes the Visual C++ Redistributable
+# (VCRUNTIME140.dll) dependency.
+[target.'cfg(windows)']
+rustflags = ["-C", "target-feature=+crt-static"]
