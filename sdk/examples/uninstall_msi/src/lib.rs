@@ -4,6 +4,7 @@
 //! the host auto-runs `installway_up` while that screen is shown.
 
 use std::process::Command;
+use widestring::U16CString;
 
 const ABI_VERSION: u32 = 1;
 
@@ -43,10 +44,6 @@ extern "system" {
     ) -> u32;
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 /// Read a null-terminated wide string from the context; empty on null.
 unsafe fn from_wide(ptr: *const u16) -> String {
     if ptr.is_null() {
@@ -76,12 +73,15 @@ unsafe fn log(ctx: *const InstallwayContext, level: &str, msg: &str) {
         return;
     }
     if let Some(cb) = unsafe { (*ctx).log } {
-        cb(wide(level).as_ptr(), wide(msg).as_ptr());
+        cb(
+            U16CString::from_str_truncate(level).as_ptr(),
+            U16CString::from_str_truncate(msg).as_ptr(),
+        );
     }
 }
 
 fn find_product_code_by_upgrade_code(upgrade_code: &str) -> Option<String> {
-    let upgrade_code_w = wide(upgrade_code);
+    let upgrade_code_w = U16CString::from_str_truncate(upgrade_code);
     // MSI ProductCode GUID is 38 chars + null terminator = 39 elements.
     let mut product_buf = vec![0u16; 39];
     let rc =
@@ -125,7 +125,7 @@ pub extern "system" fn installway_pages(ctx: *const InstallwayContext) -> i32 {
             let json = format!(
                 r#"{{"step":"page","page":{{"id":"uninstall","title":"{title}","subtitle":"{subtitle}","buttons":false,"widgets":[{{"kind":"progress"}}]}}}}"#
             );
-            emit(wide(&json).as_ptr());
+            emit(U16CString::from_str_truncate(&json).as_ptr());
             0
         }
         None => 2,

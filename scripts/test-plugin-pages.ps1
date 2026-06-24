@@ -2,7 +2,7 @@
 # Uses the committed test key pair (test/keys). Output:
 #   test/out/setup-plugin-pages.exe
 # Run that, pick a folder, choose a country on the plugin page, finish; then check
-# <install_dir>/selected-country.txt for the recorded choice.
+# <install_dir>/selected-country.json for the recorded choice.
 $ErrorActionPreference = 'Stop'
 
 function Assert-Exit($desc) {
@@ -49,4 +49,4 @@ $setup = Join-Path $root 'test\out\setup-plugin-pages.exe'
 Write-Host ''
 Write-Host "INSTALLER READY: $setup"
 Write-Host 'Run it: pick a folder, choose a country on the plugin page, finish.'
-Write-Host 'Then check <install_dir>\selected-country.txt for the recorded choice.'
+Write-Host 'Then check <install_dir>\selected-country.json for the recorded choice.'

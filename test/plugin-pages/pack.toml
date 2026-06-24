@@ -20,7 +20,7 @@ priv_key       = "test/keys/priv.key"
 out            = "test/out/setup-plugin-pages.exe"
 
 # The country-picker plugin contributes a wizard page (ui = true) and, at
-# post-install, writes the chosen country to <install_dir>/selected-country.txt.
+# post-install, writes the chosen country to <install_dir>/selected-country.json.
 [[plugin]]
 name     = "country"
 dll      = "test/plugin-pages/plugins/country_picker.dll"
