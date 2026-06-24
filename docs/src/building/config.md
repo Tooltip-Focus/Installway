@@ -72,11 +72,16 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # free-form registry keys (HKCU, or HKLM when machine-wide) - see the Registry keys page
 # [[registry]]
 # hive = "HKCU"; key = "%APP_KEY%"; name = "InstallDir"; type = "sz"; value = "%INSTALL_DIR%"
+
+# feature packs: map path globs to a feature id a plugin activates - see Feature packs
+# default = true installs it on a fresh install (a plugin can override at runtime)
+# [[feature]]
+# id = "Maps"; paths = ["data/maps", "extra/*.pak"]; default = true
 ```
 
-> `[[shortcut]]` and `[[registry]]` are arrays-of-tables: put all flat keys
-> above them, then the `[[shortcut]]` / `[[registry]]` blocks at the end of the
-> file (standard TOML ordering).
+> `[[shortcut]]`, `[[registry]]`, `[[plugin]]` and `[[feature]]` are
+> arrays-of-tables: put all flat keys above them, then the table blocks at the
+> end of the file (standard TOML ordering).
 
 Run it:
 

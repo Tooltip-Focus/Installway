@@ -17,6 +17,13 @@
  * descriptor back through the `emit_pages` callback; the user's answers come
  * back to `installway_up` via `ctx->inputs_json`.
  *
+ * Optional feature packs: a plugin may export `installway_features`, queried by
+ * the host before staging to decide which feature-tagged files to install. The
+ * plugin emits an `{ "enable": [...], "disable": [...] }` descriptor (also via
+ * the `emit_pages` callback — it is the generic descriptor channel, shared by
+ * pages and features). The host applies it to the persisted set:
+ * `active = (persisted union enable) minus disable`.
+ *
  * The host<->plugin channel uses no temp files: the context is delivered on the
  * child's stdin, and the descriptor is forwarded over a dedicated pipe by the
  * host (the plugin just calls `emit_pages`).
@@ -49,8 +56,9 @@ typedef struct InstallwayContext {
      * "<page_id>.<widget_id>" with string values. NULL when the plugin has no
      * pages or for installway_pages / installway_down. */
     const wchar_t* inputs_json;
-    /* For installway_pages: call this with your page-descriptor JSON (the host
-     * forwards it). Call it once before returning 0. */
+    /* Generic descriptor channel: call this with your JSON descriptor (the host
+     * forwards it) once before returning 0. Used by installway_pages (a page
+     * step) and installway_features (a feature selection). */
     void (*emit_pages)(const wchar_t* json);
     /* For a `buttons: false` page with a deterministic bar (marquee: false):
      * call with a 0-100 value to advance it. NULL when the host opened no
@@ -60,6 +68,10 @@ typedef struct InstallwayContext {
      * pages and log to match the installer. Never NULL; empty when the host
      * resolved none. Use it to pick strings; falling back to English is fine. */
     const wchar_t* lang;
+    /* Feature-pack catalog JSON { "all": [...], "active": [...] } for
+     * installway_pages / installway_features: the declared feature ids and the
+     * current base set. NULL when the build declares no features. */
+    const wchar_t* features_json;
 } InstallwayContext;
 
 /* ABI version the plugin was built against. The host refuses to load a plugin
@@ -76,6 +88,12 @@ __declspec(dllexport) int32_t installway_down(const InstallwayContext* ctx);
  * it to ctx->emit_pages(json), and return 0. Only called for plugins marked
  * `ui = true`. Absence is an error only for such plugins. */
 __declspec(dllexport) int32_t installway_pages(const InstallwayContext* ctx);
+
+/* Optional: select feature packs to install. Build an
+ * { "enable": [...], "disable": [...] } JSON descriptor, hand it to
+ * ctx->emit_pages(json), and return 0. Queried before staging; absence simply
+ * means the plugin selects no features (not an error). */
+__declspec(dllexport) int32_t installway_features(const InstallwayContext* ctx);
 
 #ifdef __cplusplus
 }

@@ -102,6 +102,7 @@ pub fn finalize(
         plugins: payload.plugins.clone(),
         show_uninstall_complete: payload.show_uninstall_complete,
         requires_admin,
+        features: payload.active_features.clone(),
     };
 
     // Extract the plugin DLLs into the data dir so the uninstaller (and the
@@ -199,13 +200,7 @@ fn write_plugin_dlls(data_dir: &Path, payload: &InstallerPayload, zip_bytes: &[u
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))
         .context("open payload zip for plugins")?;
     for p in &payload.plugins {
-        let mut buf = Vec::new();
-        {
-            let mut f = archive
-                .by_name(&p.file)
-                .with_context(|| format!("plugin {} missing from payload", p.file))?;
-            std::io::Read::read_to_end(&mut f, &mut buf)?;
-        }
+        let buf = crate::extract::read_zip_entry(&mut archive, &p.file)?;
         // `p.file` is `plugins/<name>.dll`, relative to the data dir.
         common::utils::write_atomic(&data_dir.join(&p.file), &buf)?;
     }
@@ -226,10 +221,7 @@ fn run_post_install_plugins(
         .iter()
         .filter(|p| p.phase == PluginPhase::PostInstall)
     {
-        let inputs_json = match plugin_inputs.get(&p.name) {
-            Some(m) => serde_json::to_string(m)?,
-            None => String::new(),
-        };
+        let inputs_json = common::plugin::inputs_json_for(plugin_inputs, &p.name);
         items.push((p.clone(), data_dir.join(&p.file), inputs_json));
     }
     if items.is_empty() {

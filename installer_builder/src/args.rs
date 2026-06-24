@@ -223,6 +223,28 @@ pub struct ResolvedPlugin {
     pub ui: bool,
 }
 
+/// One `[[feature]]` table from the config file. Maps a set of path globs to a
+/// feature id; files matching are tagged in the manifest. Converted + validated
+/// into a [`ResolvedFeature`] by [`build_features`].
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureFileEntry {
+    pub id: String,
+    pub paths: Vec<String>,
+    /// Enabled by default on a fresh install; a plugin can override at runtime.
+    #[serde(default)]
+    pub default: bool,
+}
+
+/// A validated feature pack: its id, the path globs that belong to it, and
+/// whether it is enabled by default on a fresh install.
+#[derive(Debug, Clone)]
+pub struct ResolvedFeature {
+    pub id: String,
+    pub paths: Vec<String>,
+    pub default_enabled: bool,
+}
+
 /// `pack` options as read from a TOML file. Flat keys matching the CLI long
 /// names (snake_case). Unknown keys are rejected to catch typos.
 #[derive(Deserialize, Debug, Default)]
@@ -272,6 +294,10 @@ pub struct PackFile {
     /// Shortcuts to create (config-file only). `[[shortcut]]` tables.
     #[serde(default, rename = "shortcut")]
     pub shortcuts: Vec<ShortcutFileEntry>,
+    /// Feature packs (config-file only). `[[feature]]` tables mapping path globs
+    /// to a feature id; a plugin activates them at install time.
+    #[serde(default, rename = "feature")]
+    pub features: Vec<FeatureFileEntry>,
 }
 
 /// Fully resolved `pack` options consumed by `pack::run`. CLI > TOML > default.
@@ -307,6 +333,7 @@ pub struct PackArgs {
     pub registry: Vec<RegEntry>,
     pub plugins: Vec<ResolvedPlugin>,
     pub shortcuts: Vec<ShortcutEntry>,
+    pub features: Vec<ResolvedFeature>,
 }
 
 impl PackArgs {
@@ -388,8 +415,47 @@ impl PackArgs {
             registry: build_registry(file.registry)?,
             plugins: build_plugins(file.plugins)?,
             shortcuts: build_shortcuts(file.shortcuts)?,
+            features: build_features(file.features)?,
         })
     }
+}
+
+/// Convert + validate `[[feature]]` entries. Ids must be non-empty, unique
+/// (case-insensitive) and ASCII letters/digits/`-`/`_`; each needs ≥1 path glob.
+fn build_features(raw: Vec<FeatureFileEntry>) -> Result<Vec<ResolvedFeature>> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut seen = std::collections::HashSet::new();
+    for (i, f) in raw.into_iter().enumerate() {
+        let n = i + 1;
+        let id = f.id.trim().to_string();
+        if id.is_empty() {
+            bail!("feature #{n}: empty id");
+        }
+        if !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            bail!("feature #{n} ('{id}'): id must be ASCII letters, digits, '-' or '_'");
+        }
+        if !seen.insert(id.to_ascii_lowercase()) {
+            bail!("feature #{n}: duplicate id '{id}'");
+        }
+        let paths: Vec<String> = f
+            .paths
+            .into_iter()
+            .map(|p| p.trim().replace('\\', "/"))
+            .filter(|p| !p.is_empty())
+            .collect();
+        if paths.is_empty() {
+            bail!("feature #{n} ('{id}'): needs at least one non-empty path");
+        }
+        out.push(ResolvedFeature {
+            id,
+            paths,
+            default_enabled: f.default,
+        });
+    }
+    Ok(out)
 }
 
 /// Parse the optional `install_dir_restriction` value (CLI or config).
@@ -763,6 +829,38 @@ force_reinstall = true
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn features_parsed_and_validated() {
+        let r = resolve_with(
+            "\n[[feature]]\nid='D1'\npaths=['Dossier1']\ndefault=true\n\
+             [[feature]]\nid='D2'\npaths=['data/**','extra/*.bin']\n",
+        )
+        .unwrap();
+        assert_eq!(r.features.len(), 2);
+        assert_eq!(r.features[0].id, "D1");
+        assert_eq!(r.features[0].paths, vec!["Dossier1".to_string()]);
+        assert!(r.features[0].default_enabled); // default=true parsed
+        assert_eq!(r.features[1].paths.len(), 2);
+        assert!(!r.features[1].default_enabled); // omitted → false
+    }
+
+    #[test]
+    fn features_reject_bad() {
+        // empty id
+        assert!(resolve_with("\n[[feature]]\nid=''\npaths=['x']\n").is_err());
+        // illegal id char
+        assert!(resolve_with("\n[[feature]]\nid='a b'\npaths=['x']\n").is_err());
+        // duplicate (case-insensitive)
+        assert!(
+            resolve_with("\n[[feature]]\nid='a'\npaths=['x']\n[[feature]]\nid='A'\npaths=['y']\n")
+                .is_err()
+        );
+        // no paths
+        assert!(resolve_with("\n[[feature]]\nid='a'\npaths=[]\n").is_err());
+        // unknown field
+        assert!(resolve_with("\n[[feature]]\nid='a'\npaths=['x']\nnope=1\n").is_err());
     }
 
     #[test]

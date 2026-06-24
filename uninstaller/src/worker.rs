@@ -44,6 +44,8 @@ pub fn run(pipe_name: &str) -> Result<()> {
         deleted_files: Vec::new(),
         full_size: 0,
         total_patch_size: 0,
+        features: Vec::new(),
+        default_features: Vec::new(),
     });
 
     let app_dir = std::path::PathBuf::from(&info.install_dir);

@@ -3,6 +3,7 @@
 
 pub mod choice_option;
 pub mod choice_style;
+pub mod feature_select;
 pub mod file_assoc;
 pub mod file_entry;
 pub mod install_dir_restriction;

@@ -22,7 +22,7 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
     let line = common::elevation::read_line_unbuffered(&mut pipe)?;
     let cmd: InstallWorkerCommand = serde_json::from_str(line.trim())?;
 
-    let loaded = match crate::payload::load_and_verify() {
+    let mut loaded = match crate::payload::load_and_verify() {
         Ok(l) => l,
         Err(e) => {
             let _ = send(
@@ -34,6 +34,10 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
             return Ok(());
         }
     };
+
+    // Resolve feature packs (machine-wide install) from the inputs the main
+    // process forwarded, and filter the manifest before staging.
+    crate::extract::resolve_and_filter(&mut loaded, &cmd.install_dir, true, &cmd.plugin_inputs);
 
     // Arc<Mutex> because rayon may call the progress callback from multiple threads.
     let pipe_shared: Arc<Mutex<std::fs::File>> = Arc::new(Mutex::new(pipe));

@@ -468,7 +468,7 @@ unsafe fn commit_install(hwnd: HWND) {
     let translator = tr();
 
     thread::spawn(move || {
-        let loaded = match crate::payload::load_and_verify() {
+        let mut loaded = match crate::payload::load_and_verify() {
             Ok(l) => l,
             Err(e) => {
                 #[cfg(feature = "hintway")]
@@ -477,6 +477,13 @@ unsafe fn commit_install(hwnd: HWND) {
                 return;
             }
         };
+        // Machine-wide iff the target is a shared location (e.g. Program Files);
+        // catches an already-admin run that doesn't trip the PermissionDenied
+        // elevation path. A non-machine dir that still needs admin is handled by
+        // the elevated worker (which forces requires_admin = true).
+        let requires_admin = common::paths::is_machine_location(&pb);
+        // Resolve feature packs from the wizard's answers and filter the manifest.
+        crate::extract::resolve_and_filter(&mut loaded, &pb, requires_admin, &plugin_inputs);
         let progress_cb: common::ProgressFn = {
             let progress_shared = progress_shared.clone();
             Arc::new(move |done, total, name| {
@@ -488,11 +495,6 @@ unsafe fn commit_install(hwnd: HWND) {
                 helpers::post(hwnd_isize, WM_APP_PROGRESS);
             })
         };
-        // Machine-wide iff the target is a shared location (e.g. Program Files);
-        // catches an already-admin run that doesn't trip the PermissionDenied
-        // elevation path. A non-machine dir that still needs admin is handled by
-        // the elevated worker (which forces requires_admin = true).
-        let requires_admin = common::paths::is_machine_location(&pb);
         let ctx = InstallCtx {
             install_dir: pb.clone(),
             payload: &loaded.payload,

@@ -109,13 +109,13 @@ cargo build --release -p installer_builder
 cargo test
 ```
 
-91 tests across four crates:
+Tests across four crates:
 
 | Crate | Tests | Coverage areas |
 |---|---|---|
-| `common` | 41 | i18n, model round-trips, BLAKE3, file utils, registry encoding, shortcuts, paths |
-| `installer` | 30 | payload verification, extract/rollback/repair, path validation, plugin wizard, UI helpers |
-| `installer_builder` | 18 | CLI arg parsing, pack options, version info, association rules |
+| `common` | 50 | i18n, model round-trips, BLAKE3, file utils, registry encoding, shortcuts, paths, feature selection |
+| `installer` | 36 | payload verification, extract/rollback/repair, path validation, plugin wizard, feature filtering, UI helpers |
+| `installer_builder` | 41 | CLI arg parsing, pack options, version info, association rules, feature globs/tagging |
 | `uninstaller` | 2 | cleanup file removal, directory pruning |
 
 To test a single crate:

@@ -61,6 +61,8 @@ pub fn run(silent: bool) -> Result<()> {
             deleted_files: Vec::new(),
             full_size: 0,
             total_patch_size: 0,
+            features: Vec::new(),
+            default_features: Vec::new(),
         }
     });
 

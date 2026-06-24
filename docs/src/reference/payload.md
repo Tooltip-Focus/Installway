@@ -61,12 +61,15 @@ struct Manifest {
     deleted_files: Vec<String>,        // removed at install time (patches)
     full_size: u64,
     total_patch_size: u64,
+    features: Vec<String>,             // declared feature-pack ids (see Feature packs)
+    default_features: Vec<String>,     // subset enabled by default on a fresh install
 }
 
 struct FileEntry {
     hash: String,            // BLAKE3, checked after each write/patch
     size: u64,
     patch: Option<PatchInfo>,
+    feature: Option<String>, // feature pack this file belongs to; None = base
 }
 
 struct PatchInfo {
@@ -88,8 +91,9 @@ Persisted to `<data-dir>\installer_info.json` by the installer and read by the
 uninstaller: `product`, `product_id`, `publisher`, `version`, `install_dir`,
 `installed_at_unix`, `registry_key` (equal to `product_id`), `exe`, the
 `associations`, the resolved `shortcuts`, the resolved `registry` entries to
-remove, and `requires_admin` (drives the `HKLM`/`%ProgramData%` vs
-`HKCU`/`%LOCALAPPDATA%` choice). Records written before the product/id split
+remove, `requires_admin` (drives the `HKLM`/`%ProgramData%` vs
+`HKCU`/`%LOCALAPPDATA%` choice), and `features` (the active feature packs, read
+back on the next upgrade — see [Feature packs](../packaging/features.md)). Records written before the product/id split
 have no `product_id`; readers fall back to `registry_key` and a sanitized
 `product`.
 

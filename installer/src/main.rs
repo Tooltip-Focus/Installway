@@ -223,7 +223,7 @@ fn run(cli: Cli) -> Result<()> {
             },
             hintway_lang,
         );
-        return run_silent(&loaded, path, launch, translator);
+        return run_silent(loaded, path, launch, translator);
     }
 
     // Diagnostic: re-hash installed files against the manifest in the data dir.
@@ -345,7 +345,7 @@ fn attach_console() {
 }
 
 fn run_silent(
-    loaded: &payload::LoadedPayload,
+    mut loaded: payload::LoadedPayload,
     install_dir: PathBuf,
     launch: bool,
     translator: common::i18n::Translator,
@@ -364,11 +364,13 @@ fn run_silent(
     }) as common::ProgressFn;
 
     // No interactive UI: plugin pages fall back to their declared defaults.
-    let plugin_inputs = ui::headless_plugin_inputs(loaded, &install_dir)?;
+    let plugin_inputs = ui::headless_plugin_inputs(&loaded, &install_dir)?;
 
     // Machine-wide iff the target is a shared location (Program Files, etc.).
     // Silent runs have no auto-elevation, so location is the only signal.
     let requires_admin = common::paths::is_machine_location(&install_dir);
+    // Resolve feature packs from the headless answers and filter the manifest.
+    extract::resolve_and_filter(&mut loaded, &install_dir, requires_admin, &plugin_inputs);
     let ctx = extract::InstallCtx {
         install_dir: install_dir.clone(),
         payload: &loaded.payload,
@@ -444,30 +446,13 @@ fn default_install_path(payload: &common::model::installer_payload::InstallerPay
     PathBuf::from(format!(r"C:\Users\Public\{}", product))
 }
 
-/// The folder this product was last installed to. Checks the machine-wide data
-/// dir (`%ProgramData%`) first, then the per-user one (`%LOCALAPPDATA%`).
-/// `None` if never installed or the record is missing / empty.
+/// The folder this product was last installed to, or `None` if never installed
+/// or the recorded path is empty.
 fn previous_install_dir(
     payload: &common::model::installer_payload::InstallerPayload,
 ) -> Option<PathBuf> {
-    for machine in [true, false] {
-        let data_dir =
-            common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, machine)?;
-        if let Some(dir) = read_install_dir(&data_dir) {
-            return Some(dir);
-        }
-    }
-    None
-}
-
-fn read_install_dir(data_dir: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(data_dir.join("installer_info.json")).ok()?;
-    let info: common::model::install_info::InstallInfo = serde_json::from_str(&text).ok()?;
-    if info.install_dir.trim().is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(info.install_dir))
-    }
+    let (_, info) = extract::prior_install_info(payload)?;
+    (!info.install_dir.trim().is_empty()).then(|| PathBuf::from(info.install_dir))
 }
 
 fn report_fatal(msg: &str) {

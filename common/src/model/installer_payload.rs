@@ -89,6 +89,10 @@ pub struct InstallerPayload {
     /// interactive uninstall. Off by default; enable per-app at build time.
     #[serde(default)]
     pub show_uninstall_complete: bool,
+    /// Feature packs resolved active for this run. Runtime-only (not signed); the
+    /// installer fills it after querying the plugins and records it at finalize.
+    #[serde(skip)]
+    pub active_features: Vec<String>,
 }
 
 impl Default for InstallerPayload {
@@ -110,6 +114,8 @@ impl Default for InstallerPayload {
                 deleted_files: vec![],
                 full_size: 0,
                 total_patch_size: 0,
+                features: vec![],
+                default_features: vec![],
             },
             license_text: None,
             associations: vec![FileAssoc {
@@ -145,6 +151,7 @@ impl Default for InstallerPayload {
                 ui: true,
             }],
             show_uninstall_complete: true,
+            active_features: vec![],
         }
     }
 }

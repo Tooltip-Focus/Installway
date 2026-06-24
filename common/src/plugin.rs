@@ -60,12 +60,27 @@ pub struct PluginCtx {
     /// is treated as the default language.
     #[serde(default)]
     pub lang: String,
+    /// Feature-pack catalog for `installway_pages` / `installway_features`: a JSON
+    /// object `{ "all": [...], "active": [...] }` (declared features + the current
+    /// base set), so a plugin can render a pre-checked picker. Empty when the
+    /// build declares no features.
+    #[serde(default)]
+    pub features_json: String,
 }
 
 /// Collected page answers per plugin name; each value becomes that plugin's
 /// `ctx.inputs_json`.
 pub type InputsByPlugin =
     std::collections::HashMap<String, crate::model::plugin_page::PluginInputs>;
+
+/// The JSON a plugin sees as `ctx.inputs_json`: its collected page answers, or
+/// `""` when it contributed none.
+pub fn inputs_json_for(inputs: &InputsByPlugin, name: &str) -> String {
+    inputs
+        .get(name)
+        .map(|m| serde_json::to_string(m).unwrap_or_default())
+        .unwrap_or_default()
+}
 
 /// Run `func` (`"up"`/`"down"`) for each plugin in its own child process,
 /// passing that plugin's `inputs_json`. With `enforce_required`, a required
@@ -142,6 +157,39 @@ pub fn run_up_single(
     Ok(())
 }
 
+/// Verify a plugin DLL's BLAKE3 against its manifest entry, bailing on mismatch.
+fn verify_plugin_hash(entry: &PluginEntry, dll: &Path) -> Result<()> {
+    let bytes = std::fs::read(dll).with_context(|| format!("read plugin dll {}", dll.display()))?;
+    if crate::utils::bytes_blake3(&bytes) != entry.blake3 {
+        bail!("plugin '{}' hash mismatch - refusing to load", entry.name);
+    }
+    Ok(())
+}
+
+/// Query a plugin's optional `installway_features` step. A plugin that doesn't
+/// export it (or emits nothing) yields an empty selection, so callers can query
+/// every plugin and ignore non-participants.
+pub fn query_features(
+    self_exe: &Path,
+    base_ctx: &PluginCtx,
+    entry: &PluginEntry,
+    dll: &Path,
+    inputs_json: &str,
+) -> Result<crate::model::feature_select::FeatureSelection> {
+    verify_plugin_hash(entry, dll)?;
+    let mut ctx = base_ctx.clone();
+    ctx.inputs_json = inputs_json.to_string();
+    let ctx_json = serde_json::to_string(&ctx)?;
+    let (ok, descriptor) = run_child(self_exe, dll, "features", &ctx_json, true, None)?;
+    if !ok {
+        bail!("plugin '{}' feature query returned failure", entry.name);
+    }
+    if descriptor.trim().is_empty() {
+        return Ok(Default::default());
+    }
+    serde_json::from_str(&descriptor).context("parse plugin feature selection")
+}
+
 /// Run one step of a `ui = true` plugin's wizard: hand it the answers collected
 /// so far (`answers_json`, a JSON object) and parse the [`PageStep`] it emits
 /// over the pipe. Errors are returned (never panic) so the caller can log and
@@ -153,10 +201,7 @@ pub fn query_step(
     dll: &Path,
     answers_json: &str,
 ) -> Result<crate::model::page_step::PageStep> {
-    let bytes = std::fs::read(dll).with_context(|| format!("read plugin dll {}", dll.display()))?;
-    if crate::utils::bytes_blake3(&bytes) != entry.blake3 {
-        bail!("plugin '{}' hash mismatch - refusing to load", entry.name);
-    }
+    verify_plugin_hash(entry, dll)?;
     let mut ctx = base_ctx.clone();
     ctx.inputs_json = answers_json.to_string();
     let ctx_json = serde_json::to_string(&ctx)?;
@@ -406,6 +451,9 @@ struct CContext {
     /// Host UI language code (e.g. L"fr"). Never null; empty wide string when the
     /// host didn't resolve one.
     lang: *const u16,
+    /// Feature-pack catalog JSON `{ "all": [...], "active": [...] }`, or null when
+    /// the build declares no features.
+    features_json: *const u16,
 }
 
 extern "system" fn emit_pages_cb(json: *const u16) {
@@ -547,9 +595,19 @@ unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginCtx) -> i32 {
     let name = match func {
         "down" => s!("installway_down"),
         "pages" => s!("installway_pages"),
+        "features" => s!("installway_features"),
         _ => s!("installway_up"),
     };
     let Some(act_ptr) = (unsafe { GetProcAddress(hmod, name) }) else {
+        // A plugin that doesn't export `installway_features` simply contributes
+        // no feature selection — that's expected, not a failure.
+        if func == "features" {
+            write_log(
+                "INFO",
+                "plugin has no installway_features - no feature selection",
+            );
+            return 0;
+        }
         write_log("ERROR", &format!("plugin missing installway_{func}"));
         return if func == "pages" { 114 } else { 113 };
     };
@@ -570,6 +628,12 @@ unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginCtx) -> i32 {
     } else {
         inputs.as_ptr()
     };
+    let features = wide(&ctx.features_json);
+    let features_ptr = if ctx.features_json.is_empty() {
+        std::ptr::null()
+    } else {
+        features.as_ptr()
+    };
     let has_progress = PROGRESS_PIPE.lock().map(|g| g.is_some()).unwrap_or(false);
     let c = CContext {
         abi_version: ABI_VERSION,
@@ -588,6 +652,7 @@ unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginCtx) -> i32 {
             None
         },
         lang: lang.as_ptr(),
+        features_json: features_ptr,
     };
     unsafe { act(&c) }
 }
