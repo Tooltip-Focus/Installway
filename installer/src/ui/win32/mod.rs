@@ -26,7 +26,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT,
@@ -819,6 +819,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_CLOSE => unsafe {
+            // During the install/verify phase the X must not silently kill a
+            // half-applied install. Confirm first; on yes, request a cooperative
+            // cancel and leave the window up - the worker rolls back and posts
+            // WM_APP_CANCELLED, which performs the actual close.
+            let phase = STATE.with(|s| s.borrow().as_ref().map(|st| st.borrow().phase));
+            if phase == Some(Phase::Progress) {
+                if !message_confirm(hwnd, &tr().get("install.cancel_confirm")) {
+                    return LRESULT(0);
+                }
+                STATE.with(|s| {
+                    if let Some(state) = s.borrow().as_ref() {
+                        state.borrow().cancel.store(true, Ordering::Relaxed);
+                    }
+                });
+                helpers::set_dlg_text(hwnd, ID_STATUS, &tr().get("install.cancelling"));
+                return LRESULT(0);
+            }
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        },
+        m if m == helpers::WM_APP_CANCELLED => unsafe {
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
         },
@@ -848,4 +869,19 @@ pub(super) unsafe fn message_box(hwnd: HWND, text: &str, style: MESSAGEBOX_STYLE
     unsafe {
         MessageBoxW(Some(hwnd), PCWSTR(t.as_ptr()), PCWSTR(c.as_ptr()), style);
     }
+}
+
+/// Modal Yes/No confirmation with the localized caption. Returns `true` on Yes.
+pub(super) unsafe fn message_confirm(hwnd: HWND, text: &str) -> bool {
+    let t = wide(text);
+    let c = wide(&tr().get("install.msg_caption"));
+    let r = unsafe {
+        MessageBoxW(
+            Some(hwnd),
+            PCWSTR(t.as_ptr()),
+            PCWSTR(c.as_ptr()),
+            MB_YESNO | MB_ICONWARNING,
+        )
+    };
+    r == IDYES
 }
