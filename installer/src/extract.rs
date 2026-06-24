@@ -44,7 +44,7 @@ impl std::fmt::Display for VersionMismatch {
             "no version".to_string()
         } else {
             format!("version {}", self.found)
-        };
+        }
         write!(
             f,
             "This update applies to version {}, but {} is installed. \
@@ -354,9 +354,15 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
 
         let commit_result = (|| -> Result<()> {
             for rel in &to_commit {
+                if ctx.cancel.load(Ordering::Relaxed) {
+                    bail!("cancelled by user");
+                }
                 commit_one(&ctx.install_dir, &staged_dir, &backup_dir, rel)?;
             }
             for rel in &deleted {
+                if ctx.cancel.load(Ordering::Relaxed) {
+                    bail!("cancelled by user");
+                }
                 backup_then_remove(&ctx.install_dir, &backup_dir, rel)?;
             }
             Ok(())
@@ -375,11 +381,21 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
         (ctx.on_progress)(total_bytes, total_bytes, "Verifying...");
         common::log::info(format!("verifying {} committed file(s)", to_commit.len()));
         let verify_started = Instant::now();
-        let mut corrupt = find_corrupt(&ctx.install_dir, manifest, &to_commit);
+        let mut corrupt = find_corrupt(&ctx.install_dir, manifest, &to_commit, &ctx.cancel);
         common::log::info(format!(
             "verification finished in {:.1}s",
             verify_started.elapsed().as_secs_f64()
         ));
+
+        // A cancel during the (potentially long) re-hash short-circuits the
+        // remaining files inside `find_corrupt`; here we roll back so the live
+        // install returns to its previous version rather than half-committed.
+        if ctx.cancel.load(Ordering::Relaxed) {
+            common::log::warn("cancelled by user during verification - rolling back");
+            rollback(&temp_dir, &ctx.install_dir, &to_commit, &deleted);
+            cleanup(&temp_dir);
+            bail!("cancelled by user");
+        }
 
         // Repair before a full rollback: corrupt content is reproducible from
         // the payload, and rewriting to a fresh location dodges transient
@@ -404,7 +420,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
                     common::log::error(format!("repair attempt {} failed: {e:#}", attempt));
                     break;
                 }
-                corrupt = find_corrupt(&ctx.install_dir, manifest, &corrupt);
+                corrupt = find_corrupt(&ctx.install_dir, manifest, &corrupt, &ctx.cancel);
                 if corrupt.is_empty() {
                     common::log::info(format!("repair succeeded on attempt {}", attempt));
                     break;
@@ -957,6 +973,7 @@ pub fn plugin_ctx(
         log_path: common::log::current_path()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
+        lang: common::i18n::current_lang().to_string(),
         ..Default::default()
     }
 }
@@ -1113,12 +1130,25 @@ fn classify(rel: &str, expected: &str, outcome: VerifyOutcome, retry: bool) -> V
     }
 }
 
-/// Re-hash each committed file and return those that genuinely don't match the
-/// manifest (mismatch or missing) - the set the caller repairs / rolls back.
-fn find_corrupt(install_dir: &Path, manifest: &Manifest, committed: &[String]) -> Vec<String> {
+/// Re-hash each committed file and return those that don't match the manifest
+/// (corrupt, missing, or unreadable). Parallel; used inside the transaction.
+///
+/// `cancel` lets a user-requested cancel short-circuit the remaining files: the
+/// re-hash reads every installed byte again and can be slow (AV scanning a fresh
+/// `.exe`, a slow/network disk), so once cancel is set, pending files are skipped
+/// rather than hashed. The caller re-checks the flag and rolls back.
+fn find_corrupt(
+    install_dir: &Path,
+    manifest: &Manifest,
+    committed: &[String],
+    cancel: &AtomicBool,
+) -> Vec<String> {
     let outcomes: Vec<(String, VerifyOutcome, Duration)> = committed
         .par_iter()
         .filter_map(|rel| {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
             let entry = manifest.files.get(rel)?;
             let path = long_path(&install_dir.join(rel));
             let t = Instant::now();
@@ -1146,6 +1176,9 @@ fn find_corrupt(install_dir: &Path, manifest: &Manifest, committed: &[String]) -
     }
 
     for rel in deferred {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         let Some(entry) = manifest.files.get(&rel) else {
             continue;
         };
@@ -1391,7 +1424,8 @@ mod tests {
             total_patch_size: 0,
         };
 
-        let corrupt = find_corrupt(&app, &manifest, &["foo.txt".to_string()]);
+        let no_cancel = AtomicBool::new(false);
+        let corrupt = find_corrupt(&app, &manifest, &["foo.txt".to_string()], &no_cancel);
         assert_eq!(corrupt, vec!["foo.txt".to_string()]);
 
         repair_corrupt(
@@ -1405,7 +1439,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(find_corrupt(&app, &manifest, &["foo.txt".to_string()]).is_empty());
+        assert!(find_corrupt(&app, &manifest, &["foo.txt".to_string()], &no_cancel).is_empty());
         assert_eq!(fs::read(app.join("foo.txt")).unwrap(), good);
     }
 

@@ -55,6 +55,11 @@ pub struct PluginCtx {
     /// `up` only: the user's page answers, keyed `"<page_id>.<widget_id>"`.
     #[serde(default)]
     pub inputs_json: String,
+    /// Host UI language code (2 ISO-639 chars, e.g. `"en"`/`"fr"`), so a plugin
+    /// can localize its pages/log to match the installer. Empty (older records)
+    /// is treated as the default language.
+    #[serde(default)]
+    pub lang: String,
 }
 
 /// Collected page answers per plugin name; each value becomes that plugin's
@@ -398,6 +403,9 @@ struct CContext {
     emit_pages: extern "system" fn(*const u16),
     /// Null when the parent didn't open a progress pipe (marquee mode).
     emit_progress: Option<extern "system" fn(u32)>,
+    /// Host UI language code (e.g. L"fr"). Never null; empty wide string when the
+    /// host didn't resolve one.
+    lang: *const u16,
 }
 
 extern "system" fn emit_pages_cb(json: *const u16) {
@@ -555,6 +563,7 @@ unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginCtx) -> i32 {
     let product_id = wide(&ctx.product_id);
     let version = wide(&ctx.version);
     let exe = wide(&ctx.exe);
+    let lang = wide(&ctx.lang);
     let inputs = wide(&ctx.inputs_json);
     let inputs_ptr = if ctx.inputs_json.is_empty() {
         std::ptr::null()
@@ -578,6 +587,7 @@ unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginCtx) -> i32 {
         } else {
             None
         },
+        lang: lang.as_ptr(),
     };
     unsafe { act(&c) }
 }
@@ -637,5 +647,21 @@ mod tests {
         };
         let back: PluginCtx = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.inputs_json, c.inputs_json);
+    }
+
+    /// `lang` round-trips, and an older record without it defaults to empty.
+    #[test]
+    fn ctx_lang_round_trip_and_default() {
+        let c = PluginCtx {
+            lang: "fr".into(),
+            ..Default::default()
+        };
+        let back: PluginCtx = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.lang, "fr");
+
+        let j = r#"{"install_dir":"C:\\app","product":"P","product_id":"P_id",
+                    "version":"1.0","exe":"C:\\app\\p.exe","log_path":"C:\\t.log"}"#;
+        let old: PluginCtx = serde_json::from_str(j).unwrap();
+        assert!(old.lang.is_empty());
     }
 }
