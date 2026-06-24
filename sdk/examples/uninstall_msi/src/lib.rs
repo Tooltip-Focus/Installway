@@ -26,6 +26,9 @@ pub struct InstallwayContext {
     /// Call with a 0–100 value to drive a deterministic progress bar.
     /// Null when the page uses `marquee: true` (infinite bar).
     emit_progress: Option<extern "system" fn(u32)>,
+    /// Host UI language code (e.g. L"en", L"fr"). Never null; empty when the host
+    /// resolved none. Use it to localize the page strings to match the installer.
+    lang: *const u16,
 }
 
 #[link(name = "msi")]
@@ -42,6 +45,30 @@ extern "system" {
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Read a null-terminated wide string from the context; empty on null.
+unsafe fn from_wide(ptr: *const u16) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let mut len = 0usize;
+    unsafe {
+        while *ptr.add(len) != 0 {
+            len += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len))
+    }
+}
+
+/// The host UI language code (e.g. "fr"). A custom i18n: each plugin ships its
+/// own strings and selects them by this code, so the page matches the installer
+/// (including its `--lang` / `INSTALLWAY_LANG` overrides). Unknown → English.
+unsafe fn ctx_lang(ctx: *const InstallwayContext) -> String {
+    if ctx.is_null() {
+        return String::new();
+    }
+    unsafe { from_wide((*ctx).lang) }
 }
 
 unsafe fn log(ctx: *const InstallwayContext, level: &str, msg: &str) {
@@ -81,9 +108,24 @@ pub extern "system" fn installway_pages(ctx: *const InstallwayContext) -> i32 {
     if find_product_code_by_upgrade_code(UPGRADE_CODE).is_none() {
         return 0;
     }
+    // Localize the page to the host language. Strings contain no `"` or `\`, so
+    // they need no JSON escaping when interpolated below.
+    let (title, subtitle) = match unsafe { ctx_lang(ctx) }.as_str() {
+        "fr" => (
+            "Suppression de la version précédente",
+            "Désinstallation de l'ancien MSI — cela peut prendre un moment.",
+        ),
+        _ => (
+            "Removing previous version",
+            "Uninstalling the legacy MSI — this may take a moment.",
+        ),
+    };
     match unsafe { (*ctx).emit_pages } {
         Some(emit) => {
-            emit(wide(r#"{"step":"page","page":{"id":"uninstall","title":"Removing previous version","subtitle":"Uninstalling the legacy MSI — this may take a moment.","buttons":false,"widgets":[{"kind":"progress"}]}}"#).as_ptr());
+            let json = format!(
+                r#"{{"step":"page","page":{{"id":"uninstall","title":"{title}","subtitle":"{subtitle}","buttons":false,"widgets":[{{"kind":"progress"}}]}}}}"#
+            );
+            emit(wide(&json).as_ptr());
             0
         }
         None => 2,

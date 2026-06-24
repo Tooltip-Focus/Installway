@@ -24,6 +24,18 @@ const DEFAULT_LANG: &str = "en";
 
 static TABLES: OnceLock<HashMap<&'static str, HashMap<String, String>>> = OnceLock::new();
 
+/// Process-wide resolved UI language, set once at startup via
+/// [`Translator::set_global`]. Lets code that has no `Translator` in hand (e.g.
+/// plugin-context construction) read the same language the host UI uses.
+static CURRENT_LANG: OnceLock<&'static str> = OnceLock::new();
+
+/// The process-wide UI language code (2 ISO-639 chars, e.g. `"fr"`). Falls back
+/// to the default language until a translator calls [`Translator::set_global`].
+/// Passed to plugins as `ctx.lang` so they can localize to match the host.
+pub fn current_lang() -> &'static str {
+    CURRENT_LANG.get().copied().unwrap_or(DEFAULT_LANG)
+}
+
 fn tables() -> &'static HashMap<&'static str, HashMap<String, String>> {
     TABLES.get_or_init(|| {
         let mut all = HashMap::new();
@@ -98,6 +110,14 @@ impl Translator {
 
     pub fn lang(&self) -> &'static str {
         self.lang
+    }
+
+    /// Record this translator's language as the process-wide UI language so
+    /// [`current_lang`] (and thus the plugin context) reflects it. First call
+    /// wins; later calls are no-ops. Call once at each process entry point,
+    /// right after the translator is resolved.
+    pub fn set_global(self) {
+        let _ = CURRENT_LANG.set(self.lang);
     }
 
     /// Look up a key. Missing → fall back to English → key literal.

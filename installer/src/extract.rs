@@ -875,6 +875,7 @@ pub fn plugin_ctx(
         log_path: common::log::current_path()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
+        lang: common::i18n::current_lang().to_string(),
         ..Default::default()
     }
 }
