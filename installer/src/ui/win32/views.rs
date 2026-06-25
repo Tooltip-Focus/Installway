@@ -619,5 +619,8 @@ pub(super) unsafe fn apply_fonts(hwnd: HWND) {
             }
         }
     });
+    // Plugin pages keep their own controls; rescale their fonts too (mirrors
+    // `relayout`), so a plugin progress page stays crisp after a DPI change.
+    super::plugin_pages::apply_fonts(hwnd);
     super::plugin_pages::apply_fonts(hwnd);
 }

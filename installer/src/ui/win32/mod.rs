@@ -291,7 +291,9 @@ unsafe fn create_window(
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
 
         let style = WS_OVERLAPPED | WS_SYSMENU | WS_CAPTION | WS_MINIMIZEBOX;
-        let (ww, wh) = helpers::window_size_for_client(WIN_W, WIN_H, style, WINDOW_EX_STYLE(0));
+        // Base (96-dpi) size for the initial CW_USEDEFAULT placement; rescaled to
+        // the actual monitor DPI just below once the window exists.
+        let (ww, wh) = helpers::window_size_for_client(WIN_W, WIN_H, style, WINDOW_EX_STYLE(0), 96);
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class_name,
@@ -331,6 +333,7 @@ unsafe fn create_window(
             helpers::scale(WIN_H, dpi),
             style,
             WINDOW_EX_STYLE(0),
+            dpi,
         );
         let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
 
