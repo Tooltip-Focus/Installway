@@ -173,7 +173,9 @@ unsafe fn build_window(
 
     // No min/max box, fixed small tool-like window (still has close).
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
-    let (ww, wh) = helpers::window_size_for_client(WIN_W, WIN_H, style, WINDOW_EX_STYLE(0));
+    // Base (96-dpi) size for the initial placement; rescaled to the monitor DPI
+    // below once the window exists.
+    let (ww, wh) = helpers::window_size_for_client(WIN_W, WIN_H, style, WINDOW_EX_STYLE(0), 96);
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -216,6 +218,7 @@ unsafe fn build_window(
             helpers::scale(WIN_H, dpi),
             style,
             WINDOW_EX_STYLE(0),
+            dpi,
         );
         let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
         helpers::center(hwnd);

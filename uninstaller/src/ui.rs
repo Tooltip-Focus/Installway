@@ -24,7 +24,7 @@ use windows::Win32::UI::Controls::{
     ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, PBM_SETPOS, PBM_SETRANGE32,
     PROGRESS_CLASSW,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::Shell::ExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
@@ -151,7 +151,9 @@ pub fn run(params: UninstallParams) -> bool {
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
 
         let style = WS_OVERLAPPED | WS_SYSMENU | WS_CAPTION;
-        let (ww, wh) = window_outer_size(WIN_W, WIN_H, style);
+        // Base (96-dpi) size for the initial placement; rescaled to the monitor
+        // DPI below once the window exists.
+        let (ww, wh) = window_outer_size(WIN_W, WIN_H, style, 96);
         let hwnd = match CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class_name,
@@ -190,7 +192,7 @@ pub fn run(params: UninstallParams) -> bool {
         // different scale stays crisp instead of dropping/clipping controls.
         let dpi = dpi_for(hwnd);
         rebuild_fonts(dpi);
-        let (sw, sh) = window_outer_size(scale(WIN_W, dpi), scale(WIN_H, dpi), style);
+        let (sw, sh) = window_outer_size(scale(WIN_W, dpi), scale(WIN_H, dpi), style, dpi);
         let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
         center(hwnd);
         build_controls(hwnd, &params);
@@ -664,15 +666,23 @@ unsafe fn update_progress(hwnd: HWND) {
 }
 
 /// Total window size whose *client area* is `client_w × client_h` for the given
-/// style. Use this so control layout (in client coords) gets symmetric margins.
-fn window_outer_size(client_w: i32, client_h: i32, style: WINDOW_STYLE) -> (i32, i32) {
+/// style at `dpi`. Use this so control layout (in client coords) gets symmetric
+/// margins.
+///
+/// Uses `AdjustWindowRectExForDpi` rather than the DPI-unaware
+/// `AdjustWindowRectEx`: at 150 %+ the caption/borders are much taller than
+/// their 96-dpi size, so a 96-dpi calculation leaves the client too short and
+/// clips the bottom controls (progress bar, status). At 96 dpi this matches the
+/// old result.
+fn window_outer_size(client_w: i32, client_h: i32, style: WINDOW_STYLE, dpi: i32) -> (i32, i32) {
     let mut r = RECT {
         left: 0,
         top: 0,
         right: client_w,
         bottom: client_h,
     };
-    let _ = unsafe { AdjustWindowRectEx(&mut r, style, false, WINDOW_EX_STYLE(0)) };
+    let _ =
+        unsafe { AdjustWindowRectExForDpi(&mut r, style, false, WINDOW_EX_STYLE(0), dpi as u32) };
     (r.right - r.left, r.bottom - r.top)
 }
 

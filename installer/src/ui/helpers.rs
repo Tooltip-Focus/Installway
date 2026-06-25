@@ -13,10 +13,10 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, PBM_SETPOS, PBM_SETRANGE32,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::Shell::ExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, DispatchMessageW, GetDlgItem, GetMessageW, GetSystemMetrics, GetWindowRect,
+    DispatchMessageW, GetDlgItem, GetMessageW, GetSystemMetrics, GetWindowRect,
     GetWindowTextLengthW, GetWindowTextW, HICON, MSG, PostMessageW, SM_CXSCREEN, SM_CYSCREEN,
     SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowTextW, TranslateMessage,
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_SETFONT,
@@ -99,14 +99,22 @@ pub unsafe fn own_icon() -> HICON {
 }
 
 /// Total window size whose *client area* is `client_w` × `client_h` for the
-/// given styles. Control layout uses client coords, so pass this to
+/// given styles at `dpi`. Control layout uses client coords, so pass this to
 /// `CreateWindowExW` to get the intended margins (the raw size would be the
 /// outer rect, leaving the client ~16 px narrower / ~39 px shorter).
+///
+/// Uses `AdjustWindowRectExForDpi` rather than the DPI-unaware
+/// `AdjustWindowRectEx`: at 150 %+ the caption/borders are much taller than
+/// their 96-dpi size, so the 96-dpi calculation underestimates the non-client
+/// area and leaves the client too short — clipping the bottom controls
+/// (progress bar, status, buttons). Pass the monitor DPI so the frame is sized
+/// for the scale the layout is built at. At 96 dpi this matches the old result.
 pub fn window_size_for_client(
     client_w: i32,
     client_h: i32,
     style: WINDOW_STYLE,
     ex: WINDOW_EX_STYLE,
+    dpi: i32,
 ) -> (i32, i32) {
     let mut r = RECT {
         left: 0,
@@ -114,7 +122,7 @@ pub fn window_size_for_client(
         right: client_w,
         bottom: client_h,
     };
-    let _ = unsafe { AdjustWindowRectEx(&mut r, style, false, ex) };
+    let _ = unsafe { AdjustWindowRectExForDpi(&mut r, style, false, ex, dpi as u32) };
     (r.right - r.left, r.bottom - r.top)
 }
 
