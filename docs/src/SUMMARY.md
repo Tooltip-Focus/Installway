@@ -22,6 +22,7 @@
 - [Shortcuts](packaging/shortcuts.md)
 - [Registry keys](packaging/registry.md)
 - [Plugins (custom DLLs)](packaging/plugins.md)
+- [Feature packs](packaging/features.md)
 - [Trimming the wizard](packaging/wizard.md)
 - [Signing (Authenticode)](packaging/signing.md)
 

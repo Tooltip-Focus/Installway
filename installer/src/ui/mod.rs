@@ -165,6 +165,8 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
             deleted_files: Vec::new(),
             full_size: 12_345_678,
             total_patch_size: 0,
+            features: Vec::new(),
+            default_features: Vec::new(),
         },
         license_text: None,
         associations: Vec::new(),
@@ -179,6 +181,7 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
         show_uninstall_complete: false,
         registry: Vec::new(),
         plugins: Vec::new(),
+        active_features: Vec::new(),
     }
 }
 

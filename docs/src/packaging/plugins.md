@@ -14,10 +14,11 @@ A plugin exports these C functions (see
 [`sdk/installway_plugin.h`](https://github.com/Tooltip-Focus/Installway/blob/main/sdk/installway_plugin.h)):
 
 ```c
-uint32_t installway_abi_version(void);              // return INSTALLWAY_ABI_VERSION
-int32_t  installway_up(const InstallwayContext*);   // at install   (0 = ok)
-int32_t  installway_down(const InstallwayContext*); // at uninstall (0 = ok)
-int32_t  installway_pages(const InstallwayContext*); // optional — see below
+uint32_t installway_abi_version(void);                 // return INSTALLWAY_ABI_VERSION
+int32_t  installway_up(const InstallwayContext*);      // at install   (0 = ok)
+int32_t  installway_down(const InstallwayContext*);    // at uninstall (0 = ok)
+int32_t  installway_pages(const InstallwayContext*);   // optional — custom pages
+int32_t  installway_features(const InstallwayContext*); // optional — feature packs
 ```
 
 The host passes a context: `install_dir`, `data_dir` (the folder holding
@@ -29,7 +30,8 @@ overrides). Two more fields serve the
 [custom-pages](#custom-wizard-pages-forms) feature: `inputs_json` (the user's
 answers, for `up`) and the `emit_pages(json)` callback (`installway_pages` hands
 its descriptor to it). A plugin without pages just leaves `installway_pages`
-out.
+out. `features_json` carries the [feature-pack](features.md) catalog
+(`{ "all": [...], "active": [...] }`, or empty when the build has none).
 
 > **Localizing a plugin.** There is no shared string table across the ABI — a
 > plugin ships its **own** strings and selects them by `ctx->lang` so its pages
@@ -187,6 +189,16 @@ before the folder is removed, if it needs to read it).
 See [`sdk/examples/country_picker`](https://github.com/Tooltip-Focus/Installway/tree/main/sdk/examples/country_picker)
 for a complete page-contributing plugin (it remembers the country in `data_dir`
 and skips on upgrade).
+
+## Selecting feature packs
+
+A plugin can also export `installway_features` to choose which **feature packs**
+(file subsets tagged in the manifest) get installed. The host queries it just
+before staging — passing the page answers in `inputs_json` and the catalog in
+`features_json` — and the plugin emits `{ "enable": [...], "disable": [...] }`
+over the same `emit_pages` channel; the host stages only base + active features.
+A `ui = true` plugin can pair it with a checkbox page. See
+[Feature packs](features.md).
 
 ## Example — switch from MSI/InstallShield
 

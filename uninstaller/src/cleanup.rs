@@ -222,6 +222,7 @@ mod tests {
                 hash: "h".into(),
                 size: 1,
                 patch: None,
+                feature: None,
             },
         );
         let m = Manifest {
@@ -231,6 +232,8 @@ mod tests {
             deleted_files: vec![],
             full_size: 0,
             total_patch_size: 0,
+            features: Vec::new(),
+            default_features: Vec::new(),
         };
 
         assert_eq!(remove_payload_files(app, &m), 1);

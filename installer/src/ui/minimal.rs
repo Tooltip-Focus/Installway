@@ -241,7 +241,7 @@ fn spawn_worker(
     prog: Arc<Mutex<Prog>>,
 ) {
     thread::spawn(move || {
-        let loaded = match crate::payload::load_and_verify() {
+        let mut loaded = match crate::payload::load_and_verify() {
             Ok(l) => l,
             Err(e) => return post_err(hwnd_isize, &format!("{e}")),
         };
@@ -286,6 +286,13 @@ fn spawn_worker(
         // already-admin run into Program Files); the elevated worker handles the
         // needs-elevation path with requires_admin = true.
         let requires_admin = common::paths::is_machine_location(&install_dir);
+        // Resolve feature packs from the headless answers and filter the manifest.
+        crate::extract::resolve_and_filter(
+            &mut loaded,
+            &install_dir,
+            requires_admin,
+            &plugin_inputs,
+        );
         let ctx = InstallCtx {
             install_dir: install_dir.clone(),
             payload: &loaded.payload,

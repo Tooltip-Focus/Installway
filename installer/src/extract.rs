@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use anyhow::{Context, Result, bail};
+use common::model::install_info::InstallInfo;
 use common::model::installer_payload::InstallerPayload;
 use common::model::manifest::Manifest;
 use common::model::payload_kind::PayloadKind;
@@ -904,6 +905,19 @@ fn installed_version(payload: &InstallerPayload) -> Option<String> {
     None
 }
 
+/// Read one entry from an open payload archive into memory.
+pub(crate) fn read_zip_entry(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    name: &str,
+) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    archive
+        .by_name(name)
+        .with_context(|| format!("{name} missing from payload"))?
+        .read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
 /// Extract the `phase` plugins from the payload zip to `%TEMP%`, run their `up`
 /// in isolated child processes, then clean up. Used for the pre-install phase.
 fn run_zip_plugins(
@@ -926,19 +940,10 @@ fn run_zip_plugins(
         ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open payload zip for plugins")?;
     let mut items = Vec::with_capacity(plugins.len());
     for p in plugins {
-        let mut buf = Vec::new();
-        {
-            let mut f = archive
-                .by_name(&p.file)
-                .with_context(|| format!("plugin {} missing from payload", p.file))?;
-            f.read_to_end(&mut buf)?;
-        }
+        let buf = read_zip_entry(&mut archive, &p.file)?;
         let dst = tmp.join(format!("{}.dll", p.name));
         fs::write(&dst, &buf)?;
-        let inputs_json = match ctx.plugin_inputs.get(&p.name) {
-            Some(m) => serde_json::to_string(m)?,
-            None => String::new(),
-        };
+        let inputs_json = common::plugin::inputs_json_for(&ctx.plugin_inputs, &p.name);
         items.push((p, dst, inputs_json));
     }
     let pctx = plugin_ctx(ctx.payload, &ctx.install_dir, ctx.requires_admin);
@@ -976,6 +981,211 @@ pub fn plugin_ctx(
         lang: common::i18n::current_lang().to_string(),
         ..Default::default()
     }
+}
+
+/// Extract every plugin DLL from the payload zip into a fresh temp dir, returning
+/// the dir (caller removes it) and the `(entry, dll path)` pairs.
+fn extract_plugins_to_temp(
+    payload: &InstallerPayload,
+    zip_bytes: &[u8],
+) -> Result<(
+    PathBuf,
+    Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
+)> {
+    let tmp = std::env::temp_dir().join(format!("iw-feat-{}", std::process::id()));
+    fs::create_dir_all(&tmp)?;
+    let mut archive =
+        ZipArchive::new(Cursor::new(zip_bytes)).context("open payload zip for features")?;
+    let mut items = Vec::with_capacity(payload.plugins.len());
+    for p in &payload.plugins {
+        let buf = read_zip_entry(&mut archive, &p.file)?;
+        let dst = tmp.join(format!("{}.dll", p.name));
+        fs::write(&dst, &buf)?;
+        items.push((p.clone(), dst));
+    }
+    Ok((tmp, items))
+}
+
+/// Prior install's recorded features, with the data dir holding them (machine
+/// dir first, then per-user). `None` features = no prior record (fresh install),
+/// so the caller seeds from the build defaults.
+fn read_prior_features(payload: &InstallerPayload) -> (PathBuf, Option<Vec<String>>) {
+    match prior_install_info(payload) {
+        Some((dir, info)) => (dir, Some(info.features)),
+        None => {
+            let dir =
+                common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, false)
+                    .unwrap_or_else(|| PathBuf::from("."));
+            (dir, None)
+        }
+    }
+}
+
+/// This product's prior install record (parsed `installer_info.json`) and the
+/// data dir holding it, checking the machine-wide dir (`%ProgramData%`) first
+/// then the per-user one. `None` if never installed or no record parses.
+pub(crate) fn prior_install_info(payload: &InstallerPayload) -> Option<(PathBuf, InstallInfo)> {
+    for machine in [true, false] {
+        if let Some(dir) =
+            common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, machine)
+            && let Ok(text) = fs::read_to_string(dir.join("installer_info.json"))
+            && let Ok(info) = serde_json::from_str::<InstallInfo>(&text)
+        {
+            return Some((dir, info));
+        }
+    }
+    None
+}
+
+/// The `{ "all": [...], "active": [...] }` catalog handed to plugins so they can
+/// render a pre-checked picker.
+fn feature_catalog_json(all: &[String], active: &[String]) -> String {
+    serde_json::json!({ "all": all, "active": active }).to_string()
+}
+
+/// Resolve the active feature packs: `base` (prior set on upgrade, or the build
+/// defaults on a fresh install) plus each plugin's `installway_features` delta,
+/// kept to ids the build declares. The plugins get the feature catalog and this
+/// run's page answers (`plugin_inputs`). A query that errors is ignored, never
+/// fatal. Empty when the build declares no features.
+fn resolve_active_features(
+    payload: &InstallerPayload,
+    zip_bytes: &[u8],
+    install_dir: &Path,
+    data_dir: &Path,
+    requires_admin: bool,
+    base: &[String],
+    plugin_inputs: &common::plugin::InputsByPlugin,
+) -> Vec<String> {
+    use common::model::feature_select::FeatureSelection;
+    if payload.manifest.features.is_empty() {
+        return Vec::new();
+    }
+
+    let mut deltas: Vec<FeatureSelection> = Vec::new();
+    if !payload.plugins.is_empty() {
+        match extract_plugins_to_temp(payload, zip_bytes) {
+            Ok((tmp, items)) => {
+                let mut base_ctx = plugin_ctx(payload, install_dir, requires_admin);
+                base_ctx.data_dir = data_dir.to_string_lossy().into_owned();
+                base_ctx.features_json = feature_catalog_json(&payload.manifest.features, base);
+                let self_exe = std::env::current_exe().unwrap_or_default();
+                for (entry, dll) in &items {
+                    let inputs_json = common::plugin::inputs_json_for(plugin_inputs, &entry.name);
+                    match common::plugin::query_features(
+                        &self_exe,
+                        &base_ctx,
+                        entry,
+                        dll,
+                        &inputs_json,
+                    ) {
+                        Ok(sel) => {
+                            if !sel.enable.is_empty() || !sel.disable.is_empty() {
+                                common::log::info(format!(
+                                    "plugin '{}' features: +{:?} -{:?}",
+                                    entry.name, sel.enable, sel.disable
+                                ));
+                            }
+                            deltas.push(sel);
+                        }
+                        Err(e) => common::log::warn(format!(
+                            "plugin '{}' feature query failed: {e:#} (ignored)",
+                            entry.name
+                        )),
+                    }
+                }
+                let _ = fs::remove_dir_all(&tmp);
+            }
+            Err(e) => common::log::warn(format!("feature query: extract plugins failed: {e:#}")),
+        }
+    }
+
+    let known: std::collections::HashSet<&str> = payload
+        .manifest
+        .features
+        .iter()
+        .map(String::as_str)
+        .collect();
+    FeatureSelection::resolve(base, &deltas)
+        .into_iter()
+        .filter(|f| known.contains(f.as_str()))
+        .collect()
+}
+
+/// Resolve the active feature packs from this run's `plugin_inputs` and reduce the
+/// manifest to base + active (recording the set on the payload for `finalize`).
+/// Called by every install path just before staging, once the chosen dir and the
+/// wizard answers are known. No-op when the build declares no features.
+pub fn resolve_and_filter(
+    loaded: &mut crate::payload::LoadedPayload,
+    install_dir: &Path,
+    requires_admin: bool,
+    plugin_inputs: &common::plugin::InputsByPlugin,
+) {
+    if loaded.payload.manifest.features.is_empty() {
+        return;
+    }
+    common::log::init(common::log::log_path_installer_temp(
+        &loaded.payload.product_id,
+        std::process::id(),
+    ));
+    let (data_dir, prior) = read_prior_features(&loaded.payload);
+    let base = prior
+        .clone()
+        .unwrap_or_else(|| loaded.payload.manifest.default_features.clone());
+    let previously_installed = prior.unwrap_or_default();
+    let active = resolve_active_features(
+        &loaded.payload,
+        loaded.zip(),
+        install_dir,
+        &data_dir,
+        requires_admin,
+        &base,
+        plugin_inputs,
+    );
+    common::log::info(format!(
+        "feature packs active ({}): {:?}",
+        active.len(),
+        active
+    ));
+    apply_active_features(&mut loaded.payload.manifest, &active, &previously_installed);
+    loaded.payload.active_features = active;
+}
+
+/// Reduce the manifest to base + active features. A file whose feature was
+/// `previously_installed` but is no longer `active` goes to `deleted_files` (the
+/// commit removes it); one that was never active is just dropped. Recomputes
+/// `full_size`. No-op when the build declares no features.
+fn apply_active_features(
+    manifest: &mut Manifest,
+    active: &[String],
+    previously_installed: &[String],
+) {
+    if manifest.features.is_empty() {
+        return;
+    }
+    let active: std::collections::HashSet<&str> = active.iter().map(String::as_str).collect();
+    let prev: std::collections::HashSet<&str> =
+        previously_installed.iter().map(String::as_str).collect();
+
+    let mut to_delete = Vec::new();
+    manifest.files.retain(|rel, e| match &e.feature {
+        None => true,
+        Some(f) if active.contains(f.as_str()) => true,
+        Some(f) => {
+            // Deactivated: schedule removal only if a prior install staged it.
+            if prev.contains(f.as_str()) {
+                to_delete.push(rel.clone());
+            }
+            false
+        }
+    });
+    for rel in to_delete {
+        if !manifest.deleted_files.contains(&rel) {
+            manifest.deleted_files.push(rel);
+        }
+    }
+    manifest.full_size = manifest.files.values().map(|e| e.size).sum();
 }
 
 /// Removes its temp dir on drop. Keeps the extracted `ui` plugin DLLs alive for
@@ -1029,15 +1239,8 @@ pub fn extract_ui_plugins(
     let mut plugins = Vec::new();
     for p in ui {
         let dst = dir.join(format!("{}.dll", p.name));
-        let extracted = (|| -> Result<()> {
-            let mut buf = Vec::new();
-            let mut f = archive
-                .by_name(&p.file)
-                .with_context(|| format!("plugin {} missing from payload", p.file))?;
-            f.read_to_end(&mut buf)?;
-            fs::write(&dst, &buf)?;
-            Ok(())
-        })();
+        let extracted =
+            read_zip_entry(&mut archive, &p.file).and_then(|buf| Ok(fs::write(&dst, &buf)?));
         match extracted {
             Ok(()) => plugins.push((p.clone(), dst)),
             Err(e) => {
@@ -1048,12 +1251,20 @@ pub fn extract_ui_plugins(
     if plugins.is_empty() {
         return None;
     }
+    // UI pages run in the main process before elevation is decided; they
+    // describe choices and don't persist state, so the per-user data dir is
+    // fine here.
+    let mut base_ctx = plugin_ctx(payload, install_dir, false);
+    // Hand the feature catalog to the pages so a plugin can pre-check the picker
+    // to the current base (prior install, or the build defaults).
+    if !payload.manifest.features.is_empty() {
+        let (_, prior) = read_prior_features(payload);
+        let base = prior.unwrap_or_else(|| payload.manifest.default_features.clone());
+        base_ctx.features_json = feature_catalog_json(&payload.manifest.features, &base);
+    }
     Some(UiPlugins {
         plugins,
-        // UI pages run in the main process before elevation is decided; they
-        // describe choices and don't persist state, so the per-user data dir is
-        // fine here.
-        base_ctx: plugin_ctx(payload, install_dir, false),
+        base_ctx,
         self_exe: self_exe.to_path_buf(),
         tmp,
     })
@@ -1413,6 +1624,7 @@ mod tests {
                 hash: bytes_hash(good),
                 size: good.len() as u64,
                 patch: None,
+                feature: None,
             },
         );
         let manifest = Manifest {
@@ -1422,6 +1634,8 @@ mod tests {
             deleted_files: Vec::new(),
             full_size: good.len() as u64,
             total_patch_size: 0,
+            features: Vec::new(),
+            default_features: Vec::new(),
         };
 
         let no_cancel = AtomicBool::new(false);
@@ -1445,5 +1659,102 @@ mod tests {
 
     fn bytes_hash(b: &[u8]) -> String {
         blake3::hash(b).to_hex().to_string()
+    }
+
+    use common::model::file_entry::FileEntry;
+
+    fn feat_entry(feature: Option<&str>, size: u64) -> FileEntry {
+        FileEntry {
+            hash: "h".into(),
+            size,
+            patch: None,
+            feature: feature.map(str::to_string),
+        }
+    }
+
+    fn feat_manifest(entries: &[(&str, Option<&str>, u64)], features: &[&str]) -> Manifest {
+        let mut files = std::collections::HashMap::new();
+        for (rel, feature, size) in entries {
+            files.insert((*rel).to_string(), feat_entry(*feature, *size));
+        }
+        let full_size = entries.iter().map(|(_, _, s)| *s).sum();
+        Manifest {
+            version: "1".into(),
+            exe: String::new(),
+            files,
+            deleted_files: Vec::new(),
+            full_size,
+            total_patch_size: 0,
+            features: features.iter().map(|s| s.to_string()).collect(),
+            default_features: Vec::new(),
+        }
+    }
+
+    // Keeps base files (no feature) + files of active features, drops the rest,
+    // and recomputes full_size from what remains.
+    #[test]
+    fn apply_active_features_keeps_base_and_active() {
+        let mut m = feat_manifest(
+            &[
+                ("base.exe", None, 10),
+                ("D1/a.dat", Some("D1"), 20),
+                ("D2/b.dat", Some("D2"), 40),
+            ],
+            &["D1", "D2"],
+        );
+
+        // Fresh install (nothing previously installed) activating only D1.
+        apply_active_features(&mut m, &["D1".to_string()], &[]);
+
+        assert!(m.files.contains_key("base.exe")); // base always kept
+        assert!(m.files.contains_key("D1/a.dat")); // active feature kept
+        assert!(!m.files.contains_key("D2/b.dat")); // inactive dropped
+        assert_eq!(m.full_size, 30); // 10 + 20, recomputed
+        // D2 was never installed, so it is not scheduled for deletion.
+        assert!(m.deleted_files.is_empty());
+    }
+
+    // Deactivating a previously-installed feature schedules its files for
+    // deletion (so the commit removes them); a never-installed feature does not.
+    #[test]
+    fn apply_active_features_deletes_deactivated() {
+        let mut m = feat_manifest(
+            &[
+                ("base.exe", None, 10),
+                ("D1/a.dat", Some("D1"), 20),
+                ("D2/b.dat", Some("D2"), 40),
+            ],
+            &["D1", "D2"],
+        );
+
+        // D1 was installed before; this run drops it (and D2 was never active).
+        apply_active_features(&mut m, &[], &["D1".to_string()]);
+
+        assert!(m.files.contains_key("base.exe"));
+        assert!(!m.files.contains_key("D1/a.dat"));
+        assert!(!m.files.contains_key("D2/b.dat"));
+        assert_eq!(m.deleted_files, vec!["D1/a.dat".to_string()]); // only the previously-installed one
+        assert_eq!(m.full_size, 10);
+    }
+
+    // Re-running with the same active set neither drops nor deletes anything.
+    #[test]
+    fn apply_active_features_stable_on_reinstall() {
+        let mut m = feat_manifest(
+            &[("base.exe", None, 10), ("D1/a.dat", Some("D1"), 20)],
+            &["D1"],
+        );
+        apply_active_features(&mut m, &["D1".to_string()], &["D1".to_string()]);
+        assert!(m.files.contains_key("D1/a.dat"));
+        assert!(m.deleted_files.is_empty());
+    }
+
+    // A manifest with no declared features is left untouched (back-compat).
+    #[test]
+    fn apply_active_features_noop_without_features() {
+        let mut m = feat_manifest(&[("a.txt", None, 5)], &[]);
+        apply_active_features(&mut m, &[], &[]);
+        assert_eq!(m.files.len(), 1);
+        assert!(m.deleted_files.is_empty());
     }
 }

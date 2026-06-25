@@ -3,6 +3,7 @@
 
 mod args;
 mod embed;
+mod features;
 mod icon;
 mod keygen;
 mod pack;

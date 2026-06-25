@@ -47,4 +47,8 @@ pub struct InstallInfo {
     /// uninstaller reads this to know upfront whether to request elevation.
     #[serde(default)]
     pub requires_admin: bool,
+    /// Feature packs staged for this install. Persisted so the next upgrade keeps
+    /// the same set by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
 }

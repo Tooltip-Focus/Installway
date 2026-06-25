@@ -14,4 +14,11 @@ pub struct Manifest {
     pub full_size: u64,
     #[serde(default)]
     pub total_patch_size: u64,
+    /// Feature ids declared by the build. Empty when there are no feature packs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    /// Subset of `features` enabled by default on a fresh install (a plugin can
+    /// still override). Empty means every feature is opt-in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub default_features: Vec<String>,
 }

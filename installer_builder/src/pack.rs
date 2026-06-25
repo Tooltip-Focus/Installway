@@ -104,7 +104,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
     }
 
     let zip_bytes;
-    let manifest;
+    let mut manifest;
     if is_patch {
         let from_dir = args
             .from_dir
@@ -121,6 +121,9 @@ pub fn run(args: &PackArgs) -> Result<()> {
         (zip_bytes, manifest) =
             build_full(&args.input, &args.exe, &args.to_version, &plugin_files)?;
     }
+
+    // Tag files with their feature pack in the manifest (the zip keeps every file).
+    crate::features::apply(&mut manifest, &args.features)?;
 
     let license_text = match &args.license {
         Some(p) => {
@@ -170,6 +173,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         registry: args.registry.clone(),
         plugins: plugin_entries,
         shortcuts: args.shortcuts.clone(),
+        active_features: Vec::new(),
     };
 
     let payload_json = serde_json::to_string(&payload).context("serialize payload")?;
@@ -404,6 +408,7 @@ fn build_full(
                     hash: bytes_blake3(&bytes),
                     size: bytes.len() as u64,
                     patch: None,
+                    feature: None,
                 },
             ))
         })
@@ -421,6 +426,8 @@ fn build_full(
         deleted_files: Vec::new(),
         full_size,
         total_patch_size: 0,
+        features: Vec::new(),
+        default_features: Vec::new(),
     };
     Ok((zip_bytes, manifest))
 }
@@ -489,6 +496,7 @@ fn build_patch(
                         hash: new_hash,
                         size: new_size,
                         patch: None,
+                        feature: None,
                     },
                     patch_path: None,
                     full_needed: true,
@@ -505,6 +513,7 @@ fn build_patch(
                         hash: new_hash,
                         size: new_size,
                         patch: None,
+                        feature: None,
                     },
                     patch_path: None,
                     full_needed: false,
@@ -528,6 +537,7 @@ fn build_patch(
                                 file: patch_entry_name(rel),
                                 size: psize,
                             }),
+                            feature: None,
                         },
                         patch_path: Some(patch_path),
                         full_needed: false,
@@ -543,6 +553,7 @@ fn build_patch(
                     hash: new_hash,
                     size: new_size,
                     patch: None,
+                    feature: None,
                 },
                 patch_path: None,
                 full_needed: true,
@@ -581,6 +592,8 @@ fn build_patch(
         deleted_files,
         full_size: total_full_size,
         total_patch_size,
+        features: Vec::new(),
+        default_features: Vec::new(),
     };
     Ok((zip_bytes, manifest))
 }
