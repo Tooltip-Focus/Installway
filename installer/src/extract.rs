@@ -44,7 +44,7 @@ impl std::fmt::Display for VersionMismatch {
             "no version".to_string()
         } else {
             format!("version {}", self.found)
-        }
+        };
         write!(
             f,
             "This update applies to version {}, but {} is installed. \
