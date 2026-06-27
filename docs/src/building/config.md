@@ -16,6 +16,7 @@ to_version = "1.0"
 input      = "build/myapp-1.0"
 exe        = "myapp.exe"
 license    = "legal/EULA-myapp-en.txt"
+banner     = "branding/header-1400x144.png"   # PNG header banner (optional); see Branding
 assoc      = [".myx:MyApp Document", ".myz:MyApp Archive"]
 priv_key   = "keys/priv.key"   # path to key file; or use priv_key_literal (see below)
 pub_key    = "keys/pub.key"    # path to key file; or use pub_key_literal (see below)

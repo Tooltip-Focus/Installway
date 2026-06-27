@@ -58,6 +58,7 @@ Required fields are checked after merging. See [Config file](../building/config.
 | Option | Meaning |
 |---|---|
 | `--license <FILE>` | UTF-8 EULA shown on the License page. |
+| `--banner <FILE.png>` | PNG painted across the wizard header (replaces the flat gray card). Author at 2× (1400×144) for high-DPI; keep the left edge light. See [Branding](../packaging/branding.md#header-banner). |
 | `--assoc ".ext:Description"` | File association (repeatable). |
 | `--default-install-dir <DIR>` | Proposed install path; `%VAR%` tokens expanded. |
 | `--skip-license` | Hide the License page. |
