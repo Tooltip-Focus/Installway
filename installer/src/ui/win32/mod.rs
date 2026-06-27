@@ -7,6 +7,7 @@
 //! [`views`] builds the controls for each phase; [`handlers`] runs the button
 //! and worker logic.
 
+mod banner;
 mod handlers;
 mod plugin_pages;
 mod views;
@@ -29,8 +30,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT,
-    InvalidateRect, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FW_NORMAL, FW_SEMIBOLD, GetStockObject,
+    HBRUSH, HFONT, InvalidateRect, NULL_BRUSH, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_INVALIDATE,
+    RedrawWindow, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
@@ -112,12 +114,18 @@ pub(super) struct UiState {
     /// Current monitor DPI (96 = 100%); drives scaled layout + fonts, updated on
     /// `WM_DPICHANGED`.
     pub dpi: i32,
+    /// Decoded header-banner image (GDI+), drawn by the parent in `WM_PAINT`
+    /// across the header strip. `None` keeps the flat accent strip.
+    pub(in crate::ui::win32) banner: Option<banner::BannerImage>,
 }
 
 thread_local! {
     pub(super) static STATE: RefCell<Option<Rc<RefCell<UiState>>>> = const { RefCell::new(None) };
     pub(super) static PAYLOAD: RefCell<Option<InstallerPayload>> = const { RefCell::new(None) };
     pub(super) static UNINSTALLER: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    /// Raw header-banner PNG bytes (resource id=5), seeded by [`run`] and decoded
+    /// into [`UiState::banner`] when the window is built. None = flat strip.
+    pub(super) static BANNER_PNG: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
     pub(super) static LAUNCH_FLAG: RefCell<bool> = const { RefCell::new(false) };
     pub(super) static SKIP_LICENSE: RefCell<bool> = const { RefCell::new(false) };
     pub(super) static SKIP_PATH: RefCell<bool> = const { RefCell::new(false) };
@@ -147,6 +155,48 @@ pub(super) fn has_plugin_pages() -> bool {
     WIZARD.with(|w| w.borrow().is_some())
 }
 
+/// Whether a header-banner image was packaged and decoded. When true the parent
+/// paints the banner in `WM_PAINT` and the header text statics are transparent.
+pub(super) fn has_banner_image() -> bool {
+    STATE.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|st| st.borrow().banner.is_some())
+            .unwrap_or(false)
+    })
+}
+
+/// Current monitor DPI from shared state (96 = 100%); 96 if state isn't set yet.
+fn current_dpi() -> i32 {
+    STATE.with(|s| s.borrow().as_ref().map(|st| st.borrow().dpi).unwrap_or(96))
+}
+
+/// Repaint the banner strip after the header/subheader text changes, so a prior
+/// phase's text doesn't ghost through the transparent statics. No-op without a
+/// banner image.
+unsafe fn invalidate_banner(hwnd: HWND) {
+    if !has_banner_image() {
+        return;
+    }
+    let dpi = current_dpi();
+    let rc = RECT {
+        left: 0,
+        top: 0,
+        right: helpers::scale(WIN_W, dpi),
+        bottom: helpers::scale(BANNER_H, dpi),
+    };
+    // RDW_ALLCHILDREN repaints the text statics over the image; no RDW_ERASE
+    // avoids a white flash (WM_PAINT covers the whole strip).
+    unsafe {
+        let _ = RedrawWindow(
+            Some(hwnd),
+            Some(&rc),
+            None,
+            RDW_INVALIDATE | RDW_ALLCHILDREN,
+        );
+    }
+}
+
 pub(super) fn tr() -> common::i18n::Translator {
     T.with(|t| *t.borrow())
 }
@@ -168,6 +218,7 @@ pub fn run(
 
     PAYLOAD.with(|p| *p.borrow_mut() = Some(loaded.payload.clone()));
     UNINSTALLER.with(|u| *u.borrow_mut() = Some(loaded.uninstaller_bytes.clone()));
+    BANNER_PNG.with(|b| *b.borrow_mut() = loaded.banner_png.clone());
     LAUNCH_FLAG.with(|l| *l.borrow_mut() = launch_flag);
     SKIP_LICENSE.with(|s| *s.borrow_mut() = skip_license);
     SKIP_PATH.with(|s| *s.borrow_mut() = skip_path);
@@ -287,8 +338,19 @@ unsafe fn create_window(
             header_text: String::new(),
             sub_text: String::new(),
             dpi: 96,
+            banner: None,
         }));
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
+
+        // Decode before building controls: `build_banner_header` skips the
+        // flat-strip STATIC when an image is present.
+        BANNER_PNG.with(|b| {
+            if let Some(bytes) = b.borrow().as_ref()
+                && let Some(img) = banner::BannerImage::load(bytes)
+            {
+                state.borrow_mut().banner = Some(img);
+            }
+        });
 
         let style = WS_OVERLAPPED | WS_SYSMENU | WS_CAPTION | WS_MINIMIZEBOX;
         // Base (96-dpi) size for the initial CW_USEDEFAULT placement; rescaled to
@@ -386,6 +448,16 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
     PAYLOAD.with(|p| *p.borrow_mut() = Some(payload.clone()));
     LAUNCH_FLAG.with(|l| *l.borrow_mut() = true);
     T.with(|t| *t.borrow_mut() = translator);
+
+    // Dev convenience: preview a header banner straight from a PNG on disk
+    // (`INSTALLWAY_PREVIEW_BANNER=path installer --preview license`) so a banner
+    // can be iterated on without packing a full installer.
+    if let Some(path) = std::env::var_os("INSTALLWAY_PREVIEW_BANNER") {
+        match std::fs::read(&path) {
+            Ok(bytes) => BANNER_PNG.with(|b| *b.borrow_mut() = Some(bytes)),
+            Err(e) => eprintln!("preview banner {}: {e}", Path::new(&path).display()),
+        }
+    }
 
     // `--preview plugin`: a canned one-page wizard (no real plugin/payload needed)
     // so the dynamic renderer can be exercised.
@@ -652,6 +724,10 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
             );
         }
     }
+
+    // Header/subheader text was just (re)set; repaint the strip under the
+    // transparent statics to clear the prior phase's text.
+    unsafe { invalidate_banner(hwnd) };
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -678,6 +754,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let _ = InvalidateRect(Some(hwnd), None, true);
             LRESULT(0)
         },
+        WM_PAINT if has_banner_image() => unsafe {
+            // The parent paints the banner; the header/subheader statics paint
+            // transparently on top of it.
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            let dpi = current_dpi();
+            let (w, h) = (helpers::scale(WIN_W, dpi), helpers::scale(BANNER_H, dpi));
+            STATE.with(|s| {
+                if let Some(st) = s.borrow().as_ref()
+                    && let Some(img) = st.borrow().banner.as_ref()
+                {
+                    img.draw(hdc, 0, 0, w, h);
+                }
+            });
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        },
         WM_CTLCOLORSTATIC => unsafe {
             let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
             let ctrl = HWND(lparam.0 as *mut _);
@@ -688,6 +781,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let _ = SetBkMode(hdc, TRANSPARENT);
             if ctrl == banner || ctrl == header || ctrl == sub {
                 SetTextColor(hdc, COLORREF(0x00333333));
+                // A hollow brush leaves the static's background unpainted so the
+                // parent-drawn banner shows behind the text; else fill the accent.
+                if has_banner_image() {
+                    return LRESULT(GetStockObject(NULL_BRUSH).0 as isize);
+                }
                 return LRESULT(STATE.with(|s| {
                     s.borrow()
                         .as_ref()
@@ -856,6 +954,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let _ = DeleteObject(st.banner_brush.into());
                     let _ = DeleteObject(st.card_brush.into());
                     let _ = DeleteObject(st.error_brush.into());
+                }
+            });
+            STATE.with(|s| {
+                if let Some(state) = s.borrow().as_ref() {
+                    state.borrow_mut().banner.take();
                 }
             });
             PostQuitMessage(0);

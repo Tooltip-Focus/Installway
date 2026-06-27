@@ -85,6 +85,14 @@ pub struct PackCli {
     #[arg(long)]
     pub license: Option<PathBuf>,
 
+    /// Optional PNG painted across the installer's header strip (replacing the
+    /// default flat gray card). The image is stretched to the header at runtime
+    /// with high-quality scaling, so it stays crisp at every DPI; a ~2x asset
+    /// (e.g. 1400x144) is recommended. Keep the left edge light: the product
+    /// title is drawn over it in dark text.
+    #[arg(long, value_name = "FILE.png")]
+    pub banner: Option<PathBuf>,
+
     /// File association, format `.ext:Description`. Repeatable. Replaces (not
     /// merges with) any `assoc` list from the config file when given.
     #[arg(long = "assoc", value_name = ".ext:Description")]
@@ -259,6 +267,7 @@ pub struct PackFile {
     pub from_version: Option<String>,
     pub exe: Option<String>,
     pub license: Option<PathBuf>,
+    pub banner: Option<PathBuf>,
     #[serde(default)]
     pub assoc: Vec<String>,
     pub min_installer_version: Option<String>,
@@ -312,6 +321,7 @@ pub struct PackArgs {
     pub from_version: Option<String>,
     pub exe: String,
     pub license: Option<PathBuf>,
+    pub banner: Option<PathBuf>,
     pub assoc: Vec<String>,
     pub min_installer_version: String,
     pub force_reinstall: bool,
@@ -385,6 +395,7 @@ impl PackArgs {
             from_dir: cli.from_dir.or(file.from_dir),
             from_version: cli.from_version.or(file.from_version),
             license: cli.license.or(file.license),
+            banner: cli.banner.or(file.banner),
             default_install_dir: cli.default_install_dir.or(file.default_install_dir),
             pub_key: cli.pub_key.or(file.pub_key),
             pub_key_literal: cli.pub_key_literal.or(file.pub_key_literal),
@@ -642,6 +653,7 @@ mod tests {
             from_version: None,
             exe: None,
             license: None,
+            banner: None,
             assoc: Vec::new(),
             min_installer_version: None,
             force_reinstall: false,

@@ -17,13 +17,15 @@ pub(crate) fn wide_path(p: &Path) -> Vec<u16> {
 pub const OVERLAY_MAGIC: &[u8; 8] = b"RIIPLD01";
 
 /// Embed the small resources via the Win32 resource API: signed manifest
-/// (id=2), uninstaller (id=3), payload length (id=4). The payload zip itself is
-/// appended as a PE overlay by `append_payload` (no size limit, mmap-able).
+/// (id=2), uninstaller (id=3), payload length (id=4) and the optional header
+/// banner PNG (id=5). The payload zip itself is appended as a PE overlay by
+/// `append_payload` (no size limit, mmap-able).
 pub fn embed_resources(
     exe: &Path,
     signed_json: &[u8],
     uninstaller_exe: &[u8],
     payload_len: u64,
+    banner_png: Option<&[u8]>,
 ) -> Result<()> {
     use windows::Win32::System::LibraryLoader::{
         BeginUpdateResourceW, EndUpdateResourceW, UpdateResourceW,
@@ -60,6 +62,9 @@ pub fn embed_resources(
         put(2, signed_json, "signed manifest")?;
         put(3, uninstaller_exe, "uninstaller")?;
         put(4, &payload_len.to_le_bytes(), "payload length")?;
+        if let Some(banner) = banner_png {
+            put(5, banner, "header banner")?;
+        }
 
         EndUpdateResourceW(h, false).context("EndUpdateResource")?;
     }

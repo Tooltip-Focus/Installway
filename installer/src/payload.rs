@@ -14,6 +14,10 @@ const OVERLAY_MAGIC: &[u8; 8] = b"RIIPLD01";
 pub struct LoadedPayload {
     pub payload: InstallerPayload,
     pub uninstaller_bytes: Vec<u8>,
+    /// Optional header-banner PNG bytes (resource id=5), drawn across the wizard
+    /// header. `None` when the installer was packed without `--banner`; the UI
+    /// then keeps its flat accent strip.
+    pub banner_png: Option<Vec<u8>>,
     /// The whole exe, memory-mapped; the payload zip is a slice into it, so
     /// multi-GB payloads stay demand-paged instead of copied into RAM.
     map: memmap2::Mmap,
@@ -80,9 +84,14 @@ pub fn load_and_verify() -> Result<LoadedPayload> {
 
     check_min_installer_version(&payload.min_installer_version)?;
 
+    // The header banner (id=5) is optional branding, not signed; its absence is
+    // normal and never fails the load.
+    let banner_png = read_resource(5).ok();
+
     Ok(LoadedPayload {
         payload,
         uninstaller_bytes,
+        banner_png,
         map,
         zip_off,
         zip_len,

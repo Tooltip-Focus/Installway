@@ -99,21 +99,24 @@ unsafe fn build_banner_header(hwnd: HWND, hinst: HINSTANCE, payload: &InstallerP
     });
 
     unsafe {
-        // Banner background - a wide empty STATIC; WM_CTLCOLORSTATIC paints it.
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            w!(""),
-            WS_VISIBLE | WS_CHILD,
-            0,
-            0,
-            WIN_W,
-            BANNER_H,
-            Some(hwnd),
-            Some(HMENU(ID_BANNER as *mut _)),
-            Some(hinst),
-            None,
-        );
+        // Flat accent strip, filled by WM_CTLCOLORSTATIC. Skipped when a banner
+        // image is packaged: the parent then paints it in WM_PAINT instead.
+        if !super::has_banner_image() {
+            let _ = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_VISIBLE | WS_CHILD,
+                0,
+                0,
+                WIN_W,
+                BANNER_H,
+                Some(hwnd),
+                Some(HMENU(ID_BANNER as *mut _)),
+                Some(hinst),
+                None,
+            );
+        }
         let _ = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("STATIC"),

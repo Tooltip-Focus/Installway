@@ -17,7 +17,7 @@
 
 # Packaging options
 
-- [License, icon & version info](packaging/branding.md)
+- [Branding: license, banner, icon & version](packaging/branding.md)
 - [File associations](packaging/associations.md)
 - [Shortcuts](packaging/shortcuts.md)
 - [Registry keys](packaging/registry.md)
