@@ -7,12 +7,12 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use walkdir::WalkDir;
+use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+use windows::core::PCWSTR;
 
 /// Retry budget for filesystem mutations that lose to a transient lock
 /// (Defender/other AV scanning a freshly written file, Explorer, the search
-/// indexer). 50 × 100 ms ≈ 5 s, which comfortably outlasts a real-time scan of
-/// a typical file. Shared by the installer commit and these helpers so the
-/// whole product retries with one policy.
+/// indexer).
 pub const FS_RETRIES: usize = 50;
 pub const FS_RETRY_DELAY: Duration = Duration::from_millis(100);
 
@@ -62,13 +62,7 @@ pub fn wide(s: &str) -> Vec<u16> {
 /// `%LOCALAPPDATA%`, `%APPDATA%`, ...). Unknown tokens are left as-is; returns
 /// the input unchanged on failure.
 pub fn expand_env(s: &str) -> String {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
-    use windows::core::PCWSTR;
-    let src: Vec<u16> = std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let src = wide(s);
     let needed = unsafe { ExpandEnvironmentStringsW(PCWSTR(src.as_ptr()), None) };
     if needed == 0 {
         return s.to_string();

@@ -6,13 +6,15 @@
 //! Shortcuts are config-driven ([`crate::model::ShortcutEntry`]); the installer
 //! resolves each entry's tokens to absolute paths, records them in
 //! `installer_info.json`, and reconciles a changed set on upgrade. This module
-//! holds the pure path helpers (no `.lnk` writing - that needs `mslnk`, an
-//! installer-only dep): the standard location dirs, the resolved `.lnk` path of
+//! holds the pure path helpers: the standard location dirs, the resolved `.lnk` path of
 //! an entry, and the stale-set diff for upgrades.
 
 use crate::model::shortcut_entry::ShortcutEntry;
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::UI::Shell::{KF_FLAG_DEFAULT, SHGetKnownFolderPath};
 
 /// Per-user Start Menu Programs directory (no admin needed).
 pub fn start_menu_dir() -> Option<PathBuf> {
@@ -40,8 +42,6 @@ pub fn common_start_menu_dir() -> Option<PathBuf> {
 
 /// Resolve a Known Folder by id to a path. `None` if the shell can't resolve it.
 fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
-    use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{KF_FLAG_DEFAULT, SHGetKnownFolderPath};
     unsafe {
         let pwstr = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
         if pwstr.is_null() {
