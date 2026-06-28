@@ -2,8 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 //! File-type associations under `Software\Classes`, in `HKCU` (per-user, no
-//! admin) or `HKLM` (machine-wide install, needs admin) — see the `machine`
-//! arg on [`register`] / [`unregister`].
+//! admin) or `HKLM` (machine-wide install, needs admin).
 //!
 //! Layout written per association (extension `.myx`, product `MyApp`):
 //! ```text
@@ -12,12 +11,13 @@
 //! Software\Classes\MyApp.myx\DefaultIcon      (default) = "<exe>",0
 //! Software\Classes\MyApp.myx\shell\open\command (default) = "<exe>" "%1"
 //! ```
-//! `progid_for` is shared by installer + uninstaller so both agree on the key
-//! names. Uninstall only clears the `.ext` default when it still points at our
-//! ProgID, so we never stomp an association the user re-pointed elsewhere.
 
 use crate::model::file_assoc::FileAssoc;
-use crate::utils::wide;
+use crate::registry::{close, create_registry_key, delete_tree, read_default, set_default};
+use std::collections::HashSet;
+
+use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
 
 /// Deterministic ProgID for a (product_id, extension) pair, e.g.
 /// `("MyApp", ".myx") -> "MyApp.myx"`. `product_id` is the registry-safe id
@@ -42,7 +42,6 @@ pub fn normalize_ext(ext: &str) -> String {
 /// normalized extension. On upgrade these should be `unregister`ed so a changed
 /// association list never leaves orphaned ProgIDs / extension handlers behind.
 pub fn stale(prior: &[FileAssoc], current: &[FileAssoc]) -> Vec<FileAssoc> {
-    use std::collections::HashSet;
     let keep: HashSet<String> = current.iter().map(|a| normalize_ext(&a.ext)).collect();
     prior
         .iter()
@@ -53,7 +52,7 @@ pub fn stale(prior: &[FileAssoc], current: &[FileAssoc]) -> Vec<FileAssoc> {
 
 /// Register associations. `machine` writes under `HKLM\Software\Classes`
 /// (system-wide, needs admin) instead of `HKCU\Software\Classes`, so a
-/// machine-wide install is visible to every user — not just the (elevated) admin
+/// machine-wide install is visible to every usern not just the (elevated) admin
 /// account that ran the installer.
 pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc], machine: bool) {
     if assocs.is_empty() {
@@ -65,15 +64,17 @@ pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc], machine:
         let progid = progid_for(product_id, &ext);
 
         // ProgID class
-        if let Some(h) = create_key(root, &format!(r"Software\Classes\{}", progid)) {
+        if let Some(h) = create_registry_key(root, &format!(r"Software\Classes\{}", progid)) {
             set_default(h, &a.description);
             close(h);
         }
-        if let Some(h) = create_key(root, &format!(r"Software\Classes\{}\DefaultIcon", progid)) {
+        if let Some(h) =
+            create_registry_key(root, &format!(r"Software\Classes\{}\DefaultIcon", progid))
+        {
             set_default(h, &format!("\"{}\",0", exe_path));
             close(h);
         }
-        if let Some(h) = create_key(
+        if let Some(h) = create_registry_key(
             root,
             &format!(r"Software\Classes\{}\shell\open\command", progid),
         ) {
@@ -81,7 +82,7 @@ pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc], machine:
             close(h);
         }
         // Extension -> ProgID
-        if let Some(h) = create_key(root, &format!(r"Software\Classes\{}", ext)) {
+        if let Some(h) = create_registry_key(root, &format!(r"Software\Classes\{}", ext)) {
             set_default(h, &progid);
             close(h);
         }
@@ -114,9 +115,7 @@ pub fn unregister(product_id: &str, assocs: &[FileAssoc], machine: bool) {
     notify_assoc_changed();
 }
 
-// ---- Windows registry helpers -------------------------------------------
-
-use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+// ---- Hive selection / shell notify --------------------------------------
 
 /// Root for the `Software\Classes` tree: `HKLM` for a machine-wide (admin)
 /// install, else the per-user `HKCU`.
@@ -128,88 +127,7 @@ fn class_root(machine: bool) -> HKEY {
     }
 }
 
-fn create_key(root: HKEY, sub: &str) -> Option<HKEY> {
-    use windows::Win32::System::Registry::{KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCreateKeyExW};
-    use windows::core::PCWSTR;
-    let w = wide(sub);
-    unsafe {
-        let mut hkey = HKEY::default();
-        let rc = RegCreateKeyExW(
-            root,
-            PCWSTR(w.as_ptr()),
-            None,
-            PCWSTR::null(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_WRITE,
-            None,
-            &mut hkey,
-            None,
-        );
-        if rc.is_ok() { Some(hkey) } else { None }
-    }
-}
-
-fn set_default(hkey: HKEY, value: &str) {
-    use windows::Win32::System::Registry::{REG_SZ, RegSetValueExW};
-    use windows::core::PCWSTR;
-    let v = wide(value);
-    let bytes: Vec<u8> = v.iter().flat_map(|u| u.to_le_bytes()).collect();
-    unsafe {
-        // Name = null/empty → the key's (Default) value.
-        let _ = RegSetValueExW(hkey, PCWSTR::null(), None, REG_SZ, Some(&bytes));
-    }
-}
-
-fn close(hkey: HKEY) {
-    use windows::Win32::System::Registry::RegCloseKey;
-    unsafe {
-        let _ = RegCloseKey(hkey);
-    }
-}
-
-fn read_default(root: HKEY, sub: &str) -> Option<String> {
-    use windows::Win32::System::Registry::{
-        KEY_READ, REG_VALUE_TYPE, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
-    };
-    use windows::core::PCWSTR;
-    let w = wide(sub);
-    unsafe {
-        let mut hkey = HKEY::default();
-        if RegOpenKeyExW(root, PCWSTR(w.as_ptr()), None, KEY_READ, &mut hkey).is_err() {
-            return None;
-        }
-        let mut buf = [0u16; 512];
-        let mut len: u32 = (buf.len() * 2) as u32;
-        let mut ty = REG_VALUE_TYPE::default();
-        let rc = RegQueryValueExW(
-            hkey,
-            PCWSTR::null(),
-            None,
-            Some(&mut ty),
-            Some(buf.as_mut_ptr() as *mut u8),
-            Some(&mut len),
-        );
-        let _ = RegCloseKey(hkey);
-        if rc.is_err() {
-            return None;
-        }
-        let chars = (len as usize / 2).min(buf.len());
-        let end = buf[..chars].iter().position(|&c| c == 0).unwrap_or(chars);
-        Some(String::from_utf16_lossy(&buf[..end]))
-    }
-}
-
-fn delete_tree(root: HKEY, sub: &str) {
-    use windows::Win32::System::Registry::RegDeleteTreeW;
-    use windows::core::PCWSTR;
-    let w = wide(sub);
-    unsafe {
-        let _ = RegDeleteTreeW(root, PCWSTR(w.as_ptr()));
-    }
-}
-
 fn notify_assoc_changed() {
-    use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
     unsafe {
         SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
     }

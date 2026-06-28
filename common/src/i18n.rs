@@ -4,17 +4,17 @@
 //! Multi-language string lookup.
 //!
 //! Locales are TOML files under `common/locales/`, embedded at compile time
-//! via `include_str!`. Each locale is a flat key→string map after parsing
-//! (sections are flattened with dots, e.g. `install.next`).
+//! via `include_str!`. Each locale is a flat key -> string map after parsing
 //!
 //! Detection on Windows uses `GetUserDefaultLocaleName` and takes the first
-//! 2 ISO-639 chars (`"en-US"` → `"en"`). A `--lang <code>` CLI flag and the
+//! 2 ISO-639 chars (`"en-US"` -> `"en"`). A `--lang <code>` CLI flag and the
 //! `INSTALLWAY_LANG` env var both override detection. Unknown languages
 //! fall back to English; missing keys fall back to English, then to the key
 //! literal so nothing ever returns an empty string.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use windows::Win32::Globalization::GetUserDefaultLocaleName;
 
 const EN: &str = include_str!("../locales/en.toml");
 const FR: &str = include_str!("../locales/fr.toml");
@@ -120,7 +120,7 @@ impl Translator {
         let _ = CURRENT_LANG.set(self.lang);
     }
 
-    /// Look up a key. Missing → fall back to English → key literal.
+    /// Look up a key. Missing -> fall back to English -> key literal.
     pub fn get(&self, key: &str) -> String {
         let t = tables();
         if let Some(s) = t.get(self.lang).and_then(|m| m.get(key)) {
@@ -136,7 +136,7 @@ impl Translator {
 
     /// Look up with `{placeholder}` substitution.
     pub fn fmt(&self, key: &str, vars: &[(&str, &str)]) -> String {
-        let mut s = self.get(key);
+        let mut s: String = self.get(key);
         for (k, v) in vars {
             s = s.replace(&format!("{{{}}}", k), v);
         }
@@ -151,7 +151,6 @@ impl Default for Translator {
 }
 
 fn os_user_locale() -> Option<String> {
-    use windows::Win32::Globalization::GetUserDefaultLocaleName;
     let mut buf = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
     let n = unsafe { GetUserDefaultLocaleName(&mut buf) };
     if n <= 0 {

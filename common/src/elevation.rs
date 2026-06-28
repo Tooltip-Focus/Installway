@@ -9,12 +9,26 @@
 //! (`runas`). The subprocess communicates via a named pipe: the main process
 //! writes a JSON command; the worker streams JSON event lines back.
 
+use crate::utils::wide;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::path::PathBuf;
+
+use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE, OPEN_EXISTING,
+};
+use windows::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, NAMED_PIPE_MODE, WaitNamedPipeW,
+};
+use windows::Win32::UI::Shell::{IsUserAnAdmin, ShellExecuteW};
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows::core::HSTRING;
+use windows::core::PCWSTR;
 
 // ─── permission helpers ───────────────────────────────────────────────────────
 
@@ -26,7 +40,6 @@ pub fn is_permission_denied(e: &std::io::Error) -> bool {
 
 /// `true` when the current process token has administrator privileges.
 pub fn is_already_elevated() -> bool {
-    use windows::Win32::UI::Shell::IsUserAnAdmin;
     unsafe { IsUserAnAdmin().as_bool() }
 }
 
@@ -78,12 +91,6 @@ pub fn recv<T: for<'de> Deserialize<'de>, R: BufRead>(reader: &mut R) -> Result<
 
 /// Create a named-pipe server instance (byte-stream, blocking, duplex).
 pub fn create_pipe_server(name: &str) -> Result<windows::Win32::Foundation::HANDLE> {
-    use crate::utils::wide;
-    use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
-    use windows::Win32::System::Pipes::{CreateNamedPipeW, NAMED_PIPE_MODE};
-    use windows::core::PCWSTR;
-
     // PIPE_ACCESS_DUPLEX = 3, byte-stream blocking mode.
     let name_w = wide(name);
     let handle = unsafe {
@@ -109,7 +116,6 @@ pub fn create_pipe_server(name: &str) -> Result<windows::Win32::Foundation::HAND
 
 /// Block until the elevated worker connects (or the pipe errors out).
 pub fn wait_for_client(handle: windows::Win32::Foundation::HANDLE) -> Result<()> {
-    use windows::Win32::System::Pipes::ConnectNamedPipe;
     unsafe { ConnectNamedPipe(handle, None)? };
     Ok(())
 }
@@ -118,11 +124,6 @@ pub fn wait_for_client(handle: windows::Win32::Foundation::HANDLE) -> Result<()>
 
 /// Connect to the named-pipe server created by the main process.
 pub fn connect_pipe_client(name: &str) -> Result<windows::Win32::Foundation::HANDLE> {
-    use crate::utils::wide;
-    use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_NONE, OPEN_EXISTING};
-    use windows::Win32::System::Pipes::WaitNamedPipeW;
-    use windows::core::PCWSTR;
-
     let name_w = wide(name);
     // Wait up to 5 s for the server to be ready (process startup latency).
     let _ = unsafe { WaitNamedPipeW(PCWSTR(name_w.as_ptr()), 5000) };
@@ -150,7 +151,6 @@ pub fn connect_pipe_client(name: &str) -> Result<windows::Win32::Foundation::HAN
 /// The handle must be valid, open, and owned by the caller. Ownership
 /// transfers to the returned `File`; the handle is closed on drop.
 pub fn open_pipe_handle(handle: windows::Win32::Foundation::HANDLE) -> std::fs::File {
-    use std::os::windows::io::{FromRawHandle, OwnedHandle};
     let owned = unsafe { OwnedHandle::from_raw_handle(handle.0) };
     owned.into()
 }
@@ -163,10 +163,6 @@ pub fn open_pipe_handle(handle: windows::Win32::Foundation::HANDLE) -> std::fs::
 /// approved and the worker process started. Returns `Err` if the user
 /// cancelled UAC or an OS error occurred.
 pub fn spawn_elevated_worker(pipe_name: &str) -> Result<()> {
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-    use windows::core::HSTRING;
-
     let exe = std::env::current_exe()?;
     let args = format!("--elevated-worker \"{}\"", pipe_name);
 
@@ -193,7 +189,6 @@ pub fn spawn_elevated_worker(pipe_name: &str) -> Result<()> {
 /// Read one `\n`-terminated line from `file` byte-by-byte.
 /// Avoids buffering that could consume bytes intended for later reads.
 pub fn read_line_unbuffered(file: &mut std::fs::File) -> std::io::Result<String> {
-    use std::io::Read;
     let mut bytes = Vec::new();
     let mut buf = [0u8; 1];
     loop {

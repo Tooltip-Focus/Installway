@@ -13,6 +13,7 @@ use crate::model::reg_kind::RegKind;
 use crate::model::reg_value::RegValue;
 use crate::utils::wide;
 use std::collections::HashSet;
+use windows::Win32::System::Registry::RegDeleteTreeW;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_BINARY, REG_DWORD,
     REG_EXPAND_SZ, REG_MULTI_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SZ, REG_VALUE_TYPE,
@@ -20,6 +21,26 @@ use windows::Win32::System::Registry::{
     RegQueryValueExW, RegSetValueExW,
 };
 use windows::core::PCWSTR;
+
+// Write key in the registry
+pub fn create_registry_key(root: HKEY, sub: &str) -> Option<HKEY> {
+    let w = wide(sub);
+    unsafe {
+        let mut hkey = HKEY::default();
+        let rc = RegCreateKeyExW(
+            root,
+            PCWSTR(w.as_ptr()),
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            None,
+            &mut hkey,
+            None,
+        );
+        if rc.is_ok() { Some(hkey) } else { None }
+    }
+}
 
 /// Root hive for an entry: `HKCU` or `HKLM` (machine-wide, needs admin). `None`
 /// for any other hive string, which the caller treats as a no-op.
@@ -44,7 +65,7 @@ pub fn write(e: &RegEntry) {
         crate::log::warn(format!("registry: skip {} (bad value for type)", e.key));
         return;
     };
-    if let Some(h) = create_key(root, &e.key) {
+    if let Some(h) = create_registry_key(root, &e.key) {
         set_value(h, &e.name, ty, &bytes);
         close(h);
         crate::log::info(format!(
@@ -110,7 +131,7 @@ fn encode(kind: RegKind, value: &RegValue) -> Option<(REG_VALUE_TYPE, Vec<u8>)> 
         (RegKind::Dword, RegValue::Int(n)) => Some((REG_DWORD, (*n as u32).to_le_bytes().to_vec())),
         (RegKind::Qword, RegValue::Int(n)) => Some((REG_QWORD, n.to_le_bytes().to_vec())),
         (RegKind::MultiSz, RegValue::List(items)) => Some((REG_MULTI_SZ, multi_sz(items))),
-        (RegKind::Binary, RegValue::Text(hex)) => Some((REG_BINARY, decode_hex(hex)?)),
+        (RegKind::Binary, RegValue::Text(hex)) => Some((REG_BINARY, hex::decode(hex.trim()).ok()?)),
         _ => None,
     }
 }
@@ -144,30 +165,6 @@ fn u16_bytes(w: &[u16]) -> Vec<u8> {
     b
 }
 
-fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    let s = s.trim();
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(s.len() / 2);
-    let mut i = 0;
-    while i < b.len() {
-        out.push((hexv(b[i])? << 4) | hexv(b[i + 1])?);
-        i += 2;
-    }
-    Some(out)
-}
-
-fn hexv(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
-}
-
 // ---- Win32 registry helpers (HKCU / HKLM) -------------------------------
 
 /// Value-name pointer: `(Default)` (null) for an empty name.
@@ -179,33 +176,31 @@ fn name_ptr(name_w: &[u16], name: &str) -> PCWSTR {
     }
 }
 
-fn create_key(root: HKEY, sub: &str) -> Option<HKEY> {
-    let w = wide(sub);
-    unsafe {
-        let mut hkey = HKEY::default();
-        let rc = RegCreateKeyExW(
-            root,
-            PCWSTR(w.as_ptr()),
-            None,
-            PCWSTR::null(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_WRITE,
-            None,
-            &mut hkey,
-            None,
-        );
-        if rc.is_ok() { Some(hkey) } else { None }
-    }
-}
-
-fn set_value(hkey: HKEY, name: &str, ty: REG_VALUE_TYPE, bytes: &[u8]) {
+pub(crate) fn set_value(hkey: HKEY, name: &str, ty: REG_VALUE_TYPE, bytes: &[u8]) {
     let name_w = wide(name);
     unsafe {
         let _ = RegSetValueExW(hkey, name_ptr(&name_w, name), None, ty, Some(bytes));
     }
 }
 
-fn read_value(root: HKEY, sub: &str, name: &str) -> Option<(REG_VALUE_TYPE, Vec<u8>)> {
+/// Set the key's `(Default)` REG_SZ value (convenience over [`set_value`]).
+pub(crate) fn set_default(hkey: HKEY, value: &str) {
+    set_value(hkey, "", REG_SZ, &utf16z(value));
+}
+
+/// Read the key's `(Default)` value as a string (REG_SZ assumed). Decodes the
+/// raw bytes from [`read_value`] as UTF-16LE up to the first null.
+pub(crate) fn read_default(root: HKEY, sub: &str) -> Option<String> {
+    let (_, bytes) = read_value(root, sub, "")?;
+    let u: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    let end = u.iter().position(|&c| c == 0).unwrap_or(u.len());
+    Some(String::from_utf16_lossy(&u[..end]))
+}
+
+pub(crate) fn read_value(root: HKEY, sub: &str, name: &str) -> Option<(REG_VALUE_TYPE, Vec<u8>)> {
     let w = wide(sub);
     let name_w = wide(name);
     unsafe {
@@ -248,6 +243,16 @@ fn delete_value(root: HKEY, sub: &str, name: &str) {
             let _ = RegDeleteValueW(hkey, name_ptr(&name_w, name));
             let _ = RegCloseKey(hkey);
         }
+    }
+}
+
+/// Delete a key and its entire subtree. Unlike [`prune_empty`], this removes the
+/// key even when it still holds subkeys/values — used for tearing down an
+/// association ProgID tree wholesale.
+pub(crate) fn delete_tree(root: HKEY, sub: &str) {
+    let w = wide(sub);
+    unsafe {
+        let _ = RegDeleteTreeW(root, PCWSTR(w.as_ptr()));
     }
 }
 
@@ -304,7 +309,7 @@ fn prune_empty(root: HKEY, key: &str) {
     }
 }
 
-fn close(hkey: HKEY) {
+pub(crate) fn close(hkey: HKEY) {
     unsafe {
         let _ = RegCloseKey(hkey);
     }
