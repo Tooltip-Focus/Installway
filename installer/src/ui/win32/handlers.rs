@@ -14,8 +14,8 @@ use crate::extract::{InstallCtx, install};
 use crate::install as install_mod;
 use crate::ui::helpers::{
     self, WM_APP_CANCELLED, WM_APP_DONE, WM_APP_ERROR, WM_APP_PERM_DENIED, WM_APP_PERM_ERROR,
-    WM_APP_PLUGIN_PROGRESS, WM_APP_PLUGIN_STEP, WM_APP_PROGRESS, get_window_text, post_wparam,
-    scale_progress, set_dlg_text, set_progress,
+    WM_APP_PLUGIN_PROGRESS, WM_APP_PLUGIN_STEP, get_window_text, post_wparam, scale_progress,
+    set_dlg_text, set_progress,
 };
 use common::model::install_dir_restriction::InstallDirRestriction;
 use std::path::{Path, PathBuf};
@@ -492,7 +492,6 @@ unsafe fn commit_install(hwnd: HWND) {
                     guard.total = total;
                     guard.name = name.to_string();
                 }
-                helpers::post(hwnd_isize, WM_APP_PROGRESS);
             })
         };
         let ctx = InstallCtx {
@@ -671,7 +670,6 @@ pub(super) fn start_elevated_install(
                     g.total = total;
                     g.name = name.to_string();
                 }
-                helpers::post(hwnd_isize, WM_APP_PROGRESS);
             },
         );
         match result {

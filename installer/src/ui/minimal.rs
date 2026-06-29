@@ -2,26 +2,12 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 //! Compact, auto-starting update UI for app-triggered self-updates.
-//!
-//! No license page, no path picker, no Install button - it starts immediately
-//! and just shows progress. Layout:
-//!
-//! ```text
-//!  ┌────────────────────────────────────────────┐
-//!  │  ██      Applying update                    │
-//!  │  ██      MyApp 1.2                          │
-//!  │          [██████████░░░░░░░]  62%           │
-//!  │          Updating bin/app.exe               │
-//!  └────────────────────────────────────────────┘
-//! ```
-//! App icon on the left, text + progress on the right. Closes itself on
-//! success; on failure it stays with the error message.
 
 use crate::extract::{InstallCtx, install};
 use crate::payload::LoadedPayload;
 use crate::ui::helpers::{
-    self, WM_APP_DONE, WM_APP_ERROR, WM_APP_PROGRESS, create_font, own_icon, post, scale_progress,
-    set_dlg_text, set_progress,
+    self, WM_APP_DONE, WM_APP_ERROR, create_font, own_icon, post, scale_progress, set_dlg_text,
+    set_progress,
 };
 use anyhow::Result;
 use common::utils::wide;
@@ -50,6 +36,14 @@ const ID_STATUS: usize = 5;
 
 const STM_SETICON: u32 = 0x0170;
 const SS_ICON: u32 = 0x0003;
+
+/// `SetTimer` ids. `CLOSE_TIMER` is the post-success "show 100% briefly" pause;
+/// `PROGRESS_TIMER` polls the shared `Prog` on the UI thread so the worker never
+/// floods the queue with posted messages (which would outrank input and stall
+/// window dragging). WM_TIMER sits below input, so the window stays draggable.
+const CLOSE_TIMER: usize = 1;
+const PROGRESS_TIMER: usize = 2;
+const PROGRESS_TIMER_MS: u32 = 15;
 
 const WIN_W: i32 = 480; // client width
 const WIN_H: i32 = 140; // client height
@@ -114,9 +108,11 @@ pub fn preview(translator: common::i18n::Translator) -> Result<()> {
     let payload = crate::ui::sample_payload("minimal");
     unsafe {
         let win = build_window(&payload)?;
-        let hwnd = HWND(win.hwnd_isize as *mut _);
-        set_progress(hwnd, ID_PROGRESS, scale_progress(62, 100));
-        set_dlg_text(hwnd, ID_STATUS, "62%  bin/app.exe");
+        if let Ok(mut p) = win.prog.lock() {
+            p.done = 62;
+            p.total = 100;
+            p.name = "bin/app.exe".to_string();
+        }
         helpers::pump_messages();
     }
     Ok(())
@@ -225,6 +221,7 @@ unsafe fn build_window(
         build_controls(hwnd, payload);
         relayout(hwnd, dpi);
         let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetTimer(Some(hwnd), PROGRESS_TIMER, PROGRESS_TIMER_MS, None);
     }
 
     Ok(Window {
@@ -281,7 +278,6 @@ fn spawn_worker(
                     p.total = total;
                     p.name = name.to_string();
                 }
-                post(hwnd_isize, WM_APP_PROGRESS);
             })
         };
         // Reached when writable without elevation, or already running elevated.
@@ -342,7 +338,6 @@ fn run_elevated_worker(
                 p.total = total;
                 p.name = name.to_string();
             }
-            post(hwnd_isize, WM_APP_PROGRESS);
         });
     match result {
         Ok(()) => {
@@ -570,23 +565,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     .unwrap_or(0)
             }))
         },
-        m if m == WM_APP_PROGRESS => unsafe {
-            update_progress(hwnd);
-            LRESULT(0)
-        },
         m if m == WM_APP_DONE => unsafe {
+            let _ = KillTimer(Some(hwnd), PROGRESS_TIMER);
             set_dlg_text(hwnd, ID_STATUS, &tr().get("install.minimal_done"));
             set_progress(hwnd, ID_PROGRESS, 10000);
             // Brief pause so the user sees 100%, then close.
-            let _ = SetTimer(Some(hwnd), 1, 900, None);
+            let _ = SetTimer(Some(hwnd), CLOSE_TIMER, 900, None);
             LRESULT(0)
         },
-        WM_TIMER => unsafe {
-            let _ = KillTimer(Some(hwnd), 1);
+        WM_TIMER if wparam.0 == PROGRESS_TIMER => unsafe {
+            update_progress(hwnd);
+            LRESULT(0)
+        },
+        WM_TIMER if wparam.0 == CLOSE_TIMER => unsafe {
+            let _ = KillTimer(Some(hwnd), CLOSE_TIMER);
             let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
             LRESULT(0)
         },
         m if m == WM_APP_ERROR => unsafe {
+            let _ = KillTimer(Some(hwnd), PROGRESS_TIMER);
             let text = if lparam.0 != 0 {
                 *Box::from_raw(lparam.0 as *mut String)
             } else {

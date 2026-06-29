@@ -24,7 +24,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::PCWSTR;
 
 /// App-defined window messages posted from the worker thread to the UI thread.
-pub const WM_APP_PROGRESS: u32 = WM_APP + 1;
 pub const WM_APP_DONE: u32 = WM_APP + 2;
 pub const WM_APP_ERROR: u32 = WM_APP + 3;
 /// Posted by the background plugin-step query thread when a result is ready.
