@@ -15,12 +15,17 @@ mod views;
 use crate::payload::LoadedPayload;
 use crate::ui::helpers;
 use anyhow::Result;
+#[cfg(debug_assertions)]
 use common::model::choice_option::ChoiceOption;
+#[cfg(debug_assertions)]
 use common::model::choice_style::ChoiceStyle;
 use common::model::install_dir_restriction::InstallDirRestriction;
 use common::model::installer_payload::InstallerPayload;
+#[cfg(debug_assertions)]
 use common::model::page_step::PageStep;
+#[cfg(debug_assertions)]
 use common::model::plugin_page::PluginPage;
+#[cfg(debug_assertions)]
 use common::model::plugin_widget::PluginWidget;
 use common::utils::wide;
 use std::cell::RefCell;

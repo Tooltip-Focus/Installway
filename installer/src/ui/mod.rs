@@ -9,10 +9,14 @@ pub mod minimal;
 pub mod win32;
 
 use anyhow::{Result, bail};
+#[cfg(debug_assertions)]
 use common::model::install_dir_restriction::InstallDirRestriction;
+#[cfg(debug_assertions)]
 use common::model::installer_payload::InstallerPayload;
+#[cfg(debug_assertions)]
 use common::model::manifest::Manifest;
 use common::model::page_step::PageStep;
+#[cfg(debug_assertions)]
 use common::model::payload_kind::PayloadKind;
 use common::model::plugin_page::PluginInputs;
 use common::model::plugin_page::PluginPage;
