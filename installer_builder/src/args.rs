@@ -4,6 +4,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use common::model::install_dir_restriction::InstallDirRestriction;
+use common::model::launch_option::LaunchOption;
 use common::model::plugin_phase::PluginPhase;
 use common::model::reg_entry::RegEntry;
 use common::model::reg_kind::RegKind;
@@ -133,6 +134,12 @@ pub struct PackCli {
     /// interactive uninstall. Off by default.
     #[arg(long)]
     pub show_uninstall_complete: bool,
+
+    /// Behaviour of the "launch now" checkbox on the installer's final page:
+    /// `checked` (visible + ticked), `unchecked` (visible, not ticked) or
+    /// `hidden` (no checkbox). Default `checked`.
+    #[arg(long, value_name = "checked|unchecked|hidden")]
+    pub launch_option: Option<String>,
 
     /// Default install dir the UI proposes (per-app). May contain `%VAR%` env
     /// tokens, e.g. `%LOCALAPPDATA%\Programs\MyApp` or `C:\Games\MyApp`.
@@ -284,6 +291,7 @@ pub struct PackFile {
     pub upgrade_minimal_ui: bool,
     #[serde(default)]
     pub show_uninstall_complete: bool,
+    pub launch_option: Option<String>,
     pub default_install_dir: Option<String>,
     pub priv_key: Option<PathBuf>,
     pub priv_key_literal: Option<String>,
@@ -331,6 +339,7 @@ pub struct PackArgs {
     pub install_dir_restriction: InstallDirRestriction,
     pub upgrade_minimal_ui: bool,
     pub show_uninstall_complete: bool,
+    pub launch_option: LaunchOption,
     pub default_install_dir: Option<String>,
     pub priv_key: Option<PathBuf>,
     pub priv_key_literal: Option<String>,
@@ -422,6 +431,7 @@ impl PackArgs {
             )?,
             upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
             show_uninstall_complete: cli.show_uninstall_complete || file.show_uninstall_complete,
+            launch_option: parse_launch_option(cli.launch_option.or(file.launch_option))?,
             reuse_stub: cli.reuse_stub || file.reuse_stub,
             registry: build_registry(file.registry)?,
             plugins: build_plugins(file.plugins)?,
@@ -483,6 +493,21 @@ fn parse_install_dir_restriction(v: Option<String>) -> Result<InstallDirRestrict
         other => {
             bail!("unknown install-dir-restriction '{other}' (enforce | default-dir-only | bypass)")
         }
+    }
+}
+
+/// Parse the optional `launch_option` value (CLI or config). Accepts
+/// `checked` / `unchecked` / `hidden` (case-insensitive). Absent →
+/// [`LaunchOption::Checked`].
+fn parse_launch_option(v: Option<String>) -> Result<LaunchOption> {
+    let Some(s) = v else {
+        return Ok(LaunchOption::Checked);
+    };
+    match s.trim().to_ascii_lowercase().as_str() {
+        "checked" => Ok(LaunchOption::Checked),
+        "unchecked" => Ok(LaunchOption::Unchecked),
+        "hidden" => Ok(LaunchOption::Hidden),
+        other => bail!("unknown launch-option '{other}' (checked | unchecked | hidden)"),
     }
 }
 
@@ -663,6 +688,7 @@ mod tests {
             install_dir_restriction: None,
             upgrade_minimal_ui: false,
             show_uninstall_complete: false,
+            launch_option: None,
             default_install_dir: None,
             priv_key: None,
             priv_key_literal: None,
@@ -934,6 +960,30 @@ force_reinstall = true
         );
         // Unknown value errors.
         assert!(resolve_with("\ninstall_dir_restriction = 'nope'\n").is_err());
+    }
+
+    #[test]
+    fn launch_option_defaults_and_parses() {
+        // Absent → Checked.
+        assert_eq!(
+            resolve_with("").unwrap().launch_option,
+            LaunchOption::Checked
+        );
+        // From file, case-insensitive.
+        assert_eq!(
+            resolve_with("\nlaunch_option = 'Unchecked'\n")
+                .unwrap()
+                .launch_option,
+            LaunchOption::Unchecked
+        );
+        assert_eq!(
+            resolve_with("\nlaunch_option = 'hidden'\n")
+                .unwrap()
+                .launch_option,
+            LaunchOption::Hidden
+        );
+        // Unknown value errors.
+        assert!(resolve_with("\nlaunch_option = 'nope'\n").is_err());
     }
 
     // SAMPLE without a priv_key line — used to test the literal-key path.

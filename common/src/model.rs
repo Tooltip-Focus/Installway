@@ -9,6 +9,7 @@ pub mod file_entry;
 pub mod install_dir_restriction;
 pub mod install_info;
 pub mod installer_payload;
+pub mod launch_option;
 pub mod manifest;
 pub mod page_step;
 pub mod patch_info;
@@ -30,6 +31,7 @@ mod tests {
     use super::install_dir_restriction::InstallDirRestriction;
     use super::install_info::InstallInfo;
     use super::installer_payload::InstallerPayload;
+    use super::launch_option::LaunchOption;
     use super::page_step::PageStep;
     use super::payload_kind::PayloadKind;
     use super::plugin_page::PluginPage;
@@ -54,6 +56,7 @@ mod tests {
         assert_eq!(p.install_dir_restriction, InstallDirRestriction::Enforce);
         assert!(!p.upgrade_minimal_ui);
         assert!(!p.show_uninstall_complete);
+        assert_eq!(p.launch_option, LaunchOption::Checked);
         assert!(p.associations.is_empty());
         assert!(p.shortcuts.is_empty());
         assert!(p.license_text.is_none());
@@ -101,6 +104,7 @@ mod tests {
         );
         assert!(back.upgrade_minimal_ui);
         assert!(back.show_uninstall_complete);
+        assert_eq!(back.launch_option, LaunchOption::Unchecked);
         assert_eq!(back.associations.len(), 1);
         assert_eq!(back.shortcuts.len(), 1);
         assert_eq!(back.shortcuts[0].dir, r"%DESKTOP%");

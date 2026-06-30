@@ -175,6 +175,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         default_install_dir: args.default_install_dir.clone(),
         upgrade_minimal_ui: args.upgrade_minimal_ui,
         show_uninstall_complete: args.show_uninstall_complete,
+        launch_option: args.launch_option,
         registry: args.registry.clone(),
         plugins: plugin_entries,
         shortcuts: args.shortcuts.clone(),

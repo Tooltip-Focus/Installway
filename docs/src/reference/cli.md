@@ -63,6 +63,7 @@ Required fields are checked after merging. See [Config file](../building/config.
 | `--default-install-dir <DIR>` | Proposed install path; `%VAR%` tokens expanded. |
 | `--skip-license` | Hide the License page. |
 | `--skip-path` | Hide the Choose-location page. |
+| `--launch-option <checked\|unchecked\|hidden>` | Final-page "launch now" checkbox: ticked (default), shown-unticked, or hidden. |
 | `--upgrade-minimal-ui` | Use the compact minimal UI for upgrades (full or patch); first install still uses the wizard. |
 | `--min-installer-version <VER>` | Anti-rollback floor (default `1.0.0`). |
 | `--force-reinstall` | Dev: rewrite all files, remove orphans, skip from-check. |

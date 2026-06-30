@@ -21,6 +21,7 @@ use common::model::choice_option::ChoiceOption;
 use common::model::choice_style::ChoiceStyle;
 use common::model::install_dir_restriction::InstallDirRestriction;
 use common::model::installer_payload::InstallerPayload;
+use common::model::launch_option::LaunchOption;
 #[cfg(debug_assertions)]
 use common::model::page_step::PageStep;
 #[cfg(debug_assertions)]
@@ -159,6 +160,15 @@ fn skip_path() -> bool {
 }
 fn restriction() -> InstallDirRestriction {
     RESTRICTION.with(|r| *r.borrow())
+}
+/// Build-time policy for the final-page "launch now" checkbox.
+fn launch_option() -> LaunchOption {
+    PAYLOAD.with(|p| {
+        p.borrow()
+            .as_ref()
+            .map(|p| p.launch_option)
+            .unwrap_or_default()
+    })
 }
 fn default_path() -> String {
     DEFAULT_PATH.with(|d| d.borrow().clone())
@@ -660,7 +670,10 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     show(ID_ERROR_BOX, phase == Phase::Error);
     show(ID_ERROR_ICON, phase == Phase::Error);
 
-    show(ID_LAUNCH_CHK, phase == Phase::Done);
+    show(
+        ID_LAUNCH_CHK,
+        phase == Phase::Done && launch_option() != LaunchOption::Hidden,
+    );
 
     show(ID_BACK_BTN, phase == Phase::Choose && !skip_license());
     show(ID_NEXT_BTN, phase == Phase::License);
@@ -728,14 +741,17 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
     if phase == Phase::Done {
         unsafe {
             helpers::set_dlg_text(hwnd, ID_STATUS, &tr().get("install.done"));
-            // Default the launch checkbox to checked if launch flag set OR exe known.
-            let default_checked = LAUNCH_FLAG.with(|l| *l.borrow())
-                || PAYLOAD.with(|p| {
-                    p.borrow()
-                        .as_ref()
-                        .map(|p| !p.manifest.exe.is_empty())
-                        .unwrap_or(false)
-                });
+            // Launch checkbox default follows the build-time launch_option:
+            // Checked → checked when the launch flag is set OR an exe is known;
+            // Unchecked/Hidden → unchecked (Hidden is also not shown above).
+            let default_checked = launch_option() == LaunchOption::Checked
+                && (LAUNCH_FLAG.with(|l| *l.borrow())
+                    || PAYLOAD.with(|p| {
+                        p.borrow()
+                            .as_ref()
+                            .map(|p| !p.manifest.exe.is_empty())
+                            .unwrap_or(false)
+                    }));
             let h = GetDlgItem(Some(hwnd), ID_LAUNCH_CHK as i32).unwrap_or_default();
             SendMessageW(
                 h,

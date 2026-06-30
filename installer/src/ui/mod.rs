@@ -14,6 +14,8 @@ use common::model::install_dir_restriction::InstallDirRestriction;
 #[cfg(debug_assertions)]
 use common::model::installer_payload::InstallerPayload;
 #[cfg(debug_assertions)]
+use common::model::launch_option::LaunchOption;
+#[cfg(debug_assertions)]
 use common::model::manifest::Manifest;
 use common::model::page_step::PageStep;
 #[cfg(debug_assertions)]
@@ -183,6 +185,7 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
         default_install_dir: None,
         upgrade_minimal_ui: false,
         show_uninstall_complete: false,
+        launch_option: LaunchOption::Checked,
         registry: Vec::new(),
         plugins: Vec::new(),
         active_features: Vec::new(),
