@@ -15,12 +15,17 @@ mod views;
 use crate::payload::LoadedPayload;
 use crate::ui::helpers;
 use anyhow::Result;
+#[cfg(debug_assertions)]
 use common::model::choice_option::ChoiceOption;
+#[cfg(debug_assertions)]
 use common::model::choice_style::ChoiceStyle;
 use common::model::install_dir_restriction::InstallDirRestriction;
 use common::model::installer_payload::InstallerPayload;
+#[cfg(debug_assertions)]
 use common::model::page_step::PageStep;
+#[cfg(debug_assertions)]
 use common::model::plugin_page::PluginPage;
+#[cfg(debug_assertions)]
 use common::model::plugin_widget::PluginWidget;
 use common::utils::wide;
 use std::cell::RefCell;
@@ -62,6 +67,15 @@ pub(super) const ID_PATH_WARN: usize = 1017;
 pub(super) const ID_PATH_WARN_ICON: usize = 1018;
 pub(super) const ID_ERROR_BOX: usize = 1019;
 pub(super) const ID_ERROR_ICON: usize = 1020;
+
+/// `SetTimer` id used to poll install progress on the UI thread during the
+/// Progress phase. The worker only writes the shared `ProgressState`; the UI
+/// reads the latest snapshot here. `WM_TIMER` is the lowest-priority queued
+/// message (below mouse/keyboard input), so progress repaints never starve
+/// window drag/move, the window stays fully responsive while installing.
+pub(super) const PROGRESS_TIMER_ID: usize = 0xF001;
+/// Poll cadence in ms (~66 fps; the system clamps below ~10 ms anyway).
+const PROGRESS_TIMER_MS: u32 = 15;
 
 /// First dialog id for dynamically-built plugin-page controls. Kept well clear
 /// of the built-in ids (1001-1018); allocated sequentially in `plugin_pages`.
@@ -575,6 +589,17 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
         }
     });
 
+    // Drive progress updates off a low-priority WM_TIMER while installing so the
+    // worker never floods the queue with posted messages (which would outrank
+    // mouse input and freeze window dragging).
+    unsafe {
+        if phase == Phase::Progress {
+            let _ = SetTimer(Some(hwnd), PROGRESS_TIMER_ID, PROGRESS_TIMER_MS, None);
+        } else {
+            let _ = KillTimer(Some(hwnd), PROGRESS_TIMER_ID);
+        }
+    }
+
     let show = |id: usize, vis: bool| unsafe {
         let h = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
         let _ = ShowWindow(h, if vis { SW_SHOW } else { SW_HIDE });
@@ -845,12 +870,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         },
-        m if m == helpers::WM_APP_PROGRESS => unsafe {
+        WM_TIMER if wparam.0 == PROGRESS_TIMER_ID => unsafe {
             handlers::update_progress(hwnd);
             LRESULT(0)
         },
         m if m == helpers::WM_APP_DONE => unsafe {
             apply_phase(hwnd, Phase::Done);
+            handlers::update_progress(hwnd);
             LRESULT(0)
         },
         m if m == helpers::WM_APP_ERROR => unsafe {
