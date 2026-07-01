@@ -44,6 +44,12 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 # show the "uninstall complete" message box at the end of an interactive uninstall
 # show_uninstall_complete = true
 
+# the "launch now" checkbox on the installer's final page (optional)
+#   checked   = visible and ticked (default)
+#   unchecked = visible but not ticked (user opts in)
+#   hidden    = no checkbox; never offer to launch
+# launch_option = "unchecked"
+
 # patch mode (optional)
 # from_version = "0.9"
 # from_dir     = "build/myapp-0.9"
@@ -113,5 +119,7 @@ installer](full.md)) also fails the build.
 - **`install_dir_restriction`**: a scalar (CLI wins, then file); defaults to
   `enforce`. Accepts `enforce` / `default_dir_only` / `bypass` (case- and
   `_`/`-`-insensitive).
+- **`launch_option`**: a scalar (CLI wins, then file); defaults to `checked`.
+  Accepts `checked` / `unchecked` / `hidden` (case-insensitive).
 
 Next: [License, icon & version info](../packaging/branding.md).

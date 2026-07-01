@@ -1,5 +1,6 @@
 use crate::model::file_assoc::FileAssoc;
 use crate::model::install_dir_restriction::InstallDirRestriction;
+use crate::model::launch_option::LaunchOption;
 use crate::model::manifest::Manifest;
 use crate::model::payload_kind::PayloadKind;
 use crate::model::plugin_entry::PluginEntry;
@@ -89,6 +90,8 @@ pub struct InstallerPayload {
     /// interactive uninstall. Off by default; enable per-app at build time.
     #[serde(default)]
     pub show_uninstall_complete: bool,
+    #[serde(default)]
+    pub launch_option: LaunchOption,
     /// Feature packs resolved active for this run. Runtime-only (not signed); the
     /// installer fills it after querying the plugins and records it at finalize.
     #[serde(skip)]
@@ -151,6 +154,7 @@ impl Default for InstallerPayload {
                 ui: true,
             }],
             show_uninstall_complete: true,
+            launch_option: LaunchOption::Unchecked,
             active_features: vec![],
         }
     }

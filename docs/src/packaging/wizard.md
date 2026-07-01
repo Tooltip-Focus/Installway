@@ -25,6 +25,29 @@ installer_builder.exe pack `
 All three are also [config-file](../building/config.md) keys
 (`skip_license`, `skip_path`, `default_install_dir`).
 
+## "Launch now" checkbox (optional)
+
+The **Done** page shows a *launch the product now* checkbox. `--launch-option`
+controls it (config key `launch_option`):
+
+| Value | Effect |
+|---|---|
+| `checked` | Visible and ticked (default). The product launches on Finish unless the user clears it. |
+| `unchecked` | Visible but not ticked; the user opts in to launch. |
+| `hidden` | No checkbox; the installer never offers to launch the product. |
+
+```pwsh
+installer_builder.exe pack `
+    --product "My App" --product-id myapp --publisher "My Company" --to-version 1.0 `
+    --input .\build\myapp --exe myapp.exe `
+    --launch-option unchecked `
+    --priv-key .\keys\priv.key --pub-key .\keys\pub.key `
+    --out .\dist\setup-myapp-1.0.exe
+```
+
+Only affects the interactive wizard's Done page. Silent and minimal installs
+decide launching via the [`--launch`](../reference/cli.md) flag instead.
+
 ## Minimal UI for upgrades (optional)
 
 `--upgrade-minimal-ui` makes an **upgrade** use the compact
