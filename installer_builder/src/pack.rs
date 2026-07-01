@@ -127,8 +127,10 @@ pub fn run(args: &PackArgs) -> Result<()> {
 
     let license_text = match &args.license {
         Some(p) => {
-            let text = fs::read_to_string(p)
-                .with_context(|| format!("read license file {}", p.display()))?;
+            let bytes =
+                fs::read(p).with_context(|| format!("read license file {}", p.display()))?;
+            let text =
+                decode_license(&bytes).with_context(|| format!("license file {}", p.display()))?;
             println!(
                 "License: {} ({} bytes) from {}",
                 trimmed_title(&text),
@@ -871,6 +873,22 @@ fn human_bytes(n: usize) -> String {
 }
 
 /// First non-empty line of `s`, truncated to 60 chars - used for log preview.
+/// Decode a license file to UTF-8 with Windows line endings.
+fn decode_license(bytes: &[u8]) -> Result<String> {
+    // Reject UTF-16 BOMs up front.
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        bail!("not UTF-8 (looks like UTF-16); re-save the license file as UTF-8");
+    }
+    // Strip an optional UTF-8 BOM so it does not show as a stray glyph.
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+
+    let text = std::str::from_utf8(bytes)
+        .map_err(|e| anyhow::anyhow!("not valid UTF-8: {e}; re-save the license file as UTF-8"))?;
+
+    // Normalize to CRLF
+    Ok(text.replace("\r\n", "\n").replace('\n', "\r\n"))
+}
+
 fn trimmed_title(s: &str) -> String {
     let line = s
         .lines()
@@ -970,6 +988,31 @@ mod tests {
         let long = "x".repeat(80);
         let t = trimmed_title(&long);
         assert!(t.ends_with("...") && t.chars().count() == 63);
+    }
+
+    #[test]
+    fn decode_license_normalizes_lf_to_crlf() {
+        assert_eq!(decode_license(b"a\nb\n").unwrap(), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn decode_license_keeps_crlf_no_double() {
+        assert_eq!(decode_license(b"a\r\nb").unwrap(), "a\r\nb");
+    }
+
+    #[test]
+    fn decode_license_strips_utf8_bom() {
+        assert_eq!(decode_license(b"\xEF\xBB\xBFhi").unwrap(), "hi");
+    }
+
+    #[test]
+    fn decode_license_rejects_utf16() {
+        assert!(decode_license(&[0xFF, 0xFE, 0x41, 0x00]).is_err());
+    }
+
+    #[test]
+    fn decode_license_rejects_invalid_utf8() {
+        assert!(decode_license(&[0xFF, 0x28, 0x80]).is_err());
     }
 
     #[test]
