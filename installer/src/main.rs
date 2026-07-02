@@ -33,11 +33,22 @@ struct Cli {
     /// Falls back to `INSTALLWAY_PATH`, then the per-app default.
     install_dir: Option<String>,
 
-    /// Silent (non-interactive) install. Also accepted as `/S`.
+    /// Silent (non-interactive) install.
     #[arg(long)]
     silent: bool,
 
-    /// Compact auto-update UI (icon + progress only). Also accepted as `/minimal`.
+    /// Internal: run as the elevated worker, streaming events back over the
+    /// named pipe whose name is given here. Spawned via UAC by the main process.
+    #[arg(long, hide = true, value_name = "PIPE")]
+    elevated_worker: Option<String>,
+
+    /// Internal: plugin-host child. Values are `<dll> <func> [pages_pipe]
+    /// [progress_pipe]`; the context arrives on stdin. Re-launched as an
+    /// isolated process so a crashing plugin can't stall the install.
+    #[arg(long, hide = true, num_args = 2..=4, value_names = ["DLL", "FUNC", "PAGES", "PROGRESS"])]
+    run_plugin: Option<Vec<String>>,
+
+    /// Compact auto-update UI (icon + progress only).
     #[arg(long)]
     minimal: bool,
 
@@ -65,7 +76,7 @@ struct Cli {
 }
 
 fn main() {
-    let cli = parse_args();
+    let cli = Cli::parse();
 
     // Diagnostic / headless modes report errors as text on the parent console
     // (+ a non-zero exit code) instead of a modal dialog, so CI and scripted
@@ -96,64 +107,34 @@ fn main() {
     analytics::shutdown();
 }
 
-/// Normalise flags and parse argv into [`Cli`].
-///
-/// `--run-plugin <dll> <up|down> <ctx.json>` is a plugin-host child: handled
-/// here, before clap (its trailing paths aren't declared flags), exiting with
-/// the plugin's code and needing no payload. `/S` and `/minimal` are rewritten
-/// to their `--` forms (clap doesn't parse `/`-prefixed flags).
-fn parse_args() -> Cli {
-    // Full argv (incl. argv[0]) so clap can name itself in any diagnostics.
-    let mut argv: Vec<String> = std::env::args().collect();
-
-    if let Some(idx) = argv.iter().position(|a| a == "--elevated-worker") {
-        let code = match argv.get(idx + 1) {
-            Some(pipe_name) => match crate::elevation::run_as_worker(pipe_name) {
-                Ok(()) => 0,
-                Err(e) => {
-                    eprintln!("elevated-worker error: {e:#}");
-                    1
-                }
-            },
-            None => {
-                eprintln!("--elevated-worker requires a pipe name");
-                2
+fn run(cli: Cli) -> Result<()> {
+    // Elevated worker: connect to the main-process pipe, do the install +
+    // finalize, stream events back. Spawned via UAC by the main process; needs
+    // no payload/translator setup here (the worker resolves its own).
+    if let Some(pipe_name) = cli.elevated_worker.as_deref() {
+        let code = match crate::elevation::run_as_worker(pipe_name) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("elevated-worker error: {e:#}");
+                1
             }
         };
         std::process::exit(code);
     }
 
-    if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
-        // `--run-plugin <dll> <func> [<pipe>]`. The context arrives on stdin; the
-        // optional pipe carries the page descriptor back (pages only).
-        let code = match (argv.get(idx + 1), argv.get(idx + 2)) {
-            (Some(dll), Some(func)) => common::plugin::host_main(
-                Path::new(dll),
-                func,
-                argv.get(idx + 3)
-                    .filter(|s| !s.is_empty())
-                    .map(String::as_str),
-                argv.get(idx + 4)
-                    .filter(|s| !s.is_empty())
-                    .map(String::as_str),
-            ),
-            _ => 2,
-        };
+    // Plugin-host child: load the DLL, call the function, exit with its code.
+    // The context arrives on stdin; needs no payload. Values are
+    // `<dll> <func> [pages_pipe] [progress_pipe]` (clap guarantees the first 2).
+    if let Some(args) = cli.run_plugin.as_deref() {
+        let code = common::plugin::host_main(
+            Path::new(&args[0]),
+            &args[1],
+            args.get(2).filter(|s| !s.is_empty()).map(String::as_str),
+            args.get(3).filter(|s| !s.is_empty()).map(String::as_str),
+        );
         std::process::exit(code);
     }
 
-    for a in argv.iter_mut().skip(1) {
-        match a.as_str() {
-            "/S" => *a = "--silent".to_string(),
-            "/minimal" => *a = "--minimal".to_string(),
-            _ => {}
-        }
-    }
-
-    Cli::parse_from(&argv)
-}
-
-fn run(cli: Cli) -> Result<()> {
     // `--lang` wins; otherwise env (`INSTALLWAY_LANG`) then OS locale.
     let translator = match &cli.lang {
         Some(code) => common::i18n::Translator::for_lang(code),
