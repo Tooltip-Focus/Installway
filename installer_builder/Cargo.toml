@@ -16,16 +16,10 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 zip = { version = "2.2", default-features = false, features = ["deflate", "zstd"] }
 hex = "0.4"
-
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_System_LibraryLoader",
-    "Win32_UI_WindowsAndMessaging",
-] }
+glob = "0.3"
+editpe = { version = "0.2", default-features = false, features = ["std"] }
+indexmap = "2"
+tempfile = "3"
 
 [build-dependencies]
 embed-manifest = "1.4"
-
-[dev-dependencies]
-tempfile = "3"

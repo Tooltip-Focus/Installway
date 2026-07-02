@@ -9,63 +9,44 @@ use crate::args::ResolvedFeature;
 use anyhow::{Result, bail};
 use common::model::manifest::Manifest;
 
-/// Glob match over a `/`-separated relative path. Supports `*` (any run of
-/// chars within a path segment, i.e. not crossing `/`), `**` (any run including
-/// `/`), and `?` (one non-`/` char). A bare prefix with no wildcard also matches
-/// the whole subtree (so `Dossier1` covers `Dossier1/**`), which is the common
-/// "this folder is feature X" case.
-pub fn glob_match(pattern: &str, path: &str) -> bool {
-    // Plain prefix (no wildcards) → exact file or directory subtree.
-    if !pattern.contains(['*', '?']) {
-        let p = pattern.trim_end_matches('/');
-        return path == p || path.starts_with(&format!("{p}/"));
-    }
-    let pat: Vec<&str> = pattern.split('/').collect();
-    let txt: Vec<&str> = path.split('/').collect();
-    seg_match(&pat, &txt)
+/// `*`/`?` must not cross `/` (only `**` does) — matches this module's
+/// documented semantics, unlike `glob`'s default of treating them the same.
+const MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
+    case_sensitive: true,
+    require_literal_separator: true,
+    require_literal_leading_dot: false,
+};
+
+/// Compiled form of a feature's path pattern, parsed once rather than once per
+/// manifest file. Glob match over a `/`-separated relative path: `*` (any run
+/// within a path segment, not crossing `/`), `**` (any run including `/`), `?`
+/// (one non-`/` char). A bare prefix with no wildcard matches the whole subtree
+/// (so `Folder1` covers `Folder1/**`) — the common "this folder is feature X".
+enum CompiledPattern {
+    Prefix(String),
+    Glob(glob::Pattern),
 }
 
-/// Match path segments. A segment that is exactly `**` matches zero or more
-/// segments; any other segment matches exactly one via [`seg_one`] (where `*`
-/// and `?` stay within that segment, never crossing `/`).
-fn seg_match(pat: &[&str], txt: &[&str]) -> bool {
-    if pat.is_empty() {
-        return txt.is_empty();
-    }
-    if pat[0] == "**" {
-        // Consume 0..=txt.len() segments, then match the rest.
-        return (0..=txt.len()).any(|skip| seg_match(&pat[1..], &txt[skip..]));
-    }
-    if txt.is_empty() {
-        return false;
-    }
-    seg_one(pat[0].as_bytes(), txt[0].as_bytes()) && seg_match(&pat[1..], &txt[1..])
-}
-
-/// Wildcard match within one path segment: `*` matches any run of chars, `?` one
-/// char. (No `/` can appear here — segments are split on it.)
-fn seg_one(pat: &[u8], txt: &[u8]) -> bool {
-    let (mut pi, mut ti) = (0usize, 0usize);
-    let mut star: Option<(usize, usize)> = None; // (pat_idx_of_star, txt_idx)
-    while ti < txt.len() {
-        if pi < pat.len() && (pat[pi] == txt[ti] || pat[pi] == b'?') {
-            pi += 1;
-            ti += 1;
-        } else if pi < pat.len() && pat[pi] == b'*' {
-            star = Some((pi, ti));
-            pi += 1;
-        } else if let Some((sp, ref mut st)) = star {
-            *st += 1;
-            ti = *st;
-            pi = sp + 1;
+impl CompiledPattern {
+    fn new(pattern: &str) -> Self {
+        if pattern.contains(['*', '?']) {
+            // Falls back to no-match on a malformed pattern; `apply` already
+            // reports "matched no files" for a feature whose patterns never hit.
+            match glob::Pattern::new(pattern) {
+                Ok(g) => CompiledPattern::Glob(g),
+                Err(_) => CompiledPattern::Prefix(String::new()),
+            }
         } else {
-            return false;
+            CompiledPattern::Prefix(pattern.trim_end_matches('/').to_string())
         }
     }
-    while pi < pat.len() && pat[pi] == b'*' {
-        pi += 1;
+
+    fn matches(&self, path: &str) -> bool {
+        match self {
+            CompiledPattern::Prefix(p) => path == p || path.starts_with(&format!("{p}/")),
+            CompiledPattern::Glob(g) => g.matches_with(path, MATCH_OPTIONS),
+        }
     }
-    pi == pat.len()
 }
 
 /// Tag each manifest file with the single feature whose patterns it matches and
@@ -79,20 +60,30 @@ pub fn apply(manifest: &mut Manifest, features: &[ResolvedFeature]) -> Result<()
     let mut matched_per_feature: std::collections::HashMap<&str, usize> =
         features.iter().map(|f| (f.id.as_str(), 0usize)).collect();
 
+    let compiled: Vec<(&str, Vec<CompiledPattern>)> = features
+        .iter()
+        .map(|f| {
+            (
+                f.id.as_str(),
+                f.paths.iter().map(|p| CompiledPattern::new(p)).collect(),
+            )
+        })
+        .collect();
+
     for (rel, entry) in manifest.files.iter_mut() {
         let norm = rel.replace('\\', "/");
         let mut hit: Option<&str> = None;
-        for f in features {
-            if f.paths.iter().any(|p| glob_match(p, &norm)) {
+        for (fid, patterns) in &compiled {
+            if patterns.iter().any(|p| p.matches(&norm)) {
                 if let Some(prev) = hit {
                     bail!(
                         "file '{}' matches two features ('{}' and '{}'); a file can belong to at most one feature",
                         rel,
                         prev,
-                        f.id
+                        fid
                     );
                 }
-                hit = Some(&f.id);
+                hit = Some(fid);
             }
         }
         if let Some(id) = hit {
@@ -134,6 +125,10 @@ mod tests {
     use super::*;
     use common::model::file_entry::FileEntry;
     use std::collections::HashMap;
+
+    fn glob_match(pattern: &str, path: &str) -> bool {
+        CompiledPattern::new(pattern).matches(path)
+    }
 
     #[test]
     fn glob_prefix_covers_subtree() {
