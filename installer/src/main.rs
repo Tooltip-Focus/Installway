@@ -17,6 +17,9 @@ use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+use windows::core::PCWSTR;
 
 /// Exit code for a patch run against the wrong installed version. Distinct from
 /// generic failure (1) so a launcher can tell the two apart.
@@ -320,7 +323,6 @@ fn run(cli: Cli) -> Result<()> {
 /// visible.
 fn attach_console() {
     unsafe {
-        use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
         let _ = AttachConsole(ATTACH_PARENT_PROCESS);
     }
 }
@@ -437,8 +439,6 @@ fn previous_install_dir(
 }
 
 fn report_fatal(msg: &str) {
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
-    use windows::core::PCWSTR;
     let text = common::utils::wide(msg);
     let cap = common::utils::wide("Installer error");
     unsafe {

@@ -101,9 +101,8 @@ fn run() -> Result<()> {
     let argv: Vec<String> = std::env::args().collect();
 
     // Language detection uses the original user-visible arguments (no argv[0]).
-    let translator =
-        common::i18n::Translator::detect(if argv.len() > 1 { &argv[1..] } else { &[] });
-    // Record process-wide so the `down` plugin context carries the same language.
+    let translator = common::i18n::Translator::detect(argv.get(1..).unwrap_or_default());
+
     translator.set_global();
     ui::set_translator(translator);
 
@@ -124,7 +123,7 @@ fn run() -> Result<()> {
 
     // Plugin-host child: load the DLL, call the function, exit with its code.
     // The context arrives on stdin; needs no payload. Values are
-    // `<dll> <func> [pages_pipe] [progress_pipe]` (clap guarantees the first 2).
+    // `<dll> <func> [pages_pipe] [progress_pipe]`.
     if let Some(args) = cli.run_plugin.as_deref() {
         let code = common::plugin::host_main(
             Path::new(&args[0]),

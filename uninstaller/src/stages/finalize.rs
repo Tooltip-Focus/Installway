@@ -4,7 +4,7 @@
 //! Finalize step: runs from `%TEMP%` after the uninstall step spawned us. Waits for
 //! the uninstall step to exit (releasing the `uninstall.exe` lock), removes the app
 //! dir and data dir, then schedules its own removal via
-//! `MoveFileExW(MOVEFILE_DELAY_UNTIL_REBOOT)`. No `cmd.exe`, no console flash.
+//! `MoveFileExW(MOVEFILE_DELAY_UNTIL_REBOOT)`.
 
 use crate::ui::{self, StepCounter, UninstallParams};
 use anyhow::Result;
@@ -12,6 +12,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
+use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 
 pub fn run(
     app_dir: Option<PathBuf>,
@@ -40,7 +42,7 @@ pub fn run(
     let params = UninstallParams {
         title: tr.fmt("uninstall.finalize_title", &[("product", &product)]),
         subtitle: tr.get("uninstall.finalize_subtitle"),
-        confirm_text: String::new(), // never shown - auto-advances to Progress
+        confirm_text: String::new(),
         worker: Box::new(move |progress: ui::Progress| {
             let counter = StepCounter::new(4, progress);
             counter.step(&tr.get("uninstall.waiting"));
@@ -66,7 +68,7 @@ pub fn run(
             }
 
             counter.step(&tr.get("uninstall.schedule_deletion"));
-            // Schedule self for deletion on next reboot (no cmd, no flash).
+            // Schedule self for deletion on next reboot.
             schedule_self_delete_on_reboot();
             common::log::info("finalize complete; self scheduled for delete-on-reboot");
             counter.step(&tr.get("uninstall.done"));
@@ -79,8 +81,7 @@ pub fn run(
 
     let _ = ui::run(params);
 
-    // Completion box last: the finalize window (and the earlier uninstall window)
-    // are gone by now, so it shows on top instead of racing behind them.
+    // Completion message box.
     if show_complete && let Some(name) = display_name {
         let tr = ui::tr();
         ui::info(
@@ -92,11 +93,6 @@ pub fn run(
 }
 
 fn wait_for_pid(pid: u32, timeout: Duration) {
-    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
-    };
-
     unsafe {
         match OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
             Ok(h) if !h.is_invalid() => {

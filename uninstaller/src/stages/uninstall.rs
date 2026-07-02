@@ -3,7 +3,9 @@
 
 use crate::cleanup;
 use crate::ui::{self, UninstallParams};
+use anyhow::bail;
 use anyhow::{Context, Result};
+use common::elevation::{WorkerEvent, recv};
 use common::model::manifest::Manifest;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -87,8 +89,7 @@ pub fn run(silent: bool) -> Result<()> {
 
     // Elevate when the install was recorded machine-wide, OR when the app/data
     // dir is actually permission-walled (an admin install to a custom ACL'd
-    // folder that wasn't flagged machine-wide). The probe distinguishes a real
-    // ACL wall from a transient AV lock, which the retry loop handles instead.
+    // folder that wasn't flagged machine-wide).
     let needs_elevation = !common::elevation::is_already_elevated()
         && (info_owned.requires_admin
             || cleanup::perm_denied(&app_dir)
@@ -193,6 +194,7 @@ fn run_silent(
     manifest: &Manifest,
 ) -> Result<()> {
     run_down_plugins(info, data_dir);
+
     let n = cleanup::remove_payload_files(app_dir, manifest);
     common::log::info(format!("removed {} payload files", n));
     cleanup::remove_shortcuts(info);
@@ -201,6 +203,7 @@ fn run_silent(
         common::registry::remove_if_ours(e);
     }
     common::log::info("removed shortcuts + associations");
+
     let s = cleanup::remove_app_state_files(app_dir);
     common::log::info(format!("removed {} app state files", s));
     cleanup::remove_empty_subdirs(app_dir);
@@ -214,9 +217,6 @@ fn run_silent(
 }
 
 fn run_elevated(progress: ui::Progress) -> anyhow::Result<()> {
-    use anyhow::bail;
-    use common::elevation::{WorkerEvent, recv};
-
     let pipe_name = common::elevation::pipe_name(std::process::id());
     let pipe_handle = common::elevation::create_pipe_server(&pipe_name)?;
 
@@ -318,7 +318,7 @@ pub(crate) fn spawn_finalize(
 fn staged_temp_path() -> Result<std::path::PathBuf> {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "rustinst-uninstall-{}-{}.exe",
+        "hintway-uninstall-{}-{}.exe",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

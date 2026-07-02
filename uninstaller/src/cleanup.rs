@@ -9,6 +9,9 @@ use common::model::manifest::Manifest;
 use common::utils::{FS_RETRIES, FS_RETRY_DELAY, wide};
 use std::fs;
 use std::path::{Path, PathBuf};
+use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RegDeleteTreeW};
+use windows::core::PCWSTR;
 
 /// The folder this uninstaller runs from (the data dir), not the app dir.
 /// The app dir is read from `installer_info.json`.
@@ -20,11 +23,7 @@ pub fn self_dir() -> Result<PathBuf> {
 }
 
 /// True if removing files under `dir` is blocked by OS permissions (a real ACL
-/// wall) and elevation would help. Probes by creating a throwaway file:
-/// `ERROR_ACCESS_DENIED` on *create* means we lack write rights. A sharing
-/// violation (an AV/indexer lock) is never raised by creating a new file — those
-/// are handled by the per-file retry loop, not by elevating — so this stays a
-/// clean signal. `false` when the dir is missing or already writable.
+/// wall) and elevation would help. `false` when the dir is missing or already writable.
 pub fn perm_denied(dir: &Path) -> bool {
     if !dir.exists() {
         return false;
@@ -41,22 +40,20 @@ pub fn perm_denied(dir: &Path) -> bool {
 
 /// What happened to a file we tried to remove.
 enum Removal {
-    /// Path didn't exist - nothing to do.
+    /// Path didn't exist, nothing to do.
     Absent,
     /// Removed now.
     Removed,
     /// Still locked; queued for deletion on next reboot (elevated runs only).
     Pending,
-    /// Still locked and could not be queued - an orphan will remain.
+    /// Still locked and could not be queued, an orphan will remain.
     Stuck,
 }
 
 /// Schedule `path` for deletion on next reboot. `MoveFileEx(MOVEFILE_DELAY_-
 /// UNTIL_REBOOT)` records the pending rename under HKLM, so it only succeeds
-/// when elevated; `false` otherwise. Best-effort last resort.
+/// when elevated; `false` otherwise.
 pub(crate) fn schedule_delete_on_reboot(path: &Path) -> bool {
-    use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
-    use windows::core::PCWSTR;
     let path_w = wide(&path.to_string_lossy());
     unsafe {
         MoveFileExW(
@@ -78,7 +75,7 @@ fn remove_file_robust(path: &Path) -> Removal {
             Err(_) => std::thread::sleep(FS_RETRY_DELAY),
         }
     }
-    // Exhausted retries — the file is persistently locked.
+    // Exhausted retries.
     if schedule_delete_on_reboot(path) {
         Removal::Pending
     } else {
@@ -167,8 +164,6 @@ pub fn remove_empty_subdirs(install_dir: &Path) {
 }
 
 pub fn unregister(key: &str, machine: bool) {
-    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RegDeleteTreeW};
-    use windows::core::PCWSTR;
     let sub = format!(
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
         key
