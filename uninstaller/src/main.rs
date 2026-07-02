@@ -12,9 +12,9 @@ mod worker;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// Uninstaller — invoked by Windows' "Add or remove programs".
+/// Uninstaller - invoked by Windows' "Add or remove programs".
 ///
 /// All flags are intentionally hidden: this is a GUI application launched by
 /// the system, not a tool meant to be called manually.
@@ -28,14 +28,25 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
 
-    /// Silent (non-interactive) uninstall. Also accepted as `/S` (NSIS compat).
+    /// Silent (non-interactive) uninstall.
     #[arg(long)]
     silent: bool,
+
+    /// Internal: run as the elevated worker, streaming events back over the
+    /// named pipe whose name is given here. Spawned via UAC by the main process.
+    #[arg(long, hide = true, value_name = "PIPE")]
+    elevated_worker: Option<String>,
+
+    /// Internal: plugin-host child. Values are `<dll> <func> [pages_pipe]
+    /// [progress_pipe]`; the context arrives on stdin. Re-launched as an
+    /// isolated process so a crashing plugin can't stall the uninstall.
+    #[arg(long, hide = true, num_args = 2..=4, value_names = ["DLL", "FUNC", "PAGES", "PROGRESS"])]
+    run_plugin: Option<Vec<String>>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Internal second-stage cleanup, spawned from %TEMP% after the main uninstall.
+    /// Finalize stage cleanup, spawned from %TEMP% after the main uninstall.
     ///
     /// This sub-command is not meant to be called by users; it is spawned
     /// automatically by the uninstall stage to delete directories that were
@@ -86,47 +97,8 @@ fn main() {
 
 fn run() -> Result<()> {
     // Collect argv including the binary name (index 0) so that clap can use it
-    // in any error messages. Then normalise the NSIS-style `/S` silent flag to
-    // `--silent` in-place (only for indices ≥ 1 to leave the binary name alone).
-    let mut argv: Vec<String> = std::env::args().collect();
-
-    // Elevated worker: `--elevated-worker <pipe>`. Performs the uninstall with
-    // admin rights, streaming events back via named pipe.
-    if let Some(idx) = argv.iter().position(|a| a == "--elevated-worker") {
-        let code = match argv.get(idx + 1) {
-            Some(pipe_name) => match worker::run(pipe_name) {
-                Ok(()) => 0,
-                Err(e) => {
-                    eprintln!("elevated-worker error: {e:#}");
-                    1
-                }
-            },
-            None => {
-                eprintln!("--elevated-worker requires a pipe name");
-                2
-            }
-        };
-        std::process::exit(code);
-    }
-
-    // Plugin-host child: `--run-plugin <dll> <up|down>`. The context arrives on
-    // stdin. Runs before clap so the raw args aren't rejected; exits with the
-    // plugin's code.
-    if let Some(idx) = argv.iter().position(|a| a == "--run-plugin") {
-        let code = match (argv.get(idx + 1), argv.get(idx + 2)) {
-            (Some(dll), Some(func)) => {
-                common::plugin::host_main(std::path::Path::new(dll), func, None, None)
-            }
-            _ => 2,
-        };
-        std::process::exit(code);
-    }
-
-    for arg in argv.iter_mut().skip(1) {
-        if arg == "/S" {
-            *arg = "--silent".to_string();
-        }
-    }
+    // in any error messages.
+    let argv: Vec<String> = std::env::args().collect();
 
     // Language detection uses the original user-visible arguments (no argv[0]).
     let translator =
@@ -136,6 +108,32 @@ fn run() -> Result<()> {
     ui::set_translator(translator);
 
     let cli = Cli::parse_from(&argv);
+
+    // Elevated worker: performs the uninstall with admin rights, streaming
+    // events back via the named pipe. Spawned via UAC by the main process.
+    if let Some(pipe_name) = cli.elevated_worker.as_deref() {
+        let code = match worker::run(pipe_name) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("elevated-worker error: {e:#}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+
+    // Plugin-host child: load the DLL, call the function, exit with its code.
+    // The context arrives on stdin; needs no payload. Values are
+    // `<dll> <func> [pages_pipe] [progress_pipe]` (clap guarantees the first 2).
+    if let Some(args) = cli.run_plugin.as_deref() {
+        let code = common::plugin::host_main(
+            Path::new(&args[0]),
+            &args[1],
+            args.get(2).filter(|s| !s.is_empty()).map(String::as_str),
+            args.get(3).filter(|s| !s.is_empty()).map(String::as_str),
+        );
+        std::process::exit(code);
+    }
 
     match cli.command {
         Some(Cmd::Finalize {

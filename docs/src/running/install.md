@@ -34,10 +34,10 @@ progress:
 It closes itself shortly after reaching 100 %; on error it stays open with the
 message.
 
-## Silent (`/S` style, IT-friendly)
+## Silent
 
 ```pwsh
-.\setup-myapp-1.0.exe --silent "C:\path\to\install"
+.\setup-myapp-1.0.exe --silent
 .\setup-myapp-1.0.exe --silent "C:\path\to\install" --launch
 ```
 
