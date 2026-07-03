@@ -227,7 +227,8 @@ fn run_post_install_plugins(
     if items.is_empty() {
         return Ok(());
     }
-    let pctx = crate::extract::plugin_ctx(payload, install_dir, requires_admin);
+    let pctx =
+        common::model::plugin_ctx::PluginCtx::for_install(payload, install_dir, requires_admin);
     let self_exe = std::env::current_exe()?;
     common::plugin::run_each(&self_exe, &pctx, &items, "up", true)
 }
