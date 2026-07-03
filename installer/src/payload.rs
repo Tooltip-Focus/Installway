@@ -161,8 +161,15 @@ fn check_min_installer_version(required: &str) -> Result<()> {
 }
 
 fn compare_semver(a: &str, b: &str) -> i32 {
-    let pa: Vec<u64> = a.split('.').filter_map(|s| s.parse().ok()).collect();
-    let pb: Vec<u64> = b.split('.').filter_map(|s| s.parse().ok()).collect();
+    // Leading digits per segment, position preserved: a non-numeric segment
+    // ("x", "0-beta") counts as 0 instead of silently shifting the ones after
+    // it (which turned "1.x.2" into "1.2").
+    let seg = |s: &str| -> u64 {
+        let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().unwrap_or(0)
+    };
+    let pa: Vec<u64> = a.split('.').map(seg).collect();
+    let pb: Vec<u64> = b.split('.').map(seg).collect();
     for i in 0..pa.len().max(pb.len()) {
         let x = pa.get(i).copied().unwrap_or(0);
         let y = pb.get(i).copied().unwrap_or(0);
@@ -219,6 +226,10 @@ mod tests {
         assert!(compare_semver("1.2.0", "1.10.0") < 0); // numeric, not lexical
         assert!(compare_semver("2.0", "1.9") > 0);
         assert!(compare_semver("1.0.1", "1.0.0") > 0);
+        // Non-numeric segments count as 0 in place, no positional shift.
+        assert!(compare_semver("1.x.2", "1.1.0") < 0);
+        assert_eq!(compare_semver("1.0.0-beta", "1.0.0"), 0);
+        assert!(compare_semver("1.2rc1.0", "1.1.9") > 0); // leading digits used
     }
 
     #[test]
