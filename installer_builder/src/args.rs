@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
+use common::model::file_assoc::FileAssoc;
 use common::model::install_dir_restriction::InstallDirRestriction;
 use common::model::launch_option::LaunchOption;
 use common::model::plugin_phase::PluginPhase;
@@ -30,7 +31,7 @@ pub enum Command {
 
 #[derive(clap::Args, Debug)]
 pub struct KeygenArgs {
-    /// Output directory for `priv.key` + `pub.key` (hex-encoded).
+    /// Output directory for `priv.key` + `pub.key`.
     #[arg(short, long)]
     pub out: PathBuf,
 }
@@ -44,8 +45,7 @@ pub struct PackCli {
     #[arg(long, value_name = "FILE.toml")]
     pub config: Option<PathBuf>,
 
-    /// Product display name (ARP "DisplayName", version-info ProductName, UI
-    /// text, shortcut label). The human-facing name.
+    /// Product display name. The human-facing name.
     #[arg(short, long)]
     pub product: Option<String>,
 
@@ -78,19 +78,16 @@ pub struct PackCli {
     #[arg(long)]
     pub from_version: Option<String>,
 
-    /// Main executable path relative to product root (e.g. "game.exe").
+    /// Main executable path relative to product root (e.g. "app.exe").
     #[arg(short, long)]
     pub exe: Option<String>,
 
-    /// Optional path to a UTF-8 license text file shown on the License page.
+    /// Optional path to a  license text file shown on the License page.
     #[arg(long)]
     pub license: Option<PathBuf>,
 
     /// Optional PNG painted across the installer's header strip (replacing the
-    /// default flat gray card). The image is stretched to the header at runtime
-    /// with high-quality scaling, so it stays crisp at every DPI; a ~2x asset
-    /// (e.g. 1400x144) is recommended. Keep the left edge light: the product
-    /// title is drawn over it in dark text.
+    /// default flat gray card).
     #[arg(long, value_name = "FILE.png")]
     pub banner: Option<PathBuf>,
 
@@ -122,11 +119,14 @@ pub struct PackCli {
     #[arg(long)]
     pub skip_path: bool,
 
+    /// Non-empty-folder guard on the Choose-location page: `enforce` (block a
+    /// fresh install into any non-empty folder), `default-dir-only` (allow only
+    /// the build-time default dir to be non-empty) or `bypass` (allow any).
+    /// Default `enforce`.
     #[arg(long, value_name = "enforce|default-dir-only|bypass")]
     pub install_dir_restriction: Option<String>,
 
-    /// Use the compact minimal UI for upgrades (a run over an already-installed
-    /// copy). The first install still uses the full wizard. Optional.
+    /// Use the compact minimal UI for upgrades. Optional.
     #[arg(long)]
     pub upgrade_minimal_ui: bool,
 
@@ -150,7 +150,7 @@ pub struct PackCli {
     #[arg(long)]
     pub priv_key: Option<PathBuf>,
 
-    /// Ed25519 private key as a hex string (useful in CI/CD pipelines).
+    /// Ed25519 private key as a hex string.
     /// Mutually exclusive with `--priv-key`.
     #[arg(long, conflicts_with = "priv_key")]
     pub priv_key_literal: Option<String>,
@@ -159,7 +159,7 @@ pub struct PackCli {
     #[arg(long)]
     pub pub_key: Option<PathBuf>,
 
-    /// Ed25519 public key as a hex string (useful in CI/CD pipelines).
+    /// Ed25519 public key as a hex string.
     /// Mutually exclusive with `--pub-key`.
     #[arg(long, conflicts_with = "pub_key")]
     pub pub_key_literal: Option<String>,
@@ -378,19 +378,26 @@ impl PackArgs {
             );
         }
 
+        let product_id = cli
+            .product_id
+            .or(file.product_id)
+            .with_context(|| req("product-id"))?;
+        validate_product_id(&product_id)?;
+        let publisher = cli
+            .publisher
+            .or(file.publisher)
+            .with_context(|| req("publisher"))?;
+        if publisher.trim().is_empty() {
+            bail!("--publisher must not be empty");
+        }
+
         Ok(PackArgs {
             product: cli
                 .product
                 .or(file.product)
                 .with_context(|| req("product"))?,
-            product_id: cli
-                .product_id
-                .or(file.product_id)
-                .with_context(|| req("product-id"))?,
-            publisher: cli
-                .publisher
-                .or(file.publisher)
-                .with_context(|| req("publisher"))?,
+            product_id,
+            publisher,
             to_version: cli
                 .to_version
                 .or(file.to_version)
@@ -634,6 +641,46 @@ fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegEntry>> {
     Ok(out)
 }
 
+/// Validate the registry-safe internal id: starts with an ASCII letter, then
+/// ASCII alphanumerics / `.` / `-` / `_`, length 1..=50. Keeps it usable as an
+/// HKCU subkey name and an association ProgID prefix.
+fn validate_product_id(id: &str) -> Result<()> {
+    let ok_len = (1..=50).contains(&id.len());
+    let mut chars = id.chars();
+    let ok_first = chars.next().is_some_and(|c| c.is_ascii_alphabetic());
+    let ok_rest = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if ok_len && ok_first && ok_rest {
+        Ok(())
+    } else {
+        bail!(
+            "invalid --product-id '{}': must be 1-50 chars, start with an ASCII \
+             letter, and contain only ASCII letters, digits, '.', '-' or '_' \
+             (registry- and ProgID-safe)",
+            id
+        );
+    }
+}
+
+/// Parse `--assoc ".ext:Description"` entries into `FileAssoc`s.
+/// Extension is normalized to a leading dot; description may contain colons.
+pub(crate) fn parse_assocs(raw: &[String], product_id: &str) -> Result<Vec<FileAssoc>> {
+    let mut out = Vec::with_capacity(raw.len());
+    for s in raw {
+        let (ext, desc) = s
+            .split_once(':')
+            .ok_or_else(|| anyhow!("bad --assoc '{}': expected \".ext:Description\"", s))?;
+        let ext = common::assoc::normalize_ext(ext);
+        if ext == "." {
+            bail!("bad --assoc '{}': empty extension", s);
+        }
+        let description = desc.trim().to_string();
+        let progid = common::assoc::progid_for(product_id, &ext);
+        println!("Association: {} -> {} ({})", ext, progid, description);
+        out.push(FileAssoc { ext, description });
+    }
+    Ok(out)
+}
+
 fn convert_reg_value(kind: RegKind, v: &toml::Value) -> Option<RegValue> {
     match kind {
         RegKind::Sz | RegKind::ExpandSz => Some(RegValue::Text(v.as_str()?.to_string())),
@@ -757,6 +804,41 @@ force_reinstall = true
         cli.priv_key_literal = Some("aa".repeat(32)); // satisfy key check so product fires
         let err = PackArgs::resolve(cli).unwrap_err().to_string();
         assert!(err.contains("product"), "got: {err}");
+    }
+
+    #[test]
+    fn product_id_validation() {
+        for ok in ["MyApp", "Acme.App", "a-b_c", "App2", "x"] {
+            assert!(validate_product_id(ok).is_ok(), "should accept {ok}");
+        }
+        for bad in [
+            "",              // empty
+            "1abc",          // starts with digit
+            "_app",          // starts with non-letter
+            "my app",        // space
+            "a/b",           // slash
+            "app:1",         // colon
+            "café",          // non-ASCII
+            &"a".repeat(51), // too long
+        ] {
+            assert!(validate_product_id(bad).is_err(), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn parse_assocs_valid_and_colon_in_desc() {
+        let v = parse_assocs(&[".myx:My Doc".to_string(), ".a:b:c".to_string()], "Prod").unwrap();
+        assert_eq!(v[0].ext, ".myx");
+        assert_eq!(v[0].description, "My Doc");
+        // split_once on the first ':' -> description keeps the rest.
+        assert_eq!(v[1].ext, ".a");
+        assert_eq!(v[1].description, "b:c");
+    }
+
+    #[test]
+    fn parse_assocs_rejects_bad() {
+        assert!(parse_assocs(&["noColon".to_string()], "P").is_err());
+        assert!(parse_assocs(&[":nodesc".to_string()], "P").is_err()); // empty ext
     }
 
     /// Unknown keys in the config are rejected (typo guard).

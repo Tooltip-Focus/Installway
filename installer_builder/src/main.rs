@@ -2,11 +2,16 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 mod args;
+mod banner;
 mod embed;
 mod features;
 mod icon;
 mod keygen;
+mod keys;
+mod license;
 mod pack;
+mod payload;
+mod toolchain;
 mod version;
 
 use anyhow::Result;
