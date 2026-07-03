@@ -11,12 +11,7 @@ const URL: &str = "https://in.hintway.app";
 
 /// Initialize analytics for one uninstaller run.
 ///
-/// Identity is a random UUID generated here — nothing written to disk.
-///
-/// Custom data sent with every event:
-/// - `operation`: always `"uninstall"`
-/// - `mode`:      `"silent"` | `"interactive"`
-/// - `privilege`: `"admin"` | `"user"`
+/// Identity is a random UUID generated here.
 pub fn init(mode: &str, privilege: &str) {
     let Some(tenant_id) = TENANT_ID else { return };
 
