@@ -487,6 +487,8 @@ fn stage_file(
     old: &Path,
     staged_path: &Path,
 ) -> Result<()> {
+    // Deep install dir + hash names can exceed MAX_PATH.
+    let staged_path = &long_path(staged_path);
     // Patch path: apply hdiff(old, patch) → staged_path.
     if kind == PayloadKind::Patch
         && let Some(patch_info) = &entry.patch
@@ -631,14 +633,33 @@ pub(crate) fn check_writable(dir: &Path) -> Result<()> {
 /// Safety margin on top of the estimated payload size.
 const SPACE_BUFFER: u64 = 100 * 1024 * 1024; // 100 MB
 
+/// Bytes staging will actually write: files whose dest is missing or whose
+/// size differs (those get rebuilt in full in `staged/`). Files already in
+/// place at the right size are almost always hash-skipped; an equal-size
+/// content change is covered by the buffer. Summing the whole manifest
+/// instead would refuse legitimate small updates of large installs on
+/// nearly-full disks.
+fn staging_bytes_needed(install_dir: &Path, manifest: &Manifest) -> u64 {
+    manifest
+        .files
+        .iter()
+        .filter(|(rel, entry)| {
+            safe_rel(rel).is_ok()
+                && fs::metadata(long_path(&install_dir.join(rel.as_str())))
+                    .map(|m| m.len() != entry.size)
+                    .unwrap_or(true)
+        })
+        .map(|(_, entry)| entry.size)
+        .sum()
+}
+
 /// Verify the install volume has enough free space before writing anything.
 ///
-/// Peak extra space = total install size + buffer, for both full and patch:
+/// Peak extra space = bytes to stage + buffer, for both full and patch:
 /// staging writes the reconstructed full content of every changed file (a patch
 /// stages the full file, not the small blob), and commit only renames in-place.
 fn check_disk_space(install_dir: &Path, manifest: &Manifest, kind: PayloadKind) -> Result<()> {
-    let total_file_bytes: u64 = manifest.files.values().map(|e| e.size).sum();
-    let required = total_file_bytes.saturating_add(SPACE_BUFFER);
+    let required = staging_bytes_needed(install_dir, manifest).saturating_add(SPACE_BUFFER);
 
     let available = fs4::available_space(install_dir)
         .with_context(|| format!("query free space on {}", install_dir.display()))?;
@@ -1785,6 +1806,26 @@ mod tests {
         apply_active_features(&mut m, &["D1".to_string()], &["D1".to_string()]);
         assert!(m.files.contains_key("D1/a.dat"));
         assert!(m.deleted_files.is_empty());
+    }
+
+    // Files already present at the right size are excluded from the disk
+    // space estimate; missing or size-changed ones count in full.
+    #[test]
+    fn staging_bytes_skips_files_already_in_place() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path();
+        fs::write(app.join("same.bin"), vec![0u8; 10]).unwrap();
+        fs::write(app.join("changed.bin"), vec![0u8; 3]).unwrap();
+
+        let m = feat_manifest(
+            &[
+                ("same.bin", None, 10),
+                ("changed.bin", None, 20),
+                ("new.bin", None, 40),
+            ],
+            &[],
+        );
+        assert_eq!(staging_bytes_needed(app, &m), 60);
     }
 
     // A manifest with no declared features is left untouched (back-compat).
