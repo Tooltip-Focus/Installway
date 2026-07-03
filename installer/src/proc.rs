@@ -40,6 +40,8 @@ const SETTLE: Duration = Duration::from_millis(800);
 const POLL: Duration = Duration::from_millis(200);
 /// How long to wait for graceful close before re-showing the dialog.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Max headless force-kill rounds before giving up (respawning process).
+const MAX_HEADLESS_KILL_ROUNDS: u32 = 5;
 
 enum BlockChoice {
     CloseAndRetry,
@@ -67,6 +69,7 @@ pub fn ensure_closed(
     if !install_dir.exists() {
         return Ok(());
     }
+    let mut headless_kills = 0u32;
     loop {
         if cancel.load(Ordering::Relaxed) {
             bail!("Installation cancelled.");
@@ -92,6 +95,15 @@ pub fn ensure_closed(
         ));
 
         if hwnd_parent == 0 {
+            // Bounded: a process that keeps respawning (service, watchdog)
+            // would otherwise loop forever with no way to cancel.
+            headless_kills += 1;
+            if headless_kills > MAX_HEADLESS_KILL_ROUNDS {
+                bail!(
+                    "processes from the install folder keep restarting ({app_list}); \
+                     stop them and retry"
+                );
+            }
             common::log::warn(format!("headless install: force-killing {app_list}"));
             kill_pids(&pids);
             thread::sleep(SETTLE);
