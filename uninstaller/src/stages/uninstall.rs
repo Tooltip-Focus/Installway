@@ -57,16 +57,7 @@ pub fn run(silent: bool) -> Result<()> {
     // removal no-ops, but shortcuts/registry/dir cleanup still run.
     let manifest = cleanup::read_manifest(&data_dir).unwrap_or_else(|e| {
         common::log::warn(format!("manifest unreadable ({e:#}) - skipping file list"));
-        Manifest {
-            version: info.version.clone(),
-            exe: info.exe.clone(),
-            files: Default::default(),
-            deleted_files: Vec::new(),
-            full_size: 0,
-            total_patch_size: 0,
-            features: Vec::new(),
-            default_features: Vec::new(),
-        }
+        Manifest::fallback(&info.version, &info.exe)
     });
 
     common::log::info(format!(
@@ -194,26 +185,10 @@ fn run_silent(
     info: &common::model::install_info::InstallInfo,
     manifest: &Manifest,
 ) -> Result<()> {
-    run_down_plugins(info, data_dir);
-
-    let n = cleanup::remove_payload_files(app_dir, manifest);
-    common::log::info(format!("removed {} payload files", n));
-    cleanup::remove_shortcuts(info);
-    common::assoc::unregister(assoc_id(info), &info.associations, info.requires_admin);
-    for e in &info.registry {
-        common::registry::remove_if_ours(e);
-    }
-    common::log::info("removed shortcuts + associations");
-
-    let s = cleanup::remove_app_state_files(app_dir);
-    common::log::info(format!("removed {} app state files", s));
-    cleanup::remove_empty_subdirs(app_dir);
-    cleanup::unregister(&info.registry_key, info.requires_admin);
-    common::log::info(format!(
-        "unregistered {}\\Uninstall\\{}",
-        if info.requires_admin { "HKLM" } else { "HKCU" },
-        info.registry_key
-    ));
+    // Same sequence as the interactive path; progress goes to the log.
+    do_cleanup(info, manifest, app_dir, data_dir, |done, total, label| {
+        common::log::info(format!("[{done}/{total}] {label}"));
+    });
     spawn_finalize(Some(app_dir), data_dir, None, false)
 }
 
@@ -304,7 +279,7 @@ pub(crate) fn spawn_finalize(
 fn staged_temp_path() -> Result<std::path::PathBuf> {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "hintway-uninstall-{}-{}.exe",
+        "installway-uninstall-{}-{}.exe",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
