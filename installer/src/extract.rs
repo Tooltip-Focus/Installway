@@ -138,7 +138,10 @@ pub struct InstallCtx<'a> {
     pub translator: common::i18n::Translator,
 }
 
-pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
+/// Returns the per-install-dir lock so callers keep holding it across
+/// `install::finalize`; dropping it earlier would let a second installer
+/// start staging while this one still writes metadata/registry state.
+pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
     let manifest = &ctx.payload.manifest;
 
     // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
@@ -165,7 +168,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
 
     // Single-instance lock per install dir, so two runs can't race on the temp
     // dirs. OS frees it on exit or crash.
-    let _install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
+    let install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
 
     if ctx.payload.force_reinstall {
         common::log::info("force_reinstall set: skipping version check, reinstalling from scratch");
@@ -469,7 +472,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
     ));
 
     (ctx.on_progress)(total_bytes, total_bytes, "done");
-    Ok(())
+    Ok(install_lock)
 }
 
 /// Build the final content for `rel` into `staged_path`, verified by BLAKE3.
@@ -550,7 +553,10 @@ fn stage_file(
 /// RAII single-instance lock for one install dir, backed by a named mutex. The
 /// OS destroys it when the last handle closes (exit or crash), so it can never
 /// go stale.
-struct InstallLock(windows::Win32::Foundation::HANDLE);
+pub struct InstallLock(windows::Win32::Foundation::HANDLE);
+
+// The mutex handle is only closed on drop; safe to move across threads.
+unsafe impl Send for InstallLock {}
 
 impl Drop for InstallLock {
     fn drop(&mut self) {

@@ -367,7 +367,8 @@ fn run_silent(
     };
     #[cfg(feature = "hintway")]
     analytics::stage("extract");
-    extract::install(ctx)?;
+    // Lock held across finalize so a concurrent run can't interleave.
+    let _install_lock = extract::install(ctx)?;
     #[cfg(feature = "hintway")]
     analytics::stage("finalize");
     install::finalize(
