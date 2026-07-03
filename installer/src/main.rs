@@ -215,16 +215,7 @@ fn run(cli: Cli) -> Result<()> {
     // (%LOCALAPPDATA%) dir depending on how it was installed; check both.
     if cli.verify_install {
         attach_console();
-        let data_dir = [true, false]
-            .into_iter()
-            .filter_map(|machine| {
-                common::paths::uninstall_dir_for(
-                    &loaded.payload.publisher,
-                    &loaded.payload.product_id,
-                    machine,
-                )
-            })
-            .find(|d| d.join("installer_info.json").exists())
+        let (data_dir, _) = extract::prior_install_info(&loaded.payload)
             .context("resolve data dir - is this product installed?")?;
         return extract::verify_install(&data_dir);
     }
@@ -302,18 +293,10 @@ fn run(cli: Cli) -> Result<()> {
     // Privilege is determined inside the UI (path chosen by user + UAC).
     // Read it from the written installer_info.json so app_exit carries the real value.
     #[cfg(feature = "hintway")]
-    if let Some(info_path) = [true, false].into_iter().find_map(|machine| {
-        common::paths::uninstall_dir_for(&loaded_publisher, &loaded_product_id, machine)
-            .map(|d| d.join("installer_info.json"))
-            .filter(|p| p.exists())
-    }) {
-        if let Ok(text) = std::fs::read_to_string(&info_path) {
-            if let Ok(info) =
-                serde_json::from_str::<common::model::install_info::InstallInfo>(&text)
-            {
-                analytics::set_privilege(info.requires_admin);
-            }
-        }
+    if let Some((_, info)) =
+        extract::prior_install_info_by_ids(&loaded_publisher, &loaded_product_id)
+    {
+        analytics::set_privilege(info.requires_admin);
     }
 
     Ok(())

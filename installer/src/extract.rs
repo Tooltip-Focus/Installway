@@ -967,6 +967,25 @@ pub(crate) fn read_zip_entry(
     Ok(buf)
 }
 
+/// Extract each plugin's DLL from the payload zip into `dir` as `<name>.dll`.
+fn extract_plugin_dlls_to(
+    zip_bytes: &[u8],
+    plugins: &[common::model::plugin_entry::PluginEntry],
+    dir: &Path,
+) -> Result<Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>> {
+    fs::create_dir_all(dir)?;
+    let mut archive =
+        ZipArchive::new(Cursor::new(zip_bytes)).context("open payload zip for plugins")?;
+    let mut items = Vec::with_capacity(plugins.len());
+    for p in plugins {
+        let buf = read_zip_entry(&mut archive, &p.file)?;
+        let dst = dir.join(format!("{}.dll", p.name));
+        fs::write(&dst, &buf)?;
+        items.push((p.clone(), dst));
+    }
+    Ok(items)
+}
+
 /// Extract the `phase` plugins from the payload zip to `%TEMP%`, run their `up`
 /// in isolated child processes, then clean up. Used for the pre-install phase.
 fn run_zip_plugins(
@@ -984,17 +1003,13 @@ fn run_zip_plugins(
         return Ok(());
     }
     let tmp = std::env::temp_dir().join(format!("iw-plugins-{}", std::process::id()));
-    fs::create_dir_all(&tmp)?;
-    let mut archive =
-        ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open payload zip for plugins")?;
-    let mut items = Vec::with_capacity(plugins.len());
-    for p in plugins {
-        let buf = read_zip_entry(&mut archive, &p.file)?;
-        let dst = tmp.join(format!("{}.dll", p.name));
-        fs::write(&dst, &buf)?;
-        let inputs_json = common::plugin::inputs_json_for(&ctx.plugin_inputs, &p.name);
-        items.push((p, dst, inputs_json));
-    }
+    let items: Vec<_> = extract_plugin_dlls_to(ctx.zip_bytes, &plugins, &tmp)?
+        .into_iter()
+        .map(|(p, dst)| {
+            let inputs_json = common::plugin::inputs_json_for(&ctx.plugin_inputs, &p.name);
+            (p, dst, inputs_json)
+        })
+        .collect();
     let pctx = PluginCtx::for_install(ctx.payload, &ctx.install_dir, ctx.requires_admin);
     let self_exe = std::env::current_exe()?;
     let res = common::plugin::run_each(&self_exe, &pctx, &items, "up", true);
@@ -1012,16 +1027,7 @@ fn extract_plugins_to_temp(
     Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
 )> {
     let tmp = std::env::temp_dir().join(format!("iw-feat-{}", std::process::id()));
-    fs::create_dir_all(&tmp)?;
-    let mut archive =
-        ZipArchive::new(Cursor::new(zip_bytes)).context("open payload zip for features")?;
-    let mut items = Vec::with_capacity(payload.plugins.len());
-    for p in &payload.plugins {
-        let buf = read_zip_entry(&mut archive, &p.file)?;
-        let dst = tmp.join(format!("{}.dll", p.name));
-        fs::write(&dst, &buf)?;
-        items.push((p.clone(), dst));
-    }
+    let items = extract_plugin_dlls_to(zip_bytes, &payload.plugins, &tmp)?;
     Ok((tmp, items))
 }
 
@@ -1044,9 +1050,15 @@ fn read_prior_features(payload: &InstallerPayload) -> (PathBuf, Option<Vec<Strin
 /// data dir holding it, checking the machine-wide dir (`%ProgramData%`) first
 /// then the per-user one. `None` if never installed or no record parses.
 pub(crate) fn prior_install_info(payload: &InstallerPayload) -> Option<(PathBuf, InstallInfo)> {
+    prior_install_info_by_ids(&payload.publisher, &payload.product_id)
+}
+
+pub(crate) fn prior_install_info_by_ids(
+    publisher: &str,
+    product_id: &str,
+) -> Option<(PathBuf, InstallInfo)> {
     for machine in [true, false] {
-        if let Some(dir) =
-            common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, machine)
+        if let Some(dir) = common::paths::uninstall_dir_for(publisher, product_id, machine)
             && let Ok(text) = fs::read_to_string(dir.join("installer_info.json"))
             && let Ok(info) = serde_json::from_str::<InstallInfo>(&text)
         {
