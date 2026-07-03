@@ -821,13 +821,13 @@ fn backup_then_remove(install_dir: &Path, backup_dir: &Path, rel: &str) -> Resul
     Ok(())
 }
 
-/// Record every path the commit will touch, so an interrupted commit can be
-/// rolled back on the next launch.
+/// Record every path the commit will touch (`A\t` add / `D\t` delete lines),
+/// so an interrupted commit can be rolled back on the next launch.
 fn write_journal(temp_dir: &Path, adds: &[String], deletes: &[String]) -> Result<()> {
     let content = adds
         .iter()
-        .chain(deletes.iter())
-        .cloned()
+        .map(|r| format!("A\t{r}"))
+        .chain(deletes.iter().map(|r| format!("D\t{r}")))
         .collect::<Vec<_>>()
         .join("\n");
     let jp = journal_path(temp_dir);
@@ -837,28 +837,45 @@ fn write_journal(temp_dir: &Path, adds: &[String], deletes: &[String]) -> Result
     Ok(())
 }
 
-/// Roll the live install back to its pre-commit state using the backups.
-/// For each touched path: if a backup exists restore it, else the path was
-/// newly added so remove it.
-fn rollback(temp_dir: &Path, install_dir: &Path, adds: &[String], deletes: &[String]) {
-    let backup_dir = temp_dir.join("backup");
-    let restore = |rel: &str| {
-        let dest = long_path(&install_dir.join(rel));
-        let backup = long_path(&backup_dir.join(staged_name(rel)));
-        if backup.exists() {
-            if let Err(e) = move_retry(&backup, &dest) {
-                common::log::error(format!("rollback restore failed for {}: {e:#}", rel));
-            }
-        } else {
-            // Newly added file with no prior version - remove it.
-            let _ = fs::remove_file(&dest);
+/// Restore one add to its pre-commit state. The journal is written before any
+/// file is touched, so "no backup" does NOT mean "newly added": a still-staged
+/// file proves this entry was never committed and the live file must be left
+/// alone. Only when the staged copy is gone (moved into place) is a
+/// backup-less dest a committed new file to remove.
+fn restore_add(install_dir: &Path, staged_dir: &Path, backup_dir: &Path, rel: &str) {
+    let dest = long_path(&install_dir.join(rel));
+    let backup = long_path(&backup_dir.join(staged_name(rel)));
+    let staged = long_path(&staged_dir.join(staged_name(rel)));
+    if backup.exists() {
+        if let Err(e) = move_retry(&backup, &dest) {
+            common::log::error(format!("rollback restore failed for {}: {e:#}", rel));
         }
-    };
+    } else if !staged.exists() {
+        let _ = fs::remove_file(&dest);
+    }
+}
+
+/// Restore one delete: put the backup back if the delete was committed;
+/// otherwise the live file was never touched.
+fn restore_delete(install_dir: &Path, backup_dir: &Path, rel: &str) {
+    let dest = long_path(&install_dir.join(rel));
+    let backup = long_path(&backup_dir.join(staged_name(rel)));
+    if backup.exists()
+        && let Err(e) = move_retry(&backup, &dest)
+    {
+        common::log::error(format!("rollback restore failed for {}: {e:#}", rel));
+    }
+}
+
+/// Roll the live install back to its pre-commit state using the backups.
+fn rollback(temp_dir: &Path, install_dir: &Path, adds: &[String], deletes: &[String]) {
+    let staged_dir = temp_dir.join("staged");
+    let backup_dir = temp_dir.join("backup");
     for rel in adds {
-        restore(rel);
+        restore_add(install_dir, &staged_dir, &backup_dir, rel);
     }
     for rel in deletes {
-        restore(rel);
+        restore_delete(install_dir, &backup_dir, rel);
     }
     common::log::warn("rolled back to pre-install state");
 }
@@ -871,18 +888,22 @@ fn recover_if_interrupted(temp_dir: &Path, install_dir: &Path) {
         return;
     };
     common::log::warn("found interrupted commit journal - rolling back");
+    let staged_dir = temp_dir.join("staged");
     let backup_dir = temp_dir.join("backup");
-    for rel in content.lines().filter(|l| !l.trim().is_empty()) {
+    for line in content.lines().filter(|l| !l.trim().is_empty()) {
+        let (kind, rel) = match line.split_once('\t') {
+            Some(("A", r)) => ('A', r),
+            Some(("D", r)) => ('D', r),
+            // Legacy untyped line: restore a backup if present, never delete.
+            _ => ('D', line),
+        };
         // Ignore anything that wouldn't be a safe relative path.
         if safe_rel(rel).is_err() {
             continue;
         }
-        let dest = long_path(&install_dir.join(rel));
-        let backup = long_path(&backup_dir.join(staged_name(rel)));
-        if backup.exists() {
-            let _ = move_retry(&backup, &dest);
-        } else {
-            let _ = fs::remove_file(&dest);
+        match kind {
+            'A' => restore_add(install_dir, &staged_dir, &backup_dir, rel),
+            _ => restore_delete(install_dir, &backup_dir, rel),
         }
     }
     let _ = fs::remove_dir_all(temp_dir);
@@ -1545,16 +1566,62 @@ mod tests {
         // foo.txt: an existing file that was overwritten -> backup holds the old.
         fs::write(app.join("foo.txt"), b"NEW").unwrap();
         fs::write(backup.join(staged_name("foo.txt")), b"OLD").unwrap();
-        // bar.txt: a brand-new file (no backup) -> must be removed.
+        // bar.txt: a brand-new file (no backup, staged copy moved) -> removed.
         fs::write(app.join("bar.txt"), b"NEWBAR").unwrap();
 
-        fs::write(journal_path(&temp), "foo.txt\nbar.txt\n").unwrap();
+        fs::write(journal_path(&temp), "A\tfoo.txt\nA\tbar.txt\n").unwrap();
 
         recover_if_interrupted(&temp, &app);
 
         assert_eq!(fs::read(app.join("foo.txt")).unwrap(), b"OLD"); // restored
         assert!(!app.join("bar.txt").exists()); // new file removed
         assert!(!temp.exists()); // temp cleaned
+    }
+
+    // Interrupted BEFORE the commit reached a file: its staged copy still
+    // exists and no backup was made. The live file must survive recovery.
+    #[test]
+    fn recover_keeps_live_files_not_yet_committed() {
+        let base = tempfile::tempdir().unwrap();
+        let app = base.path().join("app");
+        let temp = app.join(".installer_tmp");
+        fs::create_dir_all(temp.join("backup")).unwrap();
+        fs::create_dir_all(temp.join("staged")).unwrap();
+
+        // upd.txt: journaled add, never committed (staged still present).
+        fs::write(app.join("upd.txt"), b"LIVE").unwrap();
+        fs::write(temp.join("staged").join(staged_name("upd.txt")), b"NEXT").unwrap();
+        // gone.txt: journaled delete, never reached (no backup).
+        fs::write(app.join("gone.txt"), b"KEEP").unwrap();
+
+        fs::write(journal_path(&temp), "A\tupd.txt\nD\tgone.txt\n").unwrap();
+
+        recover_if_interrupted(&temp, &app);
+
+        assert_eq!(fs::read(app.join("upd.txt")).unwrap(), b"LIVE");
+        assert_eq!(fs::read(app.join("gone.txt")).unwrap(), b"KEEP");
+        assert!(!temp.exists());
+    }
+
+    // Legacy untyped journal lines: restore backups, never delete.
+    #[test]
+    fn recover_legacy_journal_never_deletes() {
+        let base = tempfile::tempdir().unwrap();
+        let app = base.path().join("app");
+        let temp = app.join(".installer_tmp");
+        let backup = temp.join("backup");
+        fs::create_dir_all(&backup).unwrap();
+
+        fs::write(app.join("a.txt"), b"NEW").unwrap();
+        fs::write(backup.join(staged_name("a.txt")), b"OLD").unwrap();
+        fs::write(app.join("b.txt"), b"LIVE").unwrap();
+
+        fs::write(journal_path(&temp), "a.txt\nb.txt\n").unwrap();
+
+        recover_if_interrupted(&temp, &app);
+
+        assert_eq!(fs::read(app.join("a.txt")).unwrap(), b"OLD");
+        assert_eq!(fs::read(app.join("b.txt")).unwrap(), b"LIVE");
     }
 
     // Build a one-entry payload zip with `full/<rel>` = `content`, the way the
