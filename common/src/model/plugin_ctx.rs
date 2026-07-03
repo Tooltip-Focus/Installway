@@ -1,3 +1,7 @@
+use crate::model::install_info::InstallInfo;
+use crate::model::installer_payload::InstallerPayload;
+use std::path::Path;
+
 /// Run context, sent to the child as JSON on stdin.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct PluginCtx {
@@ -25,4 +29,59 @@ pub struct PluginCtx {
     /// build declares no features.
     #[serde(default)]
     pub features_json: String,
+}
+
+impl PluginCtx {
+    pub fn for_install(
+        payload: &InstallerPayload,
+        install_dir: &Path,
+        requires_admin: bool,
+    ) -> Self {
+        let data_dir = crate::paths::uninstall_dir_for(
+            &payload.publisher,
+            &payload.product_id,
+            requires_admin,
+        )
+        .unwrap_or_else(|| install_dir.to_path_buf());
+        Self {
+            install_dir: install_dir.to_string_lossy().into_owned(),
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            product: payload.product.clone(),
+            product_id: payload.product_id.clone(),
+            version: payload.to_version.clone(),
+            exe: exe_path(install_dir, &payload.manifest.exe),
+            ..Self::with_host_env()
+        }
+    }
+
+    pub fn for_uninstall(info: &InstallInfo, data_dir: &Path) -> Self {
+        Self {
+            install_dir: info.install_dir.clone(),
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            product: info.product.clone(),
+            product_id: info.product_id.clone(),
+            version: info.version.clone(),
+            exe: exe_path(Path::new(&info.install_dir), &info.exe),
+            ..Self::with_host_env()
+        }
+    }
+
+    fn with_host_env() -> Self {
+        Self {
+            log_path: crate::log::current_path()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            lang: crate::i18n::current_lang().to_string(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Normalize `install_dir` joined with `exe_rel` to a backslash path string
+/// (plugins receive Windows-style paths).
+fn exe_path(install_dir: &Path, exe_rel: &str) -> String {
+    install_dir
+        .join(exe_rel)
+        .to_string_lossy()
+        .replace('/', "\\")
 }

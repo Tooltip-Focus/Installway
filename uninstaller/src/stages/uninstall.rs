@@ -256,22 +256,7 @@ fn run_down_plugins(info: &common::model::install_info::InstallInfo, data_dir: &
         .rev()
         .map(|p| (p.clone(), data_dir.join(&p.file), String::new()))
         .collect();
-    let ctx = PluginCtx {
-        install_dir: info.install_dir.clone(),
-        data_dir: data_dir.to_string_lossy().into_owned(),
-        product: info.product.clone(),
-        product_id: info.product_id.clone(),
-        version: info.version.clone(),
-        exe: Path::new(&info.install_dir)
-            .join(&info.exe)
-            .to_string_lossy()
-            .replace('/', "\\"),
-        log_path: common::log::current_path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        lang: common::i18n::current_lang().to_string(),
-        ..Default::default()
-    };
+    let ctx = PluginCtx::for_uninstall(info, data_dir);
     if let Ok(self_exe) = std::env::current_exe() {
         let _ = common::plugin::run_each(&self_exe, &ctx, &items, "down", false);
     }
