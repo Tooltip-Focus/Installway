@@ -14,6 +14,7 @@ pub mod manifest;
 pub mod page_step;
 pub mod patch_info;
 pub mod payload_kind;
+pub mod plugin_ctx;
 pub mod plugin_entry;
 pub mod plugin_page;
 pub mod plugin_phase;

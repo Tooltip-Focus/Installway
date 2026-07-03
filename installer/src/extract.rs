@@ -961,11 +961,11 @@ pub fn plugin_ctx(
     payload: &InstallerPayload,
     install_dir: &Path,
     requires_admin: bool,
-) -> common::plugin::PluginCtx {
+) -> common::model::plugin_ctx::PluginCtx {
     let data_dir =
         common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, requires_admin)
             .unwrap_or_else(|| install_dir.to_path_buf());
-    common::plugin::PluginCtx {
+    common::model::plugin_ctx::PluginCtx {
         install_dir: install_dir.to_string_lossy().into_owned(),
         data_dir: data_dir.to_string_lossy().into_owned(),
         product: payload.product.clone(),
@@ -1202,7 +1202,7 @@ impl Drop for TempDirGuard {
 /// spawn the plugin host). The temp dir of DLLs lives as long as `tmp`.
 pub struct UiPlugins {
     pub plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
-    pub base_ctx: common::plugin::PluginCtx,
+    pub base_ctx: common::model::plugin_ctx::PluginCtx,
     pub self_exe: PathBuf,
     pub tmp: TempDirGuard,
 }
