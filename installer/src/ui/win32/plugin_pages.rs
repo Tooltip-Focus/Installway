@@ -19,11 +19,12 @@ use crate::extract::TempDirGuard;
 use crate::ui::helpers;
 use common::model::choice_style::ChoiceStyle;
 use common::model::page_step::PageStep;
+use common::model::plugin_ctx::PluginCtx;
 use common::model::plugin_entry::PluginEntry;
 use common::model::plugin_page::PluginInputs;
 use common::model::plugin_page::PluginPage;
 use common::model::plugin_widget::PluginWidget;
-use common::plugin::{InputsByPlugin, PluginCtx};
+use common::plugin::InputsByPlugin;
 use common::utils::wide;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -458,11 +459,11 @@ pub(super) fn update_current_progress(hwnd: HWND, scaled: i32) {
 /// Wizard state extracted for the background query thread (all Clone + Send).
 pub(super) struct StepArgs {
     self_exe: PathBuf,
-    base_ctx: common::plugin::PluginCtx,
+    base_ctx: PluginCtx,
     plugins: Vec<(PluginEntry, PathBuf)>,
     pub(super) cur: usize,
     pub(super) answers: PluginInputs,
-    pub(super) finished: common::plugin::InputsByPlugin,
+    pub(super) finished: InputsByPlugin,
     _keepalive: Option<Arc<TempDirGuard>>,
     /// Set by `dispatch_plugin_run` when the page has a deterministic progress bar.
     pub(super) on_progress: Option<Box<dyn Fn(u32) + Send>>,

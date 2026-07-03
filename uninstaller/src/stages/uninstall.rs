@@ -7,6 +7,7 @@ use anyhow::bail;
 use anyhow::{Context, Result};
 use common::elevation::{WorkerEvent, recv};
 use common::model::manifest::Manifest;
+use common::model::plugin_ctx::PluginCtx;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
@@ -255,7 +256,7 @@ fn run_down_plugins(info: &common::model::install_info::InstallInfo, data_dir: &
         .rev()
         .map(|p| (p.clone(), data_dir.join(&p.file), String::new()))
         .collect();
-    let ctx = common::plugin::PluginCtx {
+    let ctx = PluginCtx {
         install_dir: info.install_dir.clone(),
         data_dir: data_dir.to_string_lossy().into_owned(),
         product: info.product.clone(),
