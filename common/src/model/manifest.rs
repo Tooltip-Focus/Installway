@@ -22,3 +22,15 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub default_features: Vec<String>,
 }
+
+impl Manifest {
+    /// Minimal stand-in when the recorded manifest is missing or unreadable:
+    /// file removal no-ops, everything else (shortcuts, registry, dirs) runs.
+    pub fn fallback(version: &str, exe: &str) -> Self {
+        Manifest {
+            version: version.to_string(),
+            exe: exe.to_string(),
+            ..Default::default()
+        }
+    }
+}

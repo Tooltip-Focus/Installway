@@ -37,16 +37,8 @@ pub fn run(pipe_name: &str) -> Result<()> {
         }
     };
 
-    let manifest = crate::cleanup::read_manifest(&data_dir).unwrap_or_else(|_| Manifest {
-        version: info.version.clone(),
-        exe: info.exe.clone(),
-        files: Default::default(),
-        deleted_files: Vec::new(),
-        full_size: 0,
-        total_patch_size: 0,
-        features: Vec::new(),
-        default_features: Vec::new(),
-    });
+    let manifest = crate::cleanup::read_manifest(&data_dir)
+        .unwrap_or_else(|_| Manifest::fallback(&info.version, &info.exe));
 
     let app_dir = std::path::PathBuf::from(&info.install_dir);
 

@@ -54,7 +54,14 @@ pub fn run(
             counter.step(&tr.get("uninstall.removing_install_dir"));
             // Remove the application dir; absent when metadata was unreadable.
             if let Some(ref dir) = app_dir {
-                common::utils::remove_dir_retry(dir);
+                if crate::cleanup::safe_app_dir(dir) {
+                    common::utils::remove_dir_retry(dir);
+                } else {
+                    common::log::warn(format!(
+                        "refusing to remove suspicious app dir: {}",
+                        dir.display()
+                    ));
+                }
             }
 
             // Remove the data dir we launched from (we run from the %TEMP% copy).

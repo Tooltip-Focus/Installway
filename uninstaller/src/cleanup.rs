@@ -118,23 +118,6 @@ pub fn remove_one_payload(path: &Path) {
     }
 }
 
-/// Remove every payload file from `manifest`. Returns the count handled
-/// (removed now or queued for reboot); stuck files are logged.
-pub fn remove_payload_files(install_dir: &Path, manifest: &Manifest) -> usize {
-    let mut count = 0;
-    for rel in manifest.files.keys() {
-        let p = install_dir.join(rel);
-        match remove_file_robust(&p) {
-            Removal::Removed | Removal::Pending => count += 1,
-            Removal::Stuck => {
-                common::log::warn(format!("could not remove (locked): {}", p.display()));
-            }
-            Removal::Absent => {}
-        }
-    }
-    count
-}
-
 /// Remove the shortcuts recorded in `installer_info.json` (the resolved `.lnk`
 /// paths the installer created).
 pub fn remove_shortcuts(info: &InstallInfo) {
@@ -163,6 +146,58 @@ pub fn remove_empty_subdirs(install_dir: &Path) {
     common::utils::prune_empty_dirs(install_dir);
 }
 
+/// Env vars naming folders that must never be removed as an "app dir".
+const PROTECTED_DIR_VARS: &[&str] = &[
+    "USERPROFILE",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "SYSTEMROOT",
+    "PUBLIC",
+    "TEMP",
+];
+
+/// Sanity check before recursively deleting the recorded app dir: a corrupted
+/// or tampered `installer_info.json` must not be able to point the uninstaller
+/// at a drive root, a profile folder, or an ancestor of one.
+pub fn safe_app_dir(dir: &Path) -> bool {
+    fn norm(p: &Path) -> Vec<String> {
+        p.components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
+                std::path::Component::Prefix(pr) => {
+                    Some(pr.as_os_str().to_string_lossy().to_lowercase())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+    if !dir.is_absolute() {
+        return false;
+    }
+    let d = norm(dir);
+    // A bare prefix (drive/share root) has no normal components.
+    if d.len() < 2 {
+        return false;
+    }
+    for var in PROTECTED_DIR_VARS {
+        if let Ok(v) = std::env::var(var) {
+            if v.is_empty() {
+                continue;
+            }
+            let k = norm(Path::new(&v));
+            // Equal to, or ancestor of, a protected folder.
+            if !k.is_empty() && d.len() <= k.len() && k[..d.len()] == d[..] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 pub fn unregister(key: &str, machine: bool) {
     let sub = format!(
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
@@ -185,6 +220,23 @@ mod tests {
     use common::model::file_entry::FileEntry;
     use common::model::manifest::Manifest;
 
+    /// Remove every payload file from `manifest`. Returns the count handled
+    /// (removed now or queued for reboot); stuck files are logged.
+    pub fn remove_payload_files(install_dir: &Path, manifest: &Manifest) -> usize {
+        let mut count = 0;
+        for rel in manifest.files.keys() {
+            let p = install_dir.join(rel);
+            match remove_file_robust(&p) {
+                Removal::Removed | Removal::Pending => count += 1,
+                Removal::Stuck => {
+                    common::log::warn(format!("could not remove (locked): {}", p.display()));
+                }
+                Removal::Absent => {}
+            }
+        }
+        count
+    }
+
     #[test]
     fn remove_empty_subdirs_keeps_nonempty_and_root() {
         let d = tempfile::tempdir().unwrap();
@@ -199,6 +251,21 @@ mod tests {
         assert!(!root.join("empty1").exists()); // empty tree removed
         assert!(root.join("keep").exists()); // non-empty kept
         assert!(root.join("keep").join("f.txt").exists());
+    }
+
+    #[test]
+    fn safe_app_dir_rejects_roots_and_protected_dirs() {
+        assert!(!safe_app_dir(Path::new(r"C:\")));
+        assert!(!safe_app_dir(Path::new(r"C:\Users")));
+        assert!(!safe_app_dir(Path::new("relative\\path")));
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            assert!(!safe_app_dir(Path::new(&profile)));
+        }
+        if let Ok(pf) = std::env::var("PROGRAMFILES") {
+            assert!(!safe_app_dir(Path::new(&pf)));
+            assert!(safe_app_dir(&Path::new(&pf).join("MyApp")));
+        }
+        assert!(safe_app_dir(Path::new(r"D:\Games\MyApp")));
     }
 
     #[test]
