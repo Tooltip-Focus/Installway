@@ -1,13 +1,13 @@
 # Installway
 
-Local, single-file `.exe` installer for Windows in the style of InstallShield /
-MSI — but written in Rust and built around a BLAKE3 + HDiffPatch manifest
-format. No network, no admin elevation, no MSI runtime.
+**A modern, open-source alternative to InstallShield, and a step up from
+Inno Setup, for building Windows installers.**
 
-Each output `.exe` carries its own payload: the file zip is appended as a PE
-**overlay** (no size ceiling, streamed on at build, `mmap`-read at install),
-while the signed manifest, the uninstaller and the payload length ride as small
-`RT_RCDATA` resources.
+Installway packages your app into a single signed `.exe` that installs fast,
+verifies every byte, and updates existing installs with small binary patches
+instead of full re-downloads. No proprietary scripting language to learn, no
+MSI runtime, no admin rights required - just a native, antivirus-friendly
+`.exe` your users can double-click and trust.
 
 ## Screenshots
 
@@ -24,23 +24,30 @@ Jump to:
 - [Install modes](https://tooltip-focus.github.io/Installway/running/install.html)
 - [CLI reference](https://tooltip-focus.github.io/Installway/reference/cli.html)
 
-## Highlights
+## Why Installway
 
-- **Single self-contained `.exe`** — payload as a PE overlay; multi-GB capable
-  at roughly constant working memory.
-- **Signed & verified** — Ed25519 over the exact manifest bytes (public key
-  compiled into the stub), plus BLAKE3 of the whole payload and of every file.
-- **Full or patch installers** — patches ship HDiffPatch deltas (or full bytes
-  when a delta would be bigger) plus a delete list; unchanged files carry
-  nothing.
-- **Transactional** — two-phase commit, hash-verified staging, rollback, and
-  power-loss recovery from a journal.
-- **No admin** — per-user install, shortcuts, file associations and an
-  Add/Remove Programs entry, all under `asInvoker`.
-- **Native Win32 UI** — Segoe UI, Common Controls v6, DPI-aware. Interactive,
-  minimal (app self-update), and silent modes.
-- **Toolchain-free packaging** — hand a prebuilt kit so a release machine
-  packages versions without a Rust toolchain.
+- **One file, zero setup**: everything your app needs is bundled into a
+  single `.exe`. Nothing to install first, nothing to leave behind.
+- **Fast, tight installs**: strong compression keeps downloads small, and
+  installs run straight from the packed archive with no unnecessary I/O.
+- **Verified, not just copied**: every installer is signed (Ed25519) and
+  every file is hash-checked (BLAKE3) before it touches disk, so corrupted or
+  tampered downloads are caught, not installed.
+- **Small updates, not full reinstalls**: patch installers ship only the
+  binary diff between versions, so a one-line code change doesn't cost users
+  a multi-hundred-megabyte download.
+- **No proprietary scripting language**: custom install logic is a native
+  Windows DLL (C/C++/Rust, or anything with a C ABI), not an obscure bytecode
+  format. That means it's readable, debuggable, and scannable by antivirus
+  engines like any other native binary.
+- **A modern, native interface**: a DPI-aware Win32 wizard out of the box,
+  and plugins can add their own custom pages for licensing steps,
+  configuration screens, or anything else your install needs.
+- **No admin rights needed**: per-user installs, shortcuts, file
+  associations and an Add/Remove Programs entry, all without an elevation
+  prompt.
+- **Crash-safe by design**: installs are transactional, with rollback and
+  power-loss recovery, so a failed install never leaves a broken app behind.
 
 ## Workspace
 
@@ -54,15 +61,15 @@ Jump to:
 ## Security model
 
 1. **Ed25519 signature** over the exact JSON bytes describing the payload. The
-   public key is **compiled** into the stub (`INSTALLER_PUB_KEY`) — never a
+   public key is **compiled** into the stub (`INSTALLER_PUB_KEY`), never a
    swappable resource.
 2. **BLAKE3 of the payload zip**, re-verified before a single byte is extracted.
 3. **BLAKE3 per file**, checked after each write (full) or patch apply.
 4. **Anti-rollback** via `min_installer_version`.
-5. **Patch from-version pinning** — a patch refuses to run unless the target's
+5. **Patch from-version pinning**: a patch refuses to run unless the target's
    `version.json` matches.
 
-Authenticode is **not** handled in code — sign the final `.exe` with `signtool`
+Authenticode is **not** handled in code. Sign the final `.exe` with `signtool`
 as a post-build step (the builder prints the exact command). See
 [Signing](https://tooltip-focus.github.io/Installway/packaging/signing.html).
 
@@ -87,68 +94,6 @@ Patch installers, config files, packaging options (license, icon,
 associations, wizard trimming), and **packaging without a Rust toolchain** are
 all covered in the
 [documentation](https://tooltip-focus.github.io/Installway/).
-
-## Building & testing
-
-### Build
-
-```pwsh
-# debug build (all crates)
-cargo build
-
-# release build (all crates)
-cargo build --release
-
-# release build (builder only — what you ship to release machines)
-cargo build --release -p installer_builder
-```
-
-### Run all tests
-
-```pwsh
-cargo test
-```
-
-Tests across four crates:
-
-| Crate | Tests | Coverage areas |
-|---|---|---|
-| `common` | 50 | i18n, model round-trips, BLAKE3, file utils, registry encoding, shortcuts, paths, feature selection |
-| `installer` | 36 | payload verification, extract/rollback/repair, path validation, plugin wizard, feature filtering, UI helpers |
-| `installer_builder` | 41 | CLI arg parsing, pack options, version info, association rules, feature globs/tagging |
-| `uninstaller` | 2 | cleanup file removal, directory pruning |
-
-To test a single crate:
-
-```pwsh
-cargo test -p common
-cargo test -p installer
-cargo test -p installer_builder
-cargo test -p uninstaller
-```
-
-To run a specific test by name:
-
-```pwsh
-cargo test -p installer recover_rolls_back
-```
-
-### Preview the installer UI
-
-The installer binary ships a `--preview` flag for rendering any wizard view without a real signed payload:
-
-```pwsh
-cargo build
-.\target\debug\installer.exe --preview license
-.\target\debug\installer.exe --preview license-patch   # patch-mode banner
-.\target\debug\installer.exe --preview choose
-.\target\debug\installer.exe --preview choose-patch
-.\target\debug\installer.exe --preview progress
-.\target\debug\installer.exe --preview done
-.\target\debug\installer.exe --preview error
-.\target\debug\installer.exe --preview plugin          # canned one-page wizard
-.\target\debug\installer.exe --preview minimal         # compact updater UI
-```
 
 ## License
 
