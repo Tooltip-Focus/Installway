@@ -87,6 +87,59 @@ pub fn recv<T: for<'de> Deserialize<'de>, R: BufRead>(reader: &mut R) -> Result<
     Ok(Some(serde_json::from_str(line.trim_end())?))
 }
 
+/// Returned when the user declines the UAC prompt. Callers can distinguish
+/// this from pipe/worker failures via `e.is::<UacCancelledError>()`.
+#[derive(Debug)]
+pub struct UacCancelledError;
+
+impl std::fmt::Display for UacCancelledError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UAC elevation was cancelled")
+    }
+}
+
+impl std::error::Error for UacCancelledError {}
+
+/// Main-process side of the elevation protocol, shared by installer and
+/// uninstaller: create the pipe, spawn the elevated worker via UAC, optionally
+/// send one JSON command, then relay `WorkerEvent`s to `on_progress` until the
+/// worker reports Done or Error. `Err(UacCancelledError)` when UAC is declined.
+pub fn run_elevated_relay<C: Serialize>(
+    command: Option<&C>,
+    mut on_progress: impl FnMut(u64, u64, &str),
+) -> Result<()> {
+    use windows::Win32::Foundation::CloseHandle;
+
+    let name = pipe_name(std::process::id());
+    let pipe_handle = create_pipe_server(&name)?;
+
+    if spawn_elevated_worker(&name).is_err() {
+        unsafe {
+            let _ = CloseHandle(pipe_handle);
+        }
+        return Err(anyhow::Error::new(UacCancelledError));
+    }
+
+    wait_for_client(pipe_handle)?;
+    let mut pipe = open_pipe_handle(pipe_handle);
+    if let Some(cmd) = command {
+        send(&mut pipe, cmd)?;
+    }
+
+    let mut reader = event_reader(pipe);
+    loop {
+        match recv::<WorkerEvent, _>(&mut reader) {
+            Ok(Some(WorkerEvent::Progress { done, total, name })) => {
+                on_progress(done, total, &name)
+            }
+            Ok(Some(WorkerEvent::Done)) => return Ok(()),
+            Ok(Some(WorkerEvent::Error { msg })) => bail!("{msg}"),
+            Ok(None) => bail!("elevated worker exited unexpectedly"),
+            Err(e) => return Err(e.context("pipe read error")),
+        }
+    }
+}
+
 // ─── server side (main process) ───────────────────────────────────────────────
 
 /// Create a named-pipe server instance (byte-stream, blocking, duplex).

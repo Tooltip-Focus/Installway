@@ -3,9 +3,7 @@
 
 use crate::cleanup;
 use crate::ui::{self, UninstallParams};
-use anyhow::bail;
 use anyhow::{Context, Result};
-use common::elevation::{WorkerEvent, recv};
 use common::model::manifest::Manifest;
 use common::model::plugin_ctx::PluginCtx;
 use std::os::windows::process::CommandExt;
@@ -193,32 +191,17 @@ fn run_silent(
 }
 
 fn run_elevated(progress: ui::Progress) -> anyhow::Result<()> {
-    let pipe_name = common::elevation::pipe_name(std::process::id());
-    let pipe_handle = common::elevation::create_pipe_server(&pipe_name)?;
-
-    if common::elevation::spawn_elevated_worker(&pipe_name).is_err() {
-        unsafe {
-            let _ = windows::Win32::Foundation::CloseHandle(pipe_handle);
+    // No command to send: the elevated worker re-reads its own data dir.
+    common::elevation::run_elevated_relay(None::<&()>, |done, total, name| {
+        progress(done, total, name)
+    })
+    .map_err(|e| {
+        if e.is::<common::elevation::UacCancelledError>() {
+            anyhow::anyhow!("{}", ui::tr().get("uninstall.uac_cancelled"))
+        } else {
+            e
         }
-        bail!("{}", ui::tr().get("uninstall.uac_cancelled"));
-    }
-
-    common::elevation::wait_for_client(pipe_handle)?;
-    let pipe_file = common::elevation::open_pipe_handle(pipe_handle);
-    let mut reader = common::elevation::event_reader(pipe_file);
-
-    loop {
-        match recv::<WorkerEvent, _>(&mut reader) {
-            Ok(Some(WorkerEvent::Progress { done, total, name })) => {
-                progress(done, total, &name);
-            }
-            Ok(Some(WorkerEvent::Done)) => break,
-            Ok(Some(WorkerEvent::Error { msg })) => bail!("{msg}"),
-            Ok(None) => bail!("elevated worker exited unexpectedly"),
-            Err(e) => bail!("pipe read error: {e:#}"),
-        }
-    }
-    Ok(())
+    })
 }
 
 fn run_down_plugins(info: &common::model::install_info::InstallInfo, data_dir: &Path) {
