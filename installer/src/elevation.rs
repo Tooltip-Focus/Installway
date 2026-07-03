@@ -109,18 +109,7 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Returned when the user declines the UAC prompt. Callers can distinguish
-/// this from pipe/install failures via `e.is::<UacCancelledError>()`.
-#[derive(Debug)]
-pub struct UacCancelledError;
-
-impl std::fmt::Display for UacCancelledError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "UAC elevation was cancelled")
-    }
-}
-
-impl std::error::Error for UacCancelledError {}
+pub use common::elevation::UacCancelledError;
 
 /// Main-process orchestrator: create pipe, trigger UAC, relay WorkerEvent lines
 /// via `on_progress`. Returns `Ok(())` on Done, `Err(UacCancelledError)` if
@@ -128,42 +117,13 @@ impl std::error::Error for UacCancelledError {}
 pub fn run_elevated_install(
     install_dir: &std::path::Path,
     plugin_inputs: &common::plugin::InputsByPlugin,
-    mut on_progress: impl FnMut(u64, u64, &str),
+    on_progress: impl FnMut(u64, u64, &str),
 ) -> anyhow::Result<()> {
-    use common::elevation::recv;
-    use windows::Win32::Foundation::CloseHandle;
-
-    let pipe_name = common::elevation::pipe_name(std::process::id());
-    let pipe_handle = common::elevation::create_pipe_server(&pipe_name)?;
-
-    if common::elevation::spawn_elevated_worker(&pipe_name).is_err() {
-        unsafe {
-            let _ = CloseHandle(pipe_handle);
-        }
-        return Err(anyhow::Error::new(UacCancelledError));
-    }
-
-    common::elevation::wait_for_client(pipe_handle)?;
-    let mut pipe = common::elevation::open_pipe_handle(pipe_handle);
-
-    send(
-        &mut pipe,
-        &InstallWorkerCommand {
+    common::elevation::run_elevated_relay(
+        Some(&InstallWorkerCommand {
             install_dir: install_dir.to_path_buf(),
             plugin_inputs: plugin_inputs.clone(),
-        },
-    )?;
-
-    let mut reader = common::elevation::event_reader(pipe);
-    loop {
-        match recv::<WorkerEvent, _>(&mut reader) {
-            Ok(Some(WorkerEvent::Progress { done, total, name })) => {
-                on_progress(done, total, &name)
-            }
-            Ok(Some(WorkerEvent::Done)) => return Ok(()),
-            Ok(Some(WorkerEvent::Error { msg })) => anyhow::bail!("{msg}"),
-            Ok(None) => anyhow::bail!("elevated worker exited unexpectedly"),
-            Err(e) => return Err(e.context("pipe read error")),
-        }
-    }
+        }),
+        on_progress,
+    )
 }
