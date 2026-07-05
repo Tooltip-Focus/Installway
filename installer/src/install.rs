@@ -111,7 +111,12 @@ pub fn finalize(
 
     // Register the Add/Remove Programs entry. Uses the in-memory `info`, not
     // the json file, so the json can safely be written last.
-    register_uninstall(&info, &uninstaller_path, requires_admin)?;
+    register_uninstall(
+        &info,
+        &uninstaller_path,
+        requires_admin,
+        payload.manifest.full_size,
+    )?;
 
     // Registry / shortcut side effects, performed BEFORE the state files are
     // written. Reconcile associations: drop any the previous install
@@ -175,14 +180,16 @@ pub fn finalize(
         serde_json::to_string_pretty(&info)?.as_bytes(),
     )?;
     // Post-install plugins run last, from the data dir, with everything in
-    // place and recorded.
+    // place and recorded. A failure here must not read as a failed install:
+    // every file and registration above is already committed.
     run_post_install_plugins(
         &data_dir,
         payload,
         install_dir,
         plugin_inputs,
         requires_admin,
-    )?;
+    )
+    .context("post-install step failed (the application itself was installed and registered)")?;
 
     // Copy the live %TEMP% log next to the uninstaller for support.
     if let Some(src) = common::log::current_path() {
@@ -430,7 +437,12 @@ fn remove_shortcut(e: &ShortcutEntry) {
     }
 }
 
-fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path, machine: bool) -> Result<()> {
+fn register_uninstall(
+    info: &InstallInfo,
+    uninstaller_path: &Path,
+    machine: bool,
+    install_bytes: u64,
+) -> Result<()> {
     use windows::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE, REG_OPTION_NON_VOLATILE,
         RegCloseKey, RegCreateKeyExW,
@@ -483,9 +495,23 @@ fn register_uninstall(info: &InstallInfo, uninstaller_path: &Path, machine: bool
             "InstallDate",
             &install_date_yyyymmdd(info.installed_at_unix),
         );
-        set_sz_logged(hkey, "DisplayIcon", &uninstaller_path.to_string_lossy());
+        // The app's own exe carries the product icon; the uninstaller exe is
+        // the fallback when the build declares no exe.
+        let icon = if info.exe.trim().is_empty() {
+            uninstaller_path.to_string_lossy().into_owned()
+        } else {
+            Path::new(&info.install_dir)
+                .join(&info.exe)
+                .to_string_lossy()
+                .replace('/', "\\")
+        };
+        set_sz_logged(hkey, "DisplayIcon", &icon);
         set_sz_logged(hkey, "NoModify", "1");
         set_sz_logged(hkey, "NoRepair", "1");
+        let est_kb = (install_bytes / 1024).min(u32::MAX as u64) as u32;
+        if est_kb > 0 {
+            set_dword_logged(hkey, "EstimatedSize", est_kb);
+        }
 
         let _ = RegCloseKey(hkey);
     }
@@ -513,6 +539,24 @@ unsafe fn set_sz(
 fn set_sz_logged(hkey: windows::Win32::System::Registry::HKEY, name: &str, value: &str) {
     if let Err(e) = unsafe { set_sz(hkey, name, value) } {
         common::log::warn(format!("registry: could not set {name}: {e:#}"));
+    }
+}
+
+fn set_dword_logged(hkey: windows::Win32::System::Registry::HKEY, name: &str, value: u32) {
+    use windows::Win32::System::Registry::{REG_DWORD, RegSetValueExW};
+    use windows::core::PCWSTR;
+    let n = wide(name);
+    let r = unsafe {
+        RegSetValueExW(
+            hkey,
+            PCWSTR(n.as_ptr()),
+            None,
+            REG_DWORD,
+            Some(&value.to_le_bytes()),
+        )
+    };
+    if r.is_err() {
+        common::log::warn(format!("registry: could not set {name}"));
     }
 }
 
