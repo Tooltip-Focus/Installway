@@ -19,7 +19,7 @@ use crate::extract::TempDirGuard;
 use crate::ui::helpers;
 use common::model::choice_style::ChoiceStyle;
 use common::model::page_step::PageStep;
-use common::model::plugin_ctx::PluginCtx;
+use common::model::plugin_ctx::PluginContext;
 use common::model::plugin_entry::PluginEntry;
 use common::model::plugin_page::PluginInputs;
 use common::model::plugin_page::PluginPage;
@@ -119,7 +119,7 @@ struct Frame {
 /// at window close. Going Back just re-shows a prior page's retained controls.
 pub(super) struct Wizard {
     plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>, // (entry, extracted dll)
-    base_ctx: PluginCtx,
+    base_ctx: PluginContext,
     self_exe: PathBuf,
     /// Keeps the extracted-DLL temp dir alive. Shared (via `Arc`) into every
     /// background step query so a detached query thread can't read a DLL after
@@ -139,7 +139,7 @@ pub(super) struct Wizard {
 impl Wizard {
     pub(super) fn new(
         plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
-        base_ctx: PluginCtx,
+        base_ctx: PluginContext,
         self_exe: PathBuf,
         tmp: Arc<TempDirGuard>,
     ) -> Self {
@@ -163,7 +163,7 @@ impl Wizard {
     pub(super) fn canned(steps: Vec<PageStep>) -> Self {
         let mut w = Wizard {
             plugins: Vec::new(),
-            base_ctx: PluginCtx::default(),
+            base_ctx: PluginContext::default(),
             self_exe: PathBuf::new(),
             tmp: None,
             cur: 0,
@@ -459,7 +459,7 @@ pub(super) fn update_current_progress(hwnd: HWND, scaled: i32) {
 /// Wizard state extracted for the background query thread (all Clone + Send).
 pub(super) struct StepArgs {
     self_exe: PathBuf,
-    base_ctx: PluginCtx,
+    base_ctx: PluginContext,
     plugins: Vec<(PluginEntry, PathBuf)>,
     pub(super) cur: usize,
     pub(super) answers: PluginInputs,

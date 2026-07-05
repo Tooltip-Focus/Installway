@@ -6,7 +6,7 @@ use common::model::install_info::InstallInfo;
 use common::model::installer_payload::InstallerPayload;
 use common::model::manifest::Manifest;
 use common::model::payload_kind::PayloadKind;
-use common::model::plugin_ctx::PluginCtx;
+use common::model::plugin_ctx::PluginContext;
 use hdiffpatch_rs::patchers::HDiff;
 use rayon::prelude::*;
 use std::fs::{self, File};
@@ -1010,7 +1010,7 @@ fn run_zip_plugins(
             (p, dst, inputs_json)
         })
         .collect();
-    let pctx = PluginCtx::for_install(ctx.payload, &ctx.install_dir, ctx.requires_admin);
+    let pctx = PluginContext::for_install(ctx.payload, &ctx.install_dir, ctx.requires_admin);
     let self_exe = std::env::current_exe()?;
     let res = common::plugin::run_each(&self_exe, &pctx, &items, "up", true);
     let _ = fs::remove_dir_all(&tmp);
@@ -1097,7 +1097,7 @@ fn resolve_active_features(
     if !payload.plugins.is_empty() {
         match extract_plugins_to_temp(payload, zip_bytes) {
             Ok((tmp, items)) => {
-                let mut base_ctx = PluginCtx::for_install(payload, install_dir, requires_admin);
+                let mut base_ctx = PluginContext::for_install(payload, install_dir, requires_admin);
                 base_ctx.data_dir = data_dir.to_string_lossy().into_owned();
                 base_ctx.features_json = feature_catalog_json(&payload.manifest.features, base);
                 let self_exe = std::env::current_exe().unwrap_or_default();
@@ -1233,7 +1233,7 @@ impl Drop for TempDirGuard {
 /// spawn the plugin host). The temp dir of DLLs lives as long as `tmp`.
 pub struct UiPlugins {
     pub plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
-    pub base_ctx: PluginCtx,
+    pub base_ctx: PluginContext,
     pub self_exe: PathBuf,
     pub tmp: TempDirGuard,
 }
@@ -1285,7 +1285,7 @@ pub fn extract_ui_plugins(
     // UI pages run in the main process before elevation is decided; they
     // describe choices and don't persist state, so the per-user data dir is
     // fine here.
-    let mut base_ctx = PluginCtx::for_install(payload, install_dir, false);
+    let mut base_ctx = PluginContext::for_install(payload, install_dir, false);
     // Hand the feature catalog to the pages so a plugin can pre-check the picker
     // to the current base (prior install, or the build defaults).
     if !payload.manifest.features.is_empty() {

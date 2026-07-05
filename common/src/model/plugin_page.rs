@@ -1,12 +1,8 @@
+use crate::model::default_true;
 use crate::model::plugin_widget::PluginWidget;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-fn default_true() -> bool {
-    true
-}
-
-/// One contributed wizard page.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PluginPage {
     pub id: String,
@@ -19,8 +15,5 @@ pub struct PluginPage {
     pub buttons: bool,
 }
 
-/// Collected page answers, keyed `"<page_id>.<widget_id>"`. `BTreeMap` keeps a
-/// deterministic order (stable logs/tests). Serialized into `PluginCtx.inputs_json`.
-/// `MultiChoice` answers join selected values with `,`; option `value` strings must
-/// not themselves contain `,` (no escaping is applied).
+/// Collected page answers, keyed `"<page_id>.<widget_id>"`.
 pub type PluginInputs = BTreeMap<String, String>;
