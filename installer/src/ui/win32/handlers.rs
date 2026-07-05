@@ -507,27 +507,31 @@ unsafe fn commit_install(hwnd: HWND) {
         };
         #[cfg(feature = "hintway")]
         crate::analytics::stage("extract");
-        if let Err(e) = install(ctx) {
-            // A user-confirmed cancel rolled the install back: close cleanly
-            // instead of surfacing it as an installation error.
-            if cancel.load(Ordering::Relaxed) {
-                common::log::info("install cancelled by user");
-                helpers::post(hwnd_isize, WM_APP_CANCELLED);
+        // Lock held across finalize so a concurrent run can't interleave.
+        let _install_lock = match install(ctx) {
+            Ok(lock) => lock,
+            Err(e) => {
+                // A user-confirmed cancel rolled the install back: close cleanly
+                // instead of surfacing it as an installation error.
+                if cancel.load(Ordering::Relaxed) {
+                    common::log::info("install cancelled by user");
+                    helpers::post(hwnd_isize, WM_APP_CANCELLED);
+                    return;
+                }
+                if e.downcast_ref::<crate::extract::PermissionDeniedError>()
+                    .is_some()
+                {
+                    #[cfg(feature = "hintway")]
+                    crate::analytics::error("permission_denied");
+                    push_perm_error(hwnd_isize, pb, plugin_inputs);
+                } else {
+                    #[cfg(feature = "hintway")]
+                    crate::analytics::error(crate::analytics::classify_error(&e));
+                    push_error(hwnd_isize, &format!("{e}"));
+                }
                 return;
             }
-            if e.downcast_ref::<crate::extract::PermissionDeniedError>()
-                .is_some()
-            {
-                #[cfg(feature = "hintway")]
-                crate::analytics::error("permission_denied");
-                push_perm_error(hwnd_isize, pb, plugin_inputs);
-            } else {
-                #[cfg(feature = "hintway")]
-                crate::analytics::error(crate::analytics::classify_error(&e));
-                push_error(hwnd_isize, &format!("{e}"));
-            }
-            return;
-        }
+        };
         #[cfg(feature = "hintway")]
         crate::analytics::stage("finalize");
         if let Err(e) = install_mod::finalize(

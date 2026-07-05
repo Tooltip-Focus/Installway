@@ -303,9 +303,11 @@ fn spawn_worker(
             hwnd_parent: hwnd_isize,
             translator: tr(),
         };
-        if let Err(e) = install(ctx) {
-            return post_err(hwnd_isize, &format!("{e}"));
-        }
+        // Lock held across finalize so a concurrent run can't interleave.
+        let _install_lock = match install(ctx) {
+            Ok(lock) => lock,
+            Err(e) => return post_err(hwnd_isize, &format!("{e}")),
+        };
         if let Err(e) = crate::install::finalize(
             &install_dir,
             &loaded.payload,

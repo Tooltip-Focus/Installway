@@ -138,7 +138,10 @@ pub struct InstallCtx<'a> {
     pub translator: common::i18n::Translator,
 }
 
-pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
+/// Returns the per-install-dir lock so callers keep holding it across
+/// `install::finalize`; dropping it earlier would let a second installer
+/// start staging while this one still writes metadata/registry state.
+pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
     let manifest = &ctx.payload.manifest;
 
     // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
@@ -165,7 +168,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
 
     // Single-instance lock per install dir, so two runs can't race on the temp
     // dirs. OS frees it on exit or crash.
-    let _install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
+    let install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
 
     if ctx.payload.force_reinstall {
         common::log::info("force_reinstall set: skipping version check, reinstalling from scratch");
@@ -469,7 +472,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<()> {
     ));
 
     (ctx.on_progress)(total_bytes, total_bytes, "done");
-    Ok(())
+    Ok(install_lock)
 }
 
 /// Build the final content for `rel` into `staged_path`, verified by BLAKE3.
@@ -487,6 +490,8 @@ fn stage_file(
     old: &Path,
     staged_path: &Path,
 ) -> Result<()> {
+    // Deep install dir + hash names can exceed MAX_PATH.
+    let staged_path = &long_path(staged_path);
     // Patch path: apply hdiff(old, patch) → staged_path.
     if kind == PayloadKind::Patch
         && let Some(patch_info) = &entry.patch
@@ -548,7 +553,10 @@ fn stage_file(
 /// RAII single-instance lock for one install dir, backed by a named mutex. The
 /// OS destroys it when the last handle closes (exit or crash), so it can never
 /// go stale.
-struct InstallLock(windows::Win32::Foundation::HANDLE);
+pub struct InstallLock(windows::Win32::Foundation::HANDLE);
+
+// The mutex handle is only closed on drop; safe to move across threads.
+unsafe impl Send for InstallLock {}
 
 impl Drop for InstallLock {
     fn drop(&mut self) {
@@ -631,14 +639,33 @@ pub(crate) fn check_writable(dir: &Path) -> Result<()> {
 /// Safety margin on top of the estimated payload size.
 const SPACE_BUFFER: u64 = 100 * 1024 * 1024; // 100 MB
 
+/// Bytes staging will actually write: files whose dest is missing or whose
+/// size differs (those get rebuilt in full in `staged/`). Files already in
+/// place at the right size are almost always hash-skipped; an equal-size
+/// content change is covered by the buffer. Summing the whole manifest
+/// instead would refuse legitimate small updates of large installs on
+/// nearly-full disks.
+fn staging_bytes_needed(install_dir: &Path, manifest: &Manifest) -> u64 {
+    manifest
+        .files
+        .iter()
+        .filter(|(rel, entry)| {
+            safe_rel(rel).is_ok()
+                && fs::metadata(long_path(&install_dir.join(rel.as_str())))
+                    .map(|m| m.len() != entry.size)
+                    .unwrap_or(true)
+        })
+        .map(|(_, entry)| entry.size)
+        .sum()
+}
+
 /// Verify the install volume has enough free space before writing anything.
 ///
-/// Peak extra space = total install size + buffer, for both full and patch:
+/// Peak extra space = bytes to stage + buffer, for both full and patch:
 /// staging writes the reconstructed full content of every changed file (a patch
 /// stages the full file, not the small blob), and commit only renames in-place.
 fn check_disk_space(install_dir: &Path, manifest: &Manifest, kind: PayloadKind) -> Result<()> {
-    let total_file_bytes: u64 = manifest.files.values().map(|e| e.size).sum();
-    let required = total_file_bytes.saturating_add(SPACE_BUFFER);
+    let required = staging_bytes_needed(install_dir, manifest).saturating_add(SPACE_BUFFER);
 
     let available = fs4::available_space(install_dir)
         .with_context(|| format!("query free space on {}", install_dir.display()))?;
@@ -821,13 +848,13 @@ fn backup_then_remove(install_dir: &Path, backup_dir: &Path, rel: &str) -> Resul
     Ok(())
 }
 
-/// Record every path the commit will touch, so an interrupted commit can be
-/// rolled back on the next launch.
+/// Record every path the commit will touch (`A\t` add / `D\t` delete lines),
+/// so an interrupted commit can be rolled back on the next launch.
 fn write_journal(temp_dir: &Path, adds: &[String], deletes: &[String]) -> Result<()> {
     let content = adds
         .iter()
-        .chain(deletes.iter())
-        .cloned()
+        .map(|r| format!("A\t{r}"))
+        .chain(deletes.iter().map(|r| format!("D\t{r}")))
         .collect::<Vec<_>>()
         .join("\n");
     let jp = journal_path(temp_dir);
@@ -837,28 +864,45 @@ fn write_journal(temp_dir: &Path, adds: &[String], deletes: &[String]) -> Result
     Ok(())
 }
 
-/// Roll the live install back to its pre-commit state using the backups.
-/// For each touched path: if a backup exists restore it, else the path was
-/// newly added so remove it.
-fn rollback(temp_dir: &Path, install_dir: &Path, adds: &[String], deletes: &[String]) {
-    let backup_dir = temp_dir.join("backup");
-    let restore = |rel: &str| {
-        let dest = long_path(&install_dir.join(rel));
-        let backup = long_path(&backup_dir.join(staged_name(rel)));
-        if backup.exists() {
-            if let Err(e) = move_retry(&backup, &dest) {
-                common::log::error(format!("rollback restore failed for {}: {e:#}", rel));
-            }
-        } else {
-            // Newly added file with no prior version - remove it.
-            let _ = fs::remove_file(&dest);
+/// Restore one add to its pre-commit state. The journal is written before any
+/// file is touched, so "no backup" does NOT mean "newly added": a still-staged
+/// file proves this entry was never committed and the live file must be left
+/// alone. Only when the staged copy is gone (moved into place) is a
+/// backup-less dest a committed new file to remove.
+fn restore_add(install_dir: &Path, staged_dir: &Path, backup_dir: &Path, rel: &str) {
+    let dest = long_path(&install_dir.join(rel));
+    let backup = long_path(&backup_dir.join(staged_name(rel)));
+    let staged = long_path(&staged_dir.join(staged_name(rel)));
+    if backup.exists() {
+        if let Err(e) = move_retry(&backup, &dest) {
+            common::log::error(format!("rollback restore failed for {}: {e:#}", rel));
         }
-    };
+    } else if !staged.exists() {
+        let _ = fs::remove_file(&dest);
+    }
+}
+
+/// Restore one delete: put the backup back if the delete was committed;
+/// otherwise the live file was never touched.
+fn restore_delete(install_dir: &Path, backup_dir: &Path, rel: &str) {
+    let dest = long_path(&install_dir.join(rel));
+    let backup = long_path(&backup_dir.join(staged_name(rel)));
+    if backup.exists()
+        && let Err(e) = move_retry(&backup, &dest)
+    {
+        common::log::error(format!("rollback restore failed for {}: {e:#}", rel));
+    }
+}
+
+/// Roll the live install back to its pre-commit state using the backups.
+fn rollback(temp_dir: &Path, install_dir: &Path, adds: &[String], deletes: &[String]) {
+    let staged_dir = temp_dir.join("staged");
+    let backup_dir = temp_dir.join("backup");
     for rel in adds {
-        restore(rel);
+        restore_add(install_dir, &staged_dir, &backup_dir, rel);
     }
     for rel in deletes {
-        restore(rel);
+        restore_delete(install_dir, &backup_dir, rel);
     }
     common::log::warn("rolled back to pre-install state");
 }
@@ -871,18 +915,22 @@ fn recover_if_interrupted(temp_dir: &Path, install_dir: &Path) {
         return;
     };
     common::log::warn("found interrupted commit journal - rolling back");
+    let staged_dir = temp_dir.join("staged");
     let backup_dir = temp_dir.join("backup");
-    for rel in content.lines().filter(|l| !l.trim().is_empty()) {
+    for line in content.lines().filter(|l| !l.trim().is_empty()) {
+        let (kind, rel) = match line.split_once('\t') {
+            Some(("A", r)) => ('A', r),
+            Some(("D", r)) => ('D', r),
+            // Legacy untyped line: restore a backup if present, never delete.
+            _ => ('D', line),
+        };
         // Ignore anything that wouldn't be a safe relative path.
         if safe_rel(rel).is_err() {
             continue;
         }
-        let dest = long_path(&install_dir.join(rel));
-        let backup = long_path(&backup_dir.join(staged_name(rel)));
-        if backup.exists() {
-            let _ = move_retry(&backup, &dest);
-        } else {
-            let _ = fs::remove_file(&dest);
+        match kind {
+            'A' => restore_add(install_dir, &staged_dir, &backup_dir, rel),
+            _ => restore_delete(install_dir, &backup_dir, rel),
         }
     }
     let _ = fs::remove_dir_all(temp_dir);
@@ -919,6 +967,25 @@ pub(crate) fn read_zip_entry(
     Ok(buf)
 }
 
+/// Extract each plugin's DLL from the payload zip into `dir` as `<name>.dll`.
+fn extract_plugin_dlls_to(
+    zip_bytes: &[u8],
+    plugins: &[common::model::plugin_entry::PluginEntry],
+    dir: &Path,
+) -> Result<Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>> {
+    fs::create_dir_all(dir)?;
+    let mut archive =
+        ZipArchive::new(Cursor::new(zip_bytes)).context("open payload zip for plugins")?;
+    let mut items = Vec::with_capacity(plugins.len());
+    for p in plugins {
+        let buf = read_zip_entry(&mut archive, &p.file)?;
+        let dst = dir.join(format!("{}.dll", p.name));
+        fs::write(&dst, &buf)?;
+        items.push((p.clone(), dst));
+    }
+    Ok(items)
+}
+
 /// Extract the `phase` plugins from the payload zip to `%TEMP%`, run their `up`
 /// in isolated child processes, then clean up. Used for the pre-install phase.
 fn run_zip_plugins(
@@ -936,17 +1003,13 @@ fn run_zip_plugins(
         return Ok(());
     }
     let tmp = std::env::temp_dir().join(format!("iw-plugins-{}", std::process::id()));
-    fs::create_dir_all(&tmp)?;
-    let mut archive =
-        ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open payload zip for plugins")?;
-    let mut items = Vec::with_capacity(plugins.len());
-    for p in plugins {
-        let buf = read_zip_entry(&mut archive, &p.file)?;
-        let dst = tmp.join(format!("{}.dll", p.name));
-        fs::write(&dst, &buf)?;
-        let inputs_json = common::plugin::inputs_json_for(&ctx.plugin_inputs, &p.name);
-        items.push((p, dst, inputs_json));
-    }
+    let items: Vec<_> = extract_plugin_dlls_to(ctx.zip_bytes, &plugins, &tmp)?
+        .into_iter()
+        .map(|(p, dst)| {
+            let inputs_json = common::plugin::inputs_json_for(&ctx.plugin_inputs, &p.name);
+            (p, dst, inputs_json)
+        })
+        .collect();
     let pctx = PluginCtx::for_install(ctx.payload, &ctx.install_dir, ctx.requires_admin);
     let self_exe = std::env::current_exe()?;
     let res = common::plugin::run_each(&self_exe, &pctx, &items, "up", true);
@@ -964,16 +1027,7 @@ fn extract_plugins_to_temp(
     Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
 )> {
     let tmp = std::env::temp_dir().join(format!("iw-feat-{}", std::process::id()));
-    fs::create_dir_all(&tmp)?;
-    let mut archive =
-        ZipArchive::new(Cursor::new(zip_bytes)).context("open payload zip for features")?;
-    let mut items = Vec::with_capacity(payload.plugins.len());
-    for p in &payload.plugins {
-        let buf = read_zip_entry(&mut archive, &p.file)?;
-        let dst = tmp.join(format!("{}.dll", p.name));
-        fs::write(&dst, &buf)?;
-        items.push((p.clone(), dst));
-    }
+    let items = extract_plugin_dlls_to(zip_bytes, &payload.plugins, &tmp)?;
     Ok((tmp, items))
 }
 
@@ -996,9 +1050,15 @@ fn read_prior_features(payload: &InstallerPayload) -> (PathBuf, Option<Vec<Strin
 /// data dir holding it, checking the machine-wide dir (`%ProgramData%`) first
 /// then the per-user one. `None` if never installed or no record parses.
 pub(crate) fn prior_install_info(payload: &InstallerPayload) -> Option<(PathBuf, InstallInfo)> {
+    prior_install_info_by_ids(&payload.publisher, &payload.product_id)
+}
+
+pub(crate) fn prior_install_info_by_ids(
+    publisher: &str,
+    product_id: &str,
+) -> Option<(PathBuf, InstallInfo)> {
     for machine in [true, false] {
-        if let Some(dir) =
-            common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, machine)
+        if let Some(dir) = common::paths::uninstall_dir_for(publisher, product_id, machine)
             && let Ok(text) = fs::read_to_string(dir.join("installer_info.json"))
             && let Ok(info) = serde_json::from_str::<InstallInfo>(&text)
         {
@@ -1545,16 +1605,62 @@ mod tests {
         // foo.txt: an existing file that was overwritten -> backup holds the old.
         fs::write(app.join("foo.txt"), b"NEW").unwrap();
         fs::write(backup.join(staged_name("foo.txt")), b"OLD").unwrap();
-        // bar.txt: a brand-new file (no backup) -> must be removed.
+        // bar.txt: a brand-new file (no backup, staged copy moved) -> removed.
         fs::write(app.join("bar.txt"), b"NEWBAR").unwrap();
 
-        fs::write(journal_path(&temp), "foo.txt\nbar.txt\n").unwrap();
+        fs::write(journal_path(&temp), "A\tfoo.txt\nA\tbar.txt\n").unwrap();
 
         recover_if_interrupted(&temp, &app);
 
         assert_eq!(fs::read(app.join("foo.txt")).unwrap(), b"OLD"); // restored
         assert!(!app.join("bar.txt").exists()); // new file removed
         assert!(!temp.exists()); // temp cleaned
+    }
+
+    // Interrupted BEFORE the commit reached a file: its staged copy still
+    // exists and no backup was made. The live file must survive recovery.
+    #[test]
+    fn recover_keeps_live_files_not_yet_committed() {
+        let base = tempfile::tempdir().unwrap();
+        let app = base.path().join("app");
+        let temp = app.join(".installer_tmp");
+        fs::create_dir_all(temp.join("backup")).unwrap();
+        fs::create_dir_all(temp.join("staged")).unwrap();
+
+        // upd.txt: journaled add, never committed (staged still present).
+        fs::write(app.join("upd.txt"), b"LIVE").unwrap();
+        fs::write(temp.join("staged").join(staged_name("upd.txt")), b"NEXT").unwrap();
+        // gone.txt: journaled delete, never reached (no backup).
+        fs::write(app.join("gone.txt"), b"KEEP").unwrap();
+
+        fs::write(journal_path(&temp), "A\tupd.txt\nD\tgone.txt\n").unwrap();
+
+        recover_if_interrupted(&temp, &app);
+
+        assert_eq!(fs::read(app.join("upd.txt")).unwrap(), b"LIVE");
+        assert_eq!(fs::read(app.join("gone.txt")).unwrap(), b"KEEP");
+        assert!(!temp.exists());
+    }
+
+    // Legacy untyped journal lines: restore backups, never delete.
+    #[test]
+    fn recover_legacy_journal_never_deletes() {
+        let base = tempfile::tempdir().unwrap();
+        let app = base.path().join("app");
+        let temp = app.join(".installer_tmp");
+        let backup = temp.join("backup");
+        fs::create_dir_all(&backup).unwrap();
+
+        fs::write(app.join("a.txt"), b"NEW").unwrap();
+        fs::write(backup.join(staged_name("a.txt")), b"OLD").unwrap();
+        fs::write(app.join("b.txt"), b"LIVE").unwrap();
+
+        fs::write(journal_path(&temp), "a.txt\nb.txt\n").unwrap();
+
+        recover_if_interrupted(&temp, &app);
+
+        assert_eq!(fs::read(app.join("a.txt")).unwrap(), b"OLD");
+        assert_eq!(fs::read(app.join("b.txt")).unwrap(), b"LIVE");
     }
 
     // Build a one-entry payload zip with `full/<rel>` = `content`, the way the
@@ -1718,6 +1824,26 @@ mod tests {
         apply_active_features(&mut m, &["D1".to_string()], &["D1".to_string()]);
         assert!(m.files.contains_key("D1/a.dat"));
         assert!(m.deleted_files.is_empty());
+    }
+
+    // Files already present at the right size are excluded from the disk
+    // space estimate; missing or size-changed ones count in full.
+    #[test]
+    fn staging_bytes_skips_files_already_in_place() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path();
+        fs::write(app.join("same.bin"), vec![0u8; 10]).unwrap();
+        fs::write(app.join("changed.bin"), vec![0u8; 3]).unwrap();
+
+        let m = feat_manifest(
+            &[
+                ("same.bin", None, 10),
+                ("changed.bin", None, 20),
+                ("new.bin", None, 40),
+            ],
+            &[],
+        );
+        assert_eq!(staging_bytes_needed(app, &m), 60);
     }
 
     // A manifest with no declared features is left untouched (back-compat).

@@ -72,17 +72,21 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
         translator,
     };
 
-    if let Err(e) = crate::extract::install(ctx) {
-        if let Ok(mut p) = pipe_shared.lock() {
-            let _ = send(
-                &mut *p,
-                &WorkerEvent::Error {
-                    msg: format!("{e:#}"),
-                },
-            );
+    // Lock held across finalize so a concurrent run can't interleave.
+    let _install_lock = match crate::extract::install(ctx) {
+        Ok(lock) => lock,
+        Err(e) => {
+            if let Ok(mut p) = pipe_shared.lock() {
+                let _ = send(
+                    &mut *p,
+                    &WorkerEvent::Error {
+                        msg: format!("{e:#}"),
+                    },
+                );
+            }
+            return Ok(());
         }
-        return Ok(());
-    }
+    };
 
     if let Err(e) = crate::install::finalize(
         &cmd.install_dir,
