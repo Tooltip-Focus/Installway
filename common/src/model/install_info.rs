@@ -23,7 +23,8 @@ pub struct InstallInfo {
     /// HKCU subkey under `Software\Microsoft\Windows\CurrentVersion\Uninstall`.
     pub registry_key: String,
     /// Optional path (relative to install_dir) of the product's main exe.
-    pub exe: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
     /// File associations registered at install time - the uninstaller removes
     /// exactly these.
     #[serde(default)]

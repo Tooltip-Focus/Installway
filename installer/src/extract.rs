@@ -1706,7 +1706,7 @@ mod tests {
         );
         let manifest = Manifest {
             version: "1".into(),
-            exe: String::new(),
+            exe: None,
             files,
             deleted_files: Vec::new(),
             full_size: good.len() as u64,
@@ -1757,7 +1757,7 @@ mod tests {
         let full_size = entries.iter().map(|(_, _, s)| *s).sum();
         Manifest {
             version: "1".into(),
-            exe: String::new(),
+            exe: None,
             files,
             deleted_files: Vec::new(),
             full_size,

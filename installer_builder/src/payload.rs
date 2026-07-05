@@ -55,7 +55,7 @@ fn check_case_collisions(files: &[String]) -> Result<()> {
 /// Build a full payload: every file under `input`, hashed and zipped.
 pub(crate) fn build_full(
     input: &Path,
-    exe: &str,
+    exe: Option<&str>,
     version: &str,
     plugins: &[ZipJob],
 ) -> Result<(Vec<u8>, Manifest)> {
@@ -88,7 +88,7 @@ pub(crate) fn build_full(
 
     let manifest = Manifest {
         version: version.to_string(),
-        exe: exe.to_string(),
+        exe: exe.map(|s| s.to_string()),
         files: entries,
         deleted_files: Vec::new(),
         full_size,
@@ -104,7 +104,7 @@ pub(crate) fn build_full(
 pub(crate) fn build_patch(
     new_input: &Path,
     old_input: &Path,
-    exe: &str,
+    exe: Option<&str>,
     version: &str,
     plugins: &[ZipJob],
 ) -> Result<(Vec<u8>, Manifest)> {
@@ -254,7 +254,7 @@ pub(crate) fn build_patch(
 
     let manifest = Manifest {
         version: version.to_string(),
-        exe: exe.to_string(),
+        exe: exe.map(|s| s.to_string()),
         files: entries,
         deleted_files,
         full_size: total_full_size,

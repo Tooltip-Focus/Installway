@@ -592,7 +592,7 @@ pub(super) unsafe fn on_finish(hwnd: HWND) {
                 .unwrap_or_default()
         });
         if let Some(pb) = path {
-            let _ = crate::install::launch_product(&pb, &exe);
+            let _ = crate::install::launch_product(&pb, exe.as_deref());
         }
     }
     let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };

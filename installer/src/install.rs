@@ -127,11 +127,15 @@ pub fn finalize(
     if !stale.is_empty() {
         common::assoc::unregister(&payload.product_id, &stale, requires_admin);
     }
-    if !payload.manifest.exe.is_empty() && !payload.associations.is_empty() {
+
+    if let Some(exe_name) = &payload.manifest.exe
+        && !exe_name.is_empty()
+        && !payload.associations.is_empty()
+    {
         // ProgIDs are keyed by product_id. Normalize separators so the registry
         // command reads cleanly.
         let exe_str = install_dir
-            .join(&payload.manifest.exe)
+            .join(exe_name)
             .to_string_lossy()
             .replace('/', "\\");
         common::assoc::register(
@@ -257,7 +261,7 @@ impl Tokens {
         Tokens {
             install: install_dir.to_string_lossy().replace('/', "\\"),
             exe: install_dir
-                .join(&payload.manifest.exe)
+                .join(payload.manifest.exe.as_deref().unwrap_or(""))
                 .to_string_lossy()
                 .replace('/', "\\"),
             version: payload.to_version.clone(),
@@ -567,11 +571,13 @@ fn install_date_yyyymmdd(unix: i64) -> String {
     format!("{:04}{:02}{:02}", y, m, d)
 }
 
-pub fn launch_product(install_dir: &Path, exe_rel: &str) -> Result<()> {
+pub fn launch_product(install_dir: &Path, exe: Option<&str>) -> Result<()> {
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     use windows::core::PCWSTR;
-
+    let Some(exe_rel) = exe else {
+        return Ok(());
+    };
     if exe_rel.trim().is_empty() {
         return Ok(());
     }

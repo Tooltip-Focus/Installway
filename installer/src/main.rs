@@ -365,9 +365,9 @@ fn run_silent(
     #[cfg(feature = "hintway")]
     analytics::stage("done");
 
-    if launch && !loaded.payload.manifest.exe.is_empty() {
-        install::launch_product(&install_dir, &loaded.payload.manifest.exe)?;
-        println!("Launched {}", loaded.payload.manifest.exe);
+    if launch && let Some(exe_name) = loaded.payload.manifest.exe.as_deref() {
+        install::launch_product(&install_dir, Some(exe_name))?;
+        println!("Launched {}", exe_name);
     }
     println!("Done.");
     Ok(())

@@ -166,7 +166,7 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
         created_at_unix: 0,
         manifest: Manifest {
             version: "1.2.0".to_string(),
-            exe: "bin/app.exe".to_string(),
+            exe: Some("bin/app.exe".to_string()),
             files: std::collections::HashMap::new(),
             deleted_files: Vec::new(),
             full_size: 12_345_678,

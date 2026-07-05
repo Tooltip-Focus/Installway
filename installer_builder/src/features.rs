@@ -178,7 +178,7 @@ mod tests {
         }
         Manifest {
             version: "1".into(),
-            exe: String::new(),
+            exe: None,
             files: m,
             deleted_files: vec![],
             full_size: 0,

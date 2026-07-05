@@ -5,8 +5,8 @@ use std::collections::HashMap;
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Manifest {
     pub version: String,
-    #[serde(default)]
-    pub exe: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
     pub files: HashMap<String, FileEntry>,
     #[serde(default)]
     pub deleted_files: Vec<String>,
@@ -26,10 +26,10 @@ pub struct Manifest {
 impl Manifest {
     /// Minimal stand-in when the recorded manifest is missing or unreadable:
     /// file removal no-ops, everything else (shortcuts, registry, dirs) runs.
-    pub fn fallback(version: &str, exe: &str) -> Self {
+    pub fn fallback(version: &str, exe: Option<&str>) -> Self {
         Manifest {
             version: version.to_string(),
-            exe: exe.to_string(),
+            exe: exe.map(|s| s.to_string()),
             ..Default::default()
         }
     }

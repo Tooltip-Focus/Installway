@@ -327,7 +327,7 @@ pub struct PackArgs {
     pub input: PathBuf,
     pub from_dir: Option<PathBuf>,
     pub from_version: Option<String>,
-    pub exe: String,
+    pub exe: Option<String>,
     pub license: Option<PathBuf>,
     pub banner: Option<PathBuf>,
     pub assoc: Vec<String>,
@@ -403,7 +403,7 @@ impl PackArgs {
                 .or(file.to_version)
                 .with_context(|| req("to-version"))?,
             input: cli.input.or(file.input).with_context(|| req("input"))?,
-            exe: cli.exe.or(file.exe).with_context(|| req("exe"))?,
+            exe: cli.exe.or(file.exe),
             priv_key: merged_priv_key,
             priv_key_literal: merged_priv_key_literal,
             out: cli.out.or(file.out).with_context(|| req("out"))?,

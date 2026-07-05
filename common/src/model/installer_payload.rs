@@ -112,7 +112,7 @@ impl Default for InstallerPayload {
             created_at_unix: 123,
             manifest: Manifest {
                 version: "1.1".into(),
-                exe: "a.exe".into(),
+                exe: Some("a.exe".into()),
                 files: Default::default(),
                 deleted_files: vec![],
                 full_size: 0,

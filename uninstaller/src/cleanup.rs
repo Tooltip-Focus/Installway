@@ -289,7 +289,7 @@ mod tests {
         );
         let m = Manifest {
             version: "1.0".into(),
-            exe: "bin/a.exe".into(),
+            exe: Some("bin/a.exe".into()),
             files,
             deleted_files: vec![],
             full_size: 0,

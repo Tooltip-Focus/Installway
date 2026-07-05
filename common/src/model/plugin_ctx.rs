@@ -49,7 +49,7 @@ impl PluginCtx {
             product: payload.product.clone(),
             product_id: payload.product_id.clone(),
             version: payload.to_version.clone(),
-            exe: exe_path(install_dir, &payload.manifest.exe),
+            exe: exe_path(install_dir, payload.manifest.exe.as_deref().unwrap_or("")),
             ..Self::with_host_env()
         }
     }
@@ -61,7 +61,10 @@ impl PluginCtx {
             product: info.product.clone(),
             product_id: info.product_id.clone(),
             version: info.version.clone(),
-            exe: exe_path(Path::new(&info.install_dir), &info.exe),
+            exe: exe_path(
+                Path::new(&info.install_dir),
+                info.exe.as_deref().unwrap_or(""),
+            ),
             ..Self::with_host_env()
         }
     }
