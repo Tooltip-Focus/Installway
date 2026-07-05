@@ -501,13 +501,18 @@ fn register_uninstall(
         );
         // The app's own exe carries the product icon; the uninstaller exe is
         // the fallback when the build declares no exe.
-        let icon = if info.exe.trim().is_empty() {
-            uninstaller_path.to_string_lossy().into_owned()
-        } else {
+        let icon = if let Some(exe_name) = info
+            .exe
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             Path::new(&info.install_dir)
-                .join(&info.exe)
+                .join(exe_name)
                 .to_string_lossy()
                 .replace('/', "\\")
+        } else {
+            uninstaller_path.to_string_lossy().into_owned()
         };
         set_sz_logged(hkey, "DisplayIcon", &icon);
         set_sz_logged(hkey, "NoModify", "1");
