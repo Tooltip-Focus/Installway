@@ -30,19 +30,23 @@ fn retry_fs<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T>
     Err(last)
 }
 
-/// Rename `src` → `dest`, retrying transient failures. Creates `dest`'s parent
-/// and removes an existing `dest` first (Windows `rename` fails if the target
-/// exists). The dominant failure this survives: an AV holding a brief lock on a
+/// Rename `src` → `dest`, retrying transient failures. Creates `dest`'s parent.
+/// The dominant failure this survives: an AV holding a brief lock on a
 /// just-created file (especially `.exe`).
 pub fn rename_retry(src: &Path, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
     retry_fs(|| {
-        if dest.exists() {
-            let _ = fs::remove_file(dest);
-        }
-        fs::rename(src, dest)
+        // Rename first: Windows replaces an existing file atomically, so the
+        // common path never leaves a window with neither old nor new file.
+        // Only clear a blocking dest (read-only file, directory) on failure;
+        // the next retry then renames into the freed slot.
+        fs::rename(src, dest).inspect_err(|_| {
+            if dest.exists() {
+                let _ = fs::remove_file(dest);
+            }
+        })
     })
     .with_context(|| {
         format!(
@@ -157,7 +161,16 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
+    // Append (not replace) the extension: `a.json` and `a.dll` in the same
+    // folder must not share one `a.tmp`.
+    let tmp = {
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        name.push(".tmp");
+        path.with_file_name(name)
+    };
     write_bytes_retry(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
     rename_retry(&tmp, path).with_context(|| format!("commit {}", path.display()))?;
     Ok(())
