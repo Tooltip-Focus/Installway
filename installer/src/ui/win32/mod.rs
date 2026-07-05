@@ -749,7 +749,7 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
                     || PAYLOAD.with(|p| {
                         p.borrow()
                             .as_ref()
-                            .map(|p| !p.manifest.exe.is_empty())
+                            .map(|p| p.manifest.exe.as_ref().is_some_and(|s| !s.is_empty()))
                             .unwrap_or(false)
                     }));
             let h = GetDlgItem(Some(hwnd), ID_LAUNCH_CHK as i32).unwrap_or_default();

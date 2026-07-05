@@ -38,7 +38,7 @@ pub fn run(pipe_name: &str) -> Result<()> {
     };
 
     let manifest = crate::cleanup::read_manifest(&data_dir)
-        .unwrap_or_else(|_| Manifest::fallback(&info.version, &info.exe));
+        .unwrap_or_else(|_| Manifest::fallback(&info.version, info.exe.as_deref()));
 
     let app_dir = std::path::PathBuf::from(&info.install_dir);
 

@@ -55,7 +55,7 @@ pub fn run(silent: bool) -> Result<()> {
     // removal no-ops, but shortcuts/registry/dir cleanup still run.
     let manifest = cleanup::read_manifest(&data_dir).unwrap_or_else(|e| {
         common::log::warn(format!("manifest unreadable ({e:#}) - skipping file list"));
-        Manifest::fallback(&info.version, &info.exe)
+        Manifest::fallback(&info.version, info.exe.as_deref())
     });
 
     common::log::info(format!(

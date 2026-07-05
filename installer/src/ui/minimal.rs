@@ -316,8 +316,11 @@ fn spawn_worker(
         ) {
             return post_err(hwnd_isize, &format!("finalize: {e}"));
         }
-        if launch_flag && !loaded.payload.manifest.exe.is_empty() {
-            let _ = crate::install::launch_product(&install_dir, &loaded.payload.manifest.exe);
+        if launch_flag {
+            let _ = crate::install::launch_product(
+                &install_dir,
+                loaded.payload.manifest.exe.as_deref(),
+            );
         }
         post(hwnd_isize, WM_APP_DONE);
     });
@@ -341,8 +344,11 @@ fn run_elevated_worker(
         });
     match result {
         Ok(()) => {
-            if launch_flag && !loaded.payload.manifest.exe.is_empty() {
-                let _ = crate::install::launch_product(install_dir, &loaded.payload.manifest.exe);
+            if launch_flag {
+                let _ = crate::install::launch_product(
+                    install_dir,
+                    loaded.payload.manifest.exe.as_deref(),
+                );
             }
             post(hwnd_isize, WM_APP_DONE);
         }

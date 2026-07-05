@@ -52,11 +52,16 @@ pub fn run(args: &PackArgs) -> Result<()> {
         Some(from_dir) => build_patch(
             &args.input,
             from_dir,
-            &args.exe,
+            args.exe.as_deref(),
             &args.to_version,
             &plugin_files,
         )?,
-        None => build_full(&args.input, &args.exe, &args.to_version, &plugin_files)?,
+        None => build_full(
+            &args.input,
+            args.exe.as_deref(),
+            &args.to_version,
+            &plugin_files,
+        )?,
     };
     // Tag files with their feature pack in the manifest (the zip keeps every file).
     crate::features::apply(&mut manifest, &args.features)?;
@@ -266,7 +271,11 @@ fn resolve_stub(args: &PackArgs, pub_key_hex: Option<&str>) -> Result<PathBuf> {
 /// Pull the icon resources from the packaged exe (best-effort: a failure only
 /// logs a warning and the setup keeps the stub's default icon).
 fn extract_app_icons(args: &PackArgs) -> Option<ExeIcons> {
-    let exe_path = args.input.join(&args.exe);
+    let Some(exe_name) = &args.exe else {
+        return None;
+    };
+
+    let exe_path = args.input.join(exe_name);
     if !exe_path.exists() {
         return None;
     }
