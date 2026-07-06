@@ -207,6 +207,8 @@ pub struct ShortcutFileEntry {
     pub target: String,
     #[serde(default)]
     pub args: String,
+    #[serde(default)]
+    pub feature: String,
 }
 
 /// One `[[plugin]]` table from the config file. Converted + validated into a
@@ -391,6 +393,9 @@ impl PackArgs {
             bail!("--publisher must not be empty");
         }
 
+        // Features: shortcuts may reference them by id (validated below).
+        let features = build_features(file.features)?;
+
         Ok(PackArgs {
             product: cli
                 .product
@@ -442,8 +447,8 @@ impl PackArgs {
             reuse_stub: cli.reuse_stub || file.reuse_stub,
             registry: build_registry(file.registry)?,
             plugins: build_plugins(file.plugins)?,
-            shortcuts: build_shortcuts(file.shortcuts)?,
-            features: build_features(file.features)?,
+            shortcuts: build_shortcuts(file.shortcuts, &features)?,
+            features,
         })
     }
 }
@@ -558,8 +563,18 @@ fn build_plugins(raw: Vec<PluginFileEntry>) -> Result<Vec<ResolvedPlugin>> {
 
 /// Convert + validate `[[shortcut]]` entries. `dir`, `name` and `target` must
 /// be non-empty; `name` must be a single filename component (no path separators
-/// or characters illegal on Windows), since it becomes `<name>.lnk`.
-fn build_shortcuts(raw: Vec<ShortcutFileEntry>) -> Result<Vec<ShortcutEntry>> {
+/// or characters illegal on Windows), since it becomes `<name>.lnk`. A non-empty
+/// `feature` must reference a declared `[[feature]]` id (case-insensitive) and is
+/// canonicalized to that id so it matches the runtime `active_features`.
+fn build_shortcuts(
+    raw: Vec<ShortcutFileEntry>,
+    features: &[ResolvedFeature],
+) -> Result<Vec<ShortcutEntry>> {
+    // Lowercased feature id -> canonical id, for case-insensitive lookup.
+    let feature_ids: std::collections::HashMap<String, String> = features
+        .iter()
+        .map(|f| (f.id.to_ascii_lowercase(), f.id.clone()))
+        .collect();
     let mut out = Vec::with_capacity(raw.len());
     for (i, s) in raw.into_iter().enumerate() {
         let n = i + 1;
@@ -581,11 +596,26 @@ fn build_shortcuts(raw: Vec<ShortcutFileEntry>) -> Result<Vec<ShortcutEntry>> {
                  (no \\ / : * ? \" < > |)"
             );
         }
+        let raw_feature = s.feature.trim();
+        let feature = if raw_feature.is_empty() {
+            String::new()
+        } else {
+            feature_ids
+                .get(&raw_feature.to_ascii_lowercase())
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "shortcut #{n} ('{name}'): unknown feature '{raw_feature}' \
+                         (declare a matching [[feature]] or leave it empty)"
+                    )
+                })?
+        };
         out.push(ShortcutEntry {
             dir,
             name,
             target,
             args: s.args,
+            feature,
         });
     }
     Ok(out)
@@ -1019,6 +1049,39 @@ force_reinstall = true
         assert!(
             resolve_with("\n[[shortcut]]\ndir='%DESKTOP%'\nname='X'\ntarget='a.exe'\nicon='x'\n")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn shortcut_feature_valid_and_canonicalized() {
+        // The shortcut references the declared feature case-insensitively; it is
+        // canonicalized to the declared id so it matches runtime active_features.
+        let r = resolve_with(
+            "\n[[feature]]\nid='Pro'\npaths=['pro/**']\n\
+             [[shortcut]]\ndir='%DESKTOP%'\nname='Pro Tool'\ntarget='%EXE%'\nfeature='pro'\n\
+             [[shortcut]]\ndir='%DESKTOP%'\nname='Base'\ntarget='%EXE%'\n",
+        )
+        .unwrap();
+        assert_eq!(r.shortcuts[0].feature, "Pro"); // canonicalized casing
+        assert_eq!(r.shortcuts[1].feature, ""); // no feature → unconditional
+    }
+
+    #[test]
+    fn shortcut_rejects_unknown_feature() {
+        // A feature that no [[feature]] declares is a build-time error.
+        assert!(
+            resolve_with(
+                "\n[[shortcut]]\ndir='%DESKTOP%'\nname='X'\ntarget='a.exe'\nfeature='ghost'\n"
+            )
+            .is_err()
+        );
+        // Even with other features declared, an unmatched id still fails.
+        assert!(
+            resolve_with(
+                "\n[[feature]]\nid='Pro'\npaths=['pro/**']\n\
+                 [[shortcut]]\ndir='%DESKTOP%'\nname='X'\ntarget='a.exe'\nfeature='other'\n"
+            )
+            .is_err()
         );
     }
 
