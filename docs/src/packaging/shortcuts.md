@@ -83,6 +83,21 @@ dir = "%INSTALL_DIR%"; name = "Config Editor"; target = "bin/config-editor.exe"
 dir = "%START_MENU%\\My Company"; name = "%PRODUCT%"; target = "%EXE%"
 ```
 
+## Suppressing shortcuts at install time
+
+Whoever runs the installer can suppress a shortcut kind regardless of what the
+config declares, via launch arguments:
+
+| Flag | Effect |
+|---|---|
+| `--ignore-desktop-shortcuts` | No `.lnk` is created in any Desktop location (`%DESKTOP%`, `%COMMON_DESKTOP%`, `%USER_DESKTOP%`). |
+| `--ignore-start-menu-shortcuts` | No `.lnk` is created in any Start Menu location (`%START_MENU%`, `%COMMON_START_MENU%`, `%USER_START_MENU%`). |
+
+They apply to every [install mode](../running/install.md) (wizard, minimal,
+silent). Shortcuts pointing elsewhere, e.g. `%INSTALL_DIR%` or a `%VAR%` path,
+are unaffected. On an upgrade run with one of these flags, a matching shortcut a
+previous install created is removed as part of the normal reconciliation.
+
 ## Uninstall & upgrade
 
 Each created shortcut's resolved `.lnk` path is recorded in

@@ -22,6 +22,11 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
     let line = common::elevation::read_line_unbuffered(&mut pipe)?;
     let cmd: InstallWorkerCommand = serde_json::from_str(line.trim())?;
 
+    crate::install::set_shortcut_options(crate::install::ShortcutOptions {
+        ignore_desktop: cmd.ignore_desktop_shortcuts,
+        ignore_start_menu: cmd.ignore_start_menu_shortcuts,
+    });
+
     let mut loaded = match crate::payload::load_and_verify() {
         Ok(l) => l,
         Err(e) => {
@@ -123,10 +128,13 @@ pub fn run_elevated_install(
     plugin_inputs: &common::plugin::InputsByPlugin,
     on_progress: impl FnMut(u64, u64, &str),
 ) -> anyhow::Result<()> {
+    let opts = crate::install::shortcut_options();
     common::elevation::run_elevated_relay(
         Some(&InstallWorkerCommand {
             install_dir: install_dir.to_path_buf(),
             plugin_inputs: plugin_inputs.clone(),
+            ignore_desktop_shortcuts: opts.ignore_desktop,
+            ignore_start_menu_shortcuts: opts.ignore_start_menu,
         }),
         on_progress,
     )

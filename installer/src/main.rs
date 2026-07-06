@@ -71,6 +71,14 @@ struct Cli {
     #[arg(long)]
     lang: Option<String>,
 
+    /// Skip creating desktop shortcuts.
+    #[arg(long)]
+    ignore_desktop_shortcuts: bool,
+
+    /// Skip creating Start Menu shortcuts.
+    #[arg(long)]
+    ignore_start_menu_shortcuts: bool,
+
     /// Dev-only: render one UI view with sample data, no payload needed
     /// (`license` | `choose` | `progress` | `done` | `error` | `minimal`).
     #[cfg(debug_assertions)]
@@ -145,6 +153,12 @@ fn run(cli: Cli) -> Result<()> {
     };
     // Record the resolved language process-wide so plugin contexts carry it.
     translator.set_global();
+
+    // Record the shortcut opt-outs process-wide.
+    install::set_shortcut_options(install::ShortcutOptions {
+        ignore_desktop: cli.ignore_desktop_shortcuts,
+        ignore_start_menu: cli.ignore_start_menu_shortcuts,
+    });
 
     // Dev-only: render a single UI view with sample data, no payload needed.
     // e.g. `installer --preview minimal`, `--preview license`.

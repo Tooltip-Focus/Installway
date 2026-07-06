@@ -85,5 +85,7 @@ The built installer, not the builder:
 | `--verify` | Print payload kind / versions / size; don't install. |
 | `--verify-install "<dir>"` | Re-hash an installed copy; report OK/MISSING/CORRUPT. |
 | `--lang <code>` | Force UI language (e.g. `fr`); else `INSTALLWAY_LANG`, else OS locale, else English. |
+| `--ignore-desktop-shortcuts` | Don't create desktop shortcuts (any `%DESKTOP%` location). |
+| `--ignore-start-menu-shortcuts` | Don't create Start Menu shortcuts (any `%START_MENU%` location). |
 
 See [Install modes](../running/install.md) and [Exit codes](exit-codes.md).

@@ -51,6 +51,15 @@ installed version for this patch."
 > you run the silent installer from an already-elevated context (e.g. an admin
 > shell or deployment tool). For a per-user location no elevation is needed.
 
+## Skipping shortcuts
+
+Any mode accepts `--ignore-desktop-shortcuts` and `--ignore-start-menu-shortcuts`
+to suppress. See [Shortcuts](../packaging/shortcuts.md#suppressing-shortcuts-at-install-time).
+
+```pwsh
+.\setup-myapp-1.0.exe --silent --ignore-desktop-shortcuts --ignore-start-menu-shortcuts
+```
+
 ## Runtime behavior (every mode)
 
 For each file in the manifest:

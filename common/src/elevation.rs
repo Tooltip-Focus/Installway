@@ -57,6 +57,12 @@ pub struct InstallWorkerCommand {
     pub install_dir: PathBuf,
     /// Plugin-page answers (`HashMap<plugin_name, BTreeMap<field, value>>`).
     pub plugin_inputs: HashMap<String, BTreeMap<String, String>>,
+    /// Skip creating desktop shortcuts.
+    #[serde(default)]
+    pub ignore_desktop_shortcuts: bool,
+    /// Skip creating Start Menu shortcuts.
+    #[serde(default)]
+    pub ignore_start_menu_shortcuts: bool,
 }
 
 /// Events the elevated worker streams back to the main process.
