@@ -12,8 +12,34 @@ use common::model::shortcut_entry::ShortcutEntry;
 use common::utils::{days_to_ymd, wide};
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShortcutOptions {
+    pub ignore_desktop: bool,
+    pub ignore_start_menu: bool,
+}
+
+impl ShortcutOptions {
+    fn skips(&self, dir: &str) -> bool {
+        (self.ignore_desktop && dir.contains("DESKTOP%"))
+            || (self.ignore_start_menu && dir.contains("START_MENU%"))
+    }
+}
+
+static SHORTCUT_OPTIONS: OnceLock<ShortcutOptions> = OnceLock::new();
+
+/// Record the process-wide shortcut options parsed from the launch arguments.
+pub fn set_shortcut_options(opts: ShortcutOptions) {
+    let _ = SHORTCUT_OPTIONS.set(opts);
+}
+
+/// The process-wide shortcut options; both flags off when never set.
+pub(crate) fn shortcut_options() -> ShortcutOptions {
+    SHORTCUT_OPTIONS.get().copied().unwrap_or_default()
+}
 
 /// Write the uninstaller + metadata to a data folder outside the app directory
 /// and register the product in Add/Remove Programs.
@@ -57,8 +83,9 @@ pub fn finalize(
 
     // Resolve the registry token templates against this install.
     let registry = expand_registry(payload, install_dir);
-    // Resolve shortcut templates to absolute dir/target/args.
-    let shortcuts = expand_shortcuts(payload, install_dir, requires_admin);
+    // Resolve shortcut templates to absolute dir/target/args, honoring the
+    // launch-argument opt-outs (desktop / start-menu).
+    let shortcuts = expand_shortcuts(payload, install_dir, requires_admin, shortcut_options());
 
     // Atomic + retrying write: a fresh `.exe` is the prime Defender trigger
     // (it locks the new file to scan it), so a bare write could fail the
@@ -320,6 +347,7 @@ fn expand_shortcuts(
     payload: &InstallerPayload,
     install_dir: &Path,
     machine: bool,
+    opts: ShortcutOptions,
 ) -> Vec<ShortcutEntry> {
     if payload.shortcuts.is_empty() {
         return Vec::new();
@@ -364,6 +392,13 @@ fn expand_shortcuts(
 
     let mut out = Vec::with_capacity(payload.shortcuts.len());
     for s in &payload.shortcuts {
+        if opts.skips(&s.dir) {
+            common::log::info(format!(
+                "shortcut '{}': {} skipped by launch argument",
+                s.name, s.dir
+            ));
+            continue;
+        }
         let dir = sub(&s.dir);
         // An unresolved location token means the folder isn't available - skip.
         // Every location token ends in `DESKTOP%` or `START_MENU%`.
@@ -624,7 +659,7 @@ mod tests {
             target: "%EXE%".into(),
             args: "--name %PRODUCT% --v %VERSION%".into(),
         }]);
-        let out = expand_shortcuts(&p, dir, false);
+        let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].dir, r"C:\Apps\MyApp\sub");
         assert_eq!(out[0].target, r"C:\Apps\MyApp\a.exe");
@@ -640,7 +675,7 @@ mod tests {
             target: "bin/helper.exe".into(),
             args: String::new(),
         }]);
-        let out = expand_shortcuts(&p, dir, false);
+        let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
         assert_eq!(out[0].target, r"C:\Apps\MyApp\bin\helper.exe");
     }
 
@@ -653,13 +688,121 @@ mod tests {
             target: r"C:\Windows\notepad.exe".into(),
             args: String::new(),
         }]);
-        let out = expand_shortcuts(&p, dir, false);
+        let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
         assert_eq!(out[0].target, r"C:\Windows\notepad.exe");
     }
 
     #[test]
     fn expand_empty_is_empty() {
         let p = payload_with(Vec::new());
-        assert!(expand_shortcuts(&p, Path::new(r"C:\x"), false).is_empty());
+        assert!(
+            expand_shortcuts(&p, Path::new(r"C:\x"), false, ShortcutOptions::default()).is_empty()
+        );
+    }
+
+    #[test]
+    fn shortcut_options_skips_by_kind() {
+        // Desktop-only ignores every desktop location token, not start-menu ones.
+        let d = ShortcutOptions {
+            ignore_desktop: true,
+            ignore_start_menu: false,
+        };
+        assert!(d.skips("%DESKTOP%"));
+        assert!(d.skips(r"%DESKTOP%\Sub"));
+        assert!(d.skips("%COMMON_DESKTOP%"));
+        assert!(d.skips("%USER_DESKTOP%"));
+        assert!(!d.skips("%START_MENU%"));
+        assert!(!d.skips("%INSTALL_DIR%"));
+
+        // Start-menu-only is the mirror image.
+        let s = ShortcutOptions {
+            ignore_desktop: false,
+            ignore_start_menu: true,
+        };
+        assert!(s.skips("%START_MENU%"));
+        assert!(s.skips("%COMMON_START_MENU%"));
+        assert!(s.skips("%USER_START_MENU%"));
+        assert!(!s.skips("%DESKTOP%"));
+        assert!(!s.skips("%INSTALL_DIR%"));
+
+        // Default keeps everything; both-on drops both kinds.
+        let none = ShortcutOptions::default();
+        assert!(!none.skips("%DESKTOP%"));
+        assert!(!none.skips("%START_MENU%"));
+        let both = ShortcutOptions {
+            ignore_desktop: true,
+            ignore_start_menu: true,
+        };
+        assert!(both.skips("%DESKTOP%"));
+        assert!(both.skips("%START_MENU%"));
+    }
+
+    #[test]
+    fn expand_skips_desktop_when_ignored() {
+        let dir = Path::new(r"C:\Apps\MyApp");
+        let p = payload_with(vec![
+            ShortcutEntry {
+                dir: "%DESKTOP%".into(),
+                name: "OnDesktop".into(),
+                target: "%EXE%".into(),
+                args: String::new(),
+            },
+            // Install-dir shortcuts always resolve, so they make a deterministic
+            // survivor regardless of the test host's Desktop folder.
+            ShortcutEntry {
+                dir: "%INSTALL_DIR%".into(),
+                name: "InDir".into(),
+                target: "%EXE%".into(),
+                args: String::new(),
+            },
+        ]);
+        let opts = ShortcutOptions {
+            ignore_desktop: true,
+            ignore_start_menu: false,
+        };
+        let out = expand_shortcuts(&p, dir, false, opts);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "InDir");
+    }
+
+    #[test]
+    fn expand_skips_start_menu_when_ignored() {
+        let dir = Path::new(r"C:\Apps\MyApp");
+        let p = payload_with(vec![
+            ShortcutEntry {
+                dir: r"%START_MENU%\Group".into(),
+                name: "InStartMenu".into(),
+                target: "%EXE%".into(),
+                args: String::new(),
+            },
+            ShortcutEntry {
+                dir: "%INSTALL_DIR%".into(),
+                name: "InDir".into(),
+                target: "%EXE%".into(),
+                args: String::new(),
+            },
+        ]);
+        let opts = ShortcutOptions {
+            ignore_desktop: false,
+            ignore_start_menu: true,
+        };
+        let out = expand_shortcuts(&p, dir, false, opts);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "InDir");
+    }
+
+    #[test]
+    fn expand_default_keeps_install_dir_shortcut() {
+        // Neither flag set: an install-dir shortcut is untouched.
+        let dir = Path::new(r"C:\Apps\MyApp");
+        let p = payload_with(vec![ShortcutEntry {
+            dir: "%INSTALL_DIR%".into(),
+            name: "InDir".into(),
+            target: "%EXE%".into(),
+            args: String::new(),
+        }]);
+        let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "InDir");
     }
 }
