@@ -2,12 +2,10 @@ use crate::model::install_info::InstallInfo;
 use crate::model::installer_payload::InstallerPayload;
 use std::path::Path;
 
-/// Run context, sent to the child as JSON on stdin.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
-pub struct PluginCtx {
+pub struct PluginContext {
     pub install_dir: String,
-    /// Per-user data dir (where `installer_info.json` lives). The place for plugin
-    /// state that should persist across upgrades; the uninstaller deletes it.
+    /// Per-user data dir (where `installer_info.json` lives).
     #[serde(default)]
     pub data_dir: String,
     pub product: String,
@@ -18,20 +16,16 @@ pub struct PluginCtx {
     /// `up` only: the user's page answers, keyed `"<page_id>.<widget_id>"`.
     #[serde(default)]
     pub inputs_json: String,
-    /// Host UI language code (2 ISO-639 chars, e.g. `"en"`/`"fr"`), so a plugin
-    /// can localize its pages/log to match the installer. Empty (older records)
-    /// is treated as the default language.
+    /// Host UI language code.
     #[serde(default)]
     pub lang: String,
     /// Feature-pack catalog for `installway_pages` / `installway_features`: a JSON
-    /// object `{ "all": [...], "active": [...] }` (declared features + the current
-    /// base set), so a plugin can render a pre-checked picker. Empty when the
-    /// build declares no features.
+    /// object `{ "all": [...], "active": [...] }`.
     #[serde(default)]
     pub features_json: String,
 }
 
-impl PluginCtx {
+impl PluginContext {
     pub fn for_install(
         payload: &InstallerPayload,
         install_dir: &Path,
@@ -80,8 +74,7 @@ impl PluginCtx {
     }
 }
 
-/// Normalize `install_dir` joined with `exe_rel` to a backslash path string
-/// (plugins receive Windows-style paths).
+/// Normalize `install_dir` joined with `exe_rel` to a backslash path string.
 fn exe_path(install_dir: &Path, exe_rel: &str) -> String {
     install_dir
         .join(exe_rel)

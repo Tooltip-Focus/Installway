@@ -19,11 +19,15 @@ pub mod plugin_entry;
 pub mod plugin_page;
 pub mod plugin_phase;
 pub mod plugin_widget;
-pub mod reg_entry;
-pub mod reg_kind;
-pub mod reg_value;
+pub mod registry_entry;
+pub mod registry_kind;
+pub mod registry_value;
 pub mod shortcut_entry;
 pub mod signed_payload;
+
+pub(crate) fn default_true() -> bool {
+    true
+}
 
 #[cfg(test)]
 mod tests {
@@ -38,8 +42,8 @@ mod tests {
     use super::plugin_page::PluginPage;
     use super::plugin_phase::PluginPhase;
     use super::plugin_widget::PluginWidget;
-    use super::reg_kind::RegKind;
-    use super::reg_value::RegValue;
+    use super::registry_kind::RegistryKind;
+    use super::registry_value::RegistryValue;
     use crate::model::feature_select::FeatureSelection;
 
     #[test]
@@ -86,8 +90,8 @@ mod tests {
         assert_eq!(back.publisher, "Pub");
         assert_eq!(back.product_id, "P_id");
         assert_eq!(back.registry.len(), 1);
-        assert_eq!(back.registry[0].kind, RegKind::Dword);
-        assert_eq!(back.registry[0].value, RegValue::Int(42));
+        assert_eq!(back.registry[0].kind, RegistryKind::Dword);
+        assert_eq!(back.registry[0].value, RegistryValue::Int(42));
         assert_eq!(back.plugins.len(), 1);
         assert_eq!(back.plugins[0].phase, PluginPhase::PreInstall);
         assert!(back.plugins[0].required);

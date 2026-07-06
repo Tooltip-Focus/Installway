@@ -6,8 +6,8 @@ use common::model::file_assoc::FileAssoc;
 use common::model::install_info::InstallInfo;
 use common::model::installer_payload::InstallerPayload;
 use common::model::plugin_phase::PluginPhase;
-use common::model::reg_entry::RegEntry;
-use common::model::reg_value::RegValue;
+use common::model::registry_entry::RegistryEntry;
+use common::model::registry_value::RegistryValue;
 use common::model::shortcut_entry::ShortcutEntry;
 use common::utils::{days_to_ymd, wide};
 use std::fs;
@@ -239,7 +239,7 @@ fn run_post_install_plugins(
         return Ok(());
     }
     let pctx =
-        common::model::plugin_ctx::PluginCtx::for_install(payload, install_dir, requires_admin);
+        common::model::plugin_ctx::PluginContext::for_install(payload, install_dir, requires_admin);
     let self_exe = std::env::current_exe()?;
     common::plugin::run_each(&self_exe, &pctx, &items, "up", true)
 }
@@ -286,22 +286,22 @@ impl Tokens {
 /// Resolve token templates in each registry entry against this install. Tokens:
 /// the shared set (see [`Tokens`]) plus `%APP_KEY%`
 /// (= `Software\<publisher>\<product_id>`).
-fn expand_registry(payload: &InstallerPayload, install_dir: &Path) -> Vec<RegEntry> {
+fn expand_registry(payload: &InstallerPayload, install_dir: &Path) -> Vec<RegistryEntry> {
     let tk = Tokens::new(payload, install_dir);
     let app_key = format!(r"Software\{}\{}", tk.publisher, tk.product_id);
     let sub = |s: &str| tk.base(s).replace("%APP_KEY%", &app_key);
     payload
         .registry
         .iter()
-        .map(|e| RegEntry {
+        .map(|e| RegistryEntry {
             hive: e.hive.clone(),
             key: sub(&e.key),
             name: sub(&e.name),
             kind: e.kind,
             value: match &e.value {
-                RegValue::Text(s) => RegValue::Text(sub(s)),
-                RegValue::List(v) => RegValue::List(v.iter().map(|s| sub(s)).collect()),
-                RegValue::Int(n) => RegValue::Int(*n),
+                RegistryValue::Text(s) => RegistryValue::Text(sub(s)),
+                RegistryValue::List(v) => RegistryValue::List(v.iter().map(|s| sub(s)).collect()),
+                RegistryValue::Int(n) => RegistryValue::Int(*n),
             },
         })
         .collect()

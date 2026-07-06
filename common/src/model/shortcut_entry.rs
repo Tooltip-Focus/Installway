@@ -1,11 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// One shortcut (`.lnk`) the installer creates.
-///
-/// In the payload the strings are templates; in `InstallInfo` they are the
-/// resolved values actually written (absolute `dir`/`target`), so the
-/// uninstaller removes exactly the files it created and an upgrade can
-/// reconcile a changed list by resolved `.lnk` path.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ShortcutEntry {
     /// Directory the `.lnk` is placed in. Tokens: `%DESKTOP%`, `%START_MENU%`

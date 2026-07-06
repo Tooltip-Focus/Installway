@@ -7,9 +7,9 @@ use common::model::file_assoc::FileAssoc;
 use common::model::install_dir_restriction::InstallDirRestriction;
 use common::model::launch_option::LaunchOption;
 use common::model::plugin_phase::PluginPhase;
-use common::model::reg_entry::RegEntry;
-use common::model::reg_kind::RegKind;
-use common::model::reg_value::RegValue;
+use common::model::registry_entry::RegistryEntry;
+use common::model::registry_kind::RegistryKind;
+use common::model::registry_value::RegistryValue;
 use common::model::shortcut_entry::ShortcutEntry;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -183,7 +183,7 @@ pub struct PackCli {
 }
 
 /// One `[[registry]]` table from the config file. Converted + validated into a
-/// [`RegEntry`] by [`build_registry`]. `value` is left as a raw `toml::Value`
+/// [`RegistryEntry`] by [`build_registry`]. `value` is left as a raw `toml::Value`
 /// so a string / integer / array can all be accepted per `type`.
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -349,7 +349,7 @@ pub struct PackArgs {
     pub uninstaller: Option<PathBuf>,
     pub out: PathBuf,
     pub reuse_stub: bool,
-    pub registry: Vec<RegEntry>,
+    pub registry: Vec<RegistryEntry>,
     pub plugins: Vec<ResolvedPlugin>,
     pub shortcuts: Vec<ShortcutEntry>,
     pub features: Vec<ResolvedFeature>,
@@ -594,7 +594,7 @@ fn build_shortcuts(raw: Vec<ShortcutFileEntry>) -> Result<Vec<ShortcutEntry>> {
 /// Convert + validate `[[registry]]` entries. HKCU or HKLM (HKLM needs an
 /// elevated / machine-wide install); type/value must agree; key non-empty and
 /// not starting with `\`.
-fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegEntry>> {
+fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegistryEntry>> {
     let mut out = Vec::with_capacity(raw.len());
     for (i, e) in raw.into_iter().enumerate() {
         let n = i + 1;
@@ -616,12 +616,12 @@ fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegEntry>> {
             bail!("registry #{n}: key must not start with '\\'");
         }
         let kind = match e.kind.to_ascii_lowercase().as_str() {
-            "sz" => RegKind::Sz,
-            "expand_sz" => RegKind::ExpandSz,
-            "dword" => RegKind::Dword,
-            "qword" => RegKind::Qword,
-            "multi_sz" => RegKind::MultiSz,
-            "binary" => RegKind::Binary,
+            "sz" => RegistryKind::Sz,
+            "expand_sz" => RegistryKind::ExpandSz,
+            "dword" => RegistryKind::Dword,
+            "qword" => RegistryKind::Qword,
+            "multi_sz" => RegistryKind::MultiSz,
+            "binary" => RegistryKind::Binary,
             other => bail!("registry #{n}: unknown type '{other}'"),
         };
         let value = convert_reg_value(kind, &e.value).ok_or_else(|| {
@@ -630,7 +630,7 @@ fn build_registry(raw: Vec<RegFileEntry>) -> Result<Vec<RegEntry>> {
                 e.kind
             )
         })?;
-        out.push(RegEntry {
+        out.push(RegistryEntry {
             hive: hive.to_string(),
             key,
             name: e.name,
@@ -681,30 +681,32 @@ pub(crate) fn parse_assocs(raw: &[String], product_id: &str) -> Result<Vec<FileA
     Ok(out)
 }
 
-fn convert_reg_value(kind: RegKind, v: &toml::Value) -> Option<RegValue> {
+fn convert_reg_value(kind: RegistryKind, v: &toml::Value) -> Option<RegistryValue> {
     match kind {
-        RegKind::Sz | RegKind::ExpandSz => Some(RegValue::Text(v.as_str()?.to_string())),
-        RegKind::Binary => {
+        RegistryKind::Sz | RegistryKind::ExpandSz => {
+            Some(RegistryValue::Text(v.as_str()?.to_string()))
+        }
+        RegistryKind::Binary => {
             let s = v.as_str()?;
             (s.len() % 2 == 0 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-                .then(|| RegValue::Text(s.to_string()))
+                .then(|| RegistryValue::Text(s.to_string()))
         }
-        RegKind::Dword => {
+        RegistryKind::Dword => {
             let n = v.as_integer()?;
             (0..=u32::MAX as i64)
                 .contains(&n)
-                .then_some(RegValue::Int(n as u64))
+                .then_some(RegistryValue::Int(n as u64))
         }
-        RegKind::Qword => {
+        RegistryKind::Qword => {
             let n = v.as_integer()?;
-            (n >= 0).then_some(RegValue::Int(n as u64))
+            (n >= 0).then_some(RegistryValue::Int(n as u64))
         }
-        RegKind::MultiSz => {
+        RegistryKind::MultiSz => {
             let arr = v.as_array()?;
             arr.iter()
                 .map(|it| it.as_str().map(str::to_string))
                 .collect::<Option<Vec<_>>>()
-                .map(RegValue::List)
+                .map(RegistryValue::List)
         }
     }
 }
@@ -868,12 +870,12 @@ force_reinstall = true
         )
         .unwrap();
         assert_eq!(r.registry.len(), 2);
-        assert_eq!(r.registry[0].kind, RegKind::Dword);
-        assert_eq!(r.registry[0].value, RegValue::Int(7));
-        assert_eq!(r.registry[1].kind, RegKind::MultiSz);
+        assert_eq!(r.registry[0].kind, RegistryKind::Dword);
+        assert_eq!(r.registry[0].value, RegistryValue::Int(7));
+        assert_eq!(r.registry[1].kind, RegistryKind::MultiSz);
         assert_eq!(
             r.registry[1].value,
-            RegValue::List(vec!["a".into(), "b".into()])
+            RegistryValue::List(vec!["a".into(), "b".into()])
         );
     }
 

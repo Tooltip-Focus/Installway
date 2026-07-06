@@ -11,7 +11,7 @@
 //! the parent side (verify each DLL's hash, spawn the child, enforce the
 //! required/timeout policy).
 
-use crate::model::plugin_ctx::PluginCtx;
+use crate::model::plugin_ctx::PluginContext;
 use crate::model::plugin_entry::PluginEntry;
 use crate::utils::wide;
 use anyhow::{Context, Result, bail};
@@ -60,7 +60,7 @@ pub fn inputs_json_for(inputs: &InputsByPlugin, name: &str) -> String {
 /// best-effort).
 pub fn run_each(
     self_exe: &Path,
-    base_ctx: &PluginCtx,
+    base_ctx: &PluginContext,
     items: &[(PluginEntry, PathBuf, String)],
     func: &str,
     enforce_required: bool,
@@ -99,7 +99,7 @@ pub fn run_each(
 /// `marquee: false`.
 pub fn run_up_single(
     self_exe: &Path,
-    base_ctx: &PluginCtx,
+    base_ctx: &PluginContext,
     entry: &PluginEntry,
     dll: &Path,
     inputs_json: &str,
@@ -143,7 +143,7 @@ fn verify_plugin_hash(entry: &PluginEntry, dll: &Path) -> Result<()> {
 /// every plugin and ignore non-participants.
 pub fn query_features(
     self_exe: &Path,
-    base_ctx: &PluginCtx,
+    base_ctx: &PluginContext,
     entry: &PluginEntry,
     dll: &Path,
     inputs_json: &str,
@@ -168,7 +168,7 @@ pub fn query_features(
 /// skip — a bad step must not block the wizard.
 pub fn query_step(
     self_exe: &Path,
-    base_ctx: &PluginCtx,
+    base_ctx: &PluginContext,
     entry: &PluginEntry,
     dll: &Path,
     answers_json: &str,
@@ -473,7 +473,7 @@ pub fn host_main(
     if std::io::stdin().read_to_string(&mut input).is_err() {
         return 101;
     }
-    let ctx: PluginCtx = match serde_json::from_str(&input) {
+    let ctx: PluginContext = match serde_json::from_str(&input) {
         Ok(c) => c,
         Err(_) => return 102,
     };
@@ -534,7 +534,7 @@ fn open_pages_client(name: &str) -> Option<HANDLE> {
     }
 }
 
-unsafe fn call(dll: &Path, func: &str, ctx: &PluginCtx) -> i32 {
+unsafe fn call(dll: &Path, func: &str, ctx: &PluginContext) -> i32 {
     let wdll = wide(&dll.as_os_str().to_string_lossy());
     let hmod = match unsafe { LoadLibraryW(PCWSTR(wdll.as_ptr())) } {
         Ok(h) if !h.is_invalid() => h,
@@ -549,7 +549,7 @@ unsafe fn call(dll: &Path, func: &str, ctx: &PluginCtx) -> i32 {
     result
 }
 
-unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginCtx) -> i32 {
+unsafe fn call_loaded(hmod: HMODULE, func: &str, ctx: &PluginContext) -> i32 {
     let Some(abi_ptr) = (unsafe { GetProcAddress(hmod, s!("installway_abi_version")) }) else {
         write_log("ERROR", "plugin missing installway_abi_version");
         return 111;
@@ -670,7 +670,7 @@ mod tests {
     fn ctx_parses_without_inputs() {
         let j = r#"{"install_dir":"C:\\app","product":"P","product_id":"P_id",
                     "version":"1.0","exe":"C:\\app\\p.exe","log_path":"C:\\t.log"}"#;
-        let c: PluginCtx = serde_json::from_str(j).unwrap();
+        let c: PluginContext = serde_json::from_str(j).unwrap();
         assert_eq!(c.product, "P");
         assert!(c.inputs_json.is_empty());
     }
@@ -678,27 +678,29 @@ mod tests {
     /// `inputs_json` round-trips.
     #[test]
     fn ctx_inputs_round_trip() {
-        let c = PluginCtx {
+        let c = PluginContext {
             inputs_json: r#"{"region.country":"FR"}"#.into(),
             ..Default::default()
         };
-        let back: PluginCtx = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        let back: PluginContext =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.inputs_json, c.inputs_json);
     }
 
     /// `lang` round-trips, and an older record without it defaults to empty.
     #[test]
     fn ctx_lang_round_trip_and_default() {
-        let c = PluginCtx {
+        let c = PluginContext {
             lang: "fr".into(),
             ..Default::default()
         };
-        let back: PluginCtx = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        let back: PluginContext =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.lang, "fr");
 
         let j = r#"{"install_dir":"C:\\app","product":"P","product_id":"P_id",
                     "version":"1.0","exe":"C:\\app\\p.exe","log_path":"C:\\t.log"}"#;
-        let old: PluginCtx = serde_json::from_str(j).unwrap();
+        let old: PluginContext = serde_json::from_str(j).unwrap();
         assert!(old.lang.is_empty());
     }
 }

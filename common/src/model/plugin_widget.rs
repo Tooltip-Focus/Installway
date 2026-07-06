@@ -1,14 +1,8 @@
 use crate::model::choice_option::ChoiceOption;
 use crate::model::choice_style::ChoiceStyle;
+use crate::model::default_true;
 use serde::{Deserialize, Serialize};
 
-fn default_true() -> bool {
-    true
-}
-
-/// One form control. `kind` is the serde tag; each maps to a built-in Win32
-/// control. Unknown kinds are rejected at parse — the host must be able to draw
-/// whatever it is handed.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PluginWidget {

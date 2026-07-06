@@ -5,7 +5,7 @@ use crate::cleanup;
 use crate::ui::{self, UninstallParams};
 use anyhow::{Context, Result};
 use common::model::manifest::Manifest;
-use common::model::plugin_ctx::PluginCtx;
+use common::model::plugin_ctx::PluginContext;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
@@ -214,7 +214,7 @@ fn run_down_plugins(info: &common::model::install_info::InstallInfo, data_dir: &
         .rev()
         .map(|p| (p.clone(), data_dir.join(&p.file), String::new()))
         .collect();
-    let ctx = PluginCtx::for_uninstall(info, data_dir);
+    let ctx = PluginContext::for_uninstall(info, data_dir);
     if let Ok(self_exe) = std::env::current_exe() {
         let _ = common::plugin::run_each(&self_exe, &ctx, &items, "down", false);
     }
