@@ -354,7 +354,11 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
             to_commit.len(),
             deleted.len()
         ));
-        (ctx.on_progress)(total_bytes, total_bytes, "Finalizing...");
+        (ctx.on_progress)(
+            total_bytes,
+            total_bytes,
+            &ctx.translator.get("install.progress_finalizing"),
+        );
         write_journal(&temp_dir, &to_commit, &deleted)?;
 
         let commit_result = (|| -> Result<()> {
@@ -383,7 +387,11 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
         // Re-read each committed file from disk to catch corruption from the
         // write/rename itself (bad sector, FS glitch). Still inside the
         // transaction, backups intact.
-        (ctx.on_progress)(total_bytes, total_bytes, "Verifying...");
+        (ctx.on_progress)(
+            total_bytes,
+            total_bytes,
+            &ctx.translator.get("install.progress_verifying"),
+        );
         common::log::info(format!("verifying {} committed file(s)", to_commit.len()));
         let verify_started = Instant::now();
         let mut corrupt = find_corrupt(&ctx.install_dir, manifest, &to_commit, &ctx.cancel);
@@ -411,7 +419,11 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
                 corrupt.len()
             ));
             for attempt in 1..=VERIFY_REPAIR_ATTEMPTS {
-                (ctx.on_progress)(total_bytes, total_bytes, "Repairing...");
+                (ctx.on_progress)(
+                    total_bytes,
+                    total_bytes,
+                    &ctx.translator.get("install.progress_repairing"),
+                );
                 let repair = repair_corrupt(
                     ctx.zip_bytes,
                     ctx.payload.kind,
@@ -471,7 +483,11 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
         started.elapsed().as_millis()
     ));
 
-    (ctx.on_progress)(total_bytes, total_bytes, "done");
+    (ctx.on_progress)(
+        total_bytes,
+        total_bytes,
+        &ctx.translator.get("install.progress_done"),
+    );
     Ok(install_lock)
 }
 
