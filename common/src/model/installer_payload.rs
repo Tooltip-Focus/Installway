@@ -119,6 +119,7 @@ impl Default for InstallerPayload {
                 name: "P".into(),
                 target: "a.exe".into(),
                 args: "--flag".into(),
+                feature: String::new(),
             }],
             force_reinstall: true,
             purge_unknown_files: true,

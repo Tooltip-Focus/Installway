@@ -13,4 +13,7 @@ pub struct ShortcutEntry {
     /// Free-form command-line arguments appended to the shortcut. Empty = none.
     #[serde(default)]
     pub args: String,
+    /// Feature-pack id this shortcut is tied to.
+    #[serde(default)]
+    pub feature: String,
 }

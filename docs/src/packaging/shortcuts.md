@@ -19,10 +19,11 @@ Shortcuts are config-file only (`[[shortcut]]` array-of-tables), not CLI flags:
 
 ```toml
 [[shortcut]]
-dir    = "%DESKTOP%"   # folder the .lnk goes in (tokens below)
-name   = "My App"      # file name without ".lnk"; also the label
-target = "%EXE%"       # what it points at (relative → install dir)
-args   = ""            # optional free-form command-line arguments
+dir     = "%DESKTOP%"   # folder the .lnk goes in (tokens below)
+name    = "My App"      # file name without ".lnk"; also the label
+target  = "%EXE%"       # what it points at (relative → install dir)
+args    = ""            # optional free-form command-line arguments
+feature = ""            # optional feature-pack id gating this shortcut
 ```
 
 | Field | Required | Meaning |
@@ -31,10 +32,12 @@ args   = ""            # optional free-form command-line arguments
 | `name` | yes | Shortcut file name **without** `.lnk` (becomes `<name>.lnk`). Must be a single filename — no `\ / : * ? " < > \|`. |
 | `target` | yes | Shortcut target. A **relative** path resolves against the chosen install dir; an absolute path (or `%EXE%`) is used as-is. |
 | `args` | no | A string appended verbatim as the shortcut's command-line arguments. |
+| `feature` | no | A [feature-pack](features.md) id. When set, the shortcut is created **only if that feature is active** in the install. Empty = always created. |
 
 The working directory is set to the install dir. An empty `dir`, `name`, or
 `target`, or an illegal character in `name`, fails the build with a message
-naming the entry.
+naming the entry. A non-empty `feature` that no `[[feature]]` declares also fails
+the build.
 
 ## Tokens
 
@@ -81,7 +84,30 @@ dir = "%INSTALL_DIR%"; name = "Config Editor"; target = "bin/config-editor.exe"
 # Group under a Start Menu subfolder.
 [[shortcut]]
 dir = "%START_MENU%\\My Company"; name = "%PRODUCT%"; target = "%EXE%"
+
+# Only created when the "pro" feature pack is active in the install.
+[[shortcut]]
+dir = "%DESKTOP%"; name = "%PRODUCT% Pro"; target = "%EXE%"; feature = "pro"
 ```
+
+## Gating on a feature pack
+
+Set `feature` to a declared [feature-pack](features.md) id to make a shortcut
+**conditional**: it is created only when that feature is active for the install.
+Features resolve **after plugins run** (a plugin may turn one on or off), so the
+decision reflects the final active set — the same set that filters which files
+land on disk.
+
+```toml
+[[feature]]
+id = "pro"
+paths = ["pro/**"]
+
+# This shortcut appears only when "pro" ends up active.
+[[shortcut]]
+dir = "%START_MENU%"; name = "%PRODUCT% Pro"; target = "%EXE%"; feature = "pro"
+```
+
 
 ## Suppressing shortcuts at install time
 

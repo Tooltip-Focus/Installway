@@ -392,6 +392,15 @@ fn expand_shortcuts(
 
     let mut out = Vec::with_capacity(payload.shortcuts.len());
     for s in &payload.shortcuts {
+        // Feature condition: a shortcut tied to a feature is created only
+        // when that feature is active. An empty `feature` is unconditional.
+        if !s.feature.is_empty() && !payload.active_features.iter().any(|f| f == &s.feature) {
+            common::log::info(format!(
+                "shortcut '{}': feature '{}' inactive - skipped",
+                s.name, s.feature
+            ));
+            continue;
+        }
         if opts.skips(&s.dir) {
             common::log::info(format!(
                 "shortcut '{}': {} skipped by launch argument",
@@ -424,6 +433,7 @@ fn expand_shortcuts(
             name: s.name.clone(),
             target,
             args: sub(&s.args),
+            feature: String::new(),
         });
     }
     out
@@ -658,6 +668,7 @@ mod tests {
             name: "Tool".into(),
             target: "%EXE%".into(),
             args: "--name %PRODUCT% --v %VERSION%".into(),
+            feature: String::new(),
         }]);
         let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
         assert_eq!(out.len(), 1);
@@ -674,6 +685,7 @@ mod tests {
             name: "Helper".into(),
             target: "bin/helper.exe".into(),
             args: String::new(),
+            feature: String::new(),
         }]);
         let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
         assert_eq!(out[0].target, r"C:\Apps\MyApp\bin\helper.exe");
@@ -687,6 +699,7 @@ mod tests {
             name: "Notepad".into(),
             target: r"C:\Windows\notepad.exe".into(),
             args: String::new(),
+            feature: String::new(),
         }]);
         let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
         assert_eq!(out[0].target, r"C:\Windows\notepad.exe");
@@ -746,6 +759,7 @@ mod tests {
                 name: "OnDesktop".into(),
                 target: "%EXE%".into(),
                 args: String::new(),
+                feature: String::new(),
             },
             // Install-dir shortcuts always resolve, so they make a deterministic
             // survivor regardless of the test host's Desktop folder.
@@ -754,6 +768,7 @@ mod tests {
                 name: "InDir".into(),
                 target: "%EXE%".into(),
                 args: String::new(),
+                feature: String::new(),
             },
         ]);
         let opts = ShortcutOptions {
@@ -774,12 +789,14 @@ mod tests {
                 name: "InStartMenu".into(),
                 target: "%EXE%".into(),
                 args: String::new(),
+                feature: String::new(),
             },
             ShortcutEntry {
                 dir: "%INSTALL_DIR%".into(),
                 name: "InDir".into(),
                 target: "%EXE%".into(),
                 args: String::new(),
+                feature: String::new(),
             },
         ]);
         let opts = ShortcutOptions {
@@ -800,9 +817,46 @@ mod tests {
             name: "InDir".into(),
             target: "%EXE%".into(),
             args: String::new(),
+            feature: String::new(),
         }]);
         let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "InDir");
+    }
+
+    #[test]
+    fn expand_creates_feature_shortcut_only_when_active() {
+        let dir = Path::new(r"C:\Apps\MyApp");
+        // %INSTALL_DIR% always resolves, so presence is deterministic.
+        let mut p = payload_with(vec![
+            ShortcutEntry {
+                dir: "%INSTALL_DIR%".into(),
+                name: "ProTool".into(),
+                target: "%EXE%".into(),
+                args: String::new(),
+                feature: "Pro".into(),
+            },
+            ShortcutEntry {
+                dir: "%INSTALL_DIR%".into(),
+                name: "Base".into(),
+                target: "%EXE%".into(),
+                args: String::new(),
+                feature: String::new(),
+            },
+        ]);
+
+        // Feature inactive: only the unconditional shortcut survives.
+        p.active_features = vec![];
+        let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "Base");
+
+        // Feature active: both are created, and the recorded entries no longer
+        // carry the (already-evaluated) condition.
+        p.active_features = vec!["Pro".into()];
+        let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
+        let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["ProTool", "Base"]);
+        assert!(out.iter().all(|e| e.feature.is_empty()));
     }
 }

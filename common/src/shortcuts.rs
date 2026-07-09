@@ -81,6 +81,7 @@ mod tests {
             name: name.to_string(),
             target: "app.exe".into(),
             args: String::new(),
+            feature: String::new(),
         }
     }
 
