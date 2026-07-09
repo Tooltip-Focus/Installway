@@ -108,6 +108,7 @@ impl Default for InstallerPayload {
                 total_patch_size: 0,
                 features: vec![],
                 default_features: vec![],
+                feature_mode: Default::default(),
             },
             license_text: None,
             associations: vec![FileAssoc {

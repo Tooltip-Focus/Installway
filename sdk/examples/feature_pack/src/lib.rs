@@ -3,9 +3,10 @@
 //!
 //! Declared `ui = true`. `installway_pages` shows a checkbox list of every
 //! feature the build declares (from `ctx.features_json`), pre-checked to the
-//! current set (`active`) — i.e. the build defaults on a fresh install, or what
-//! was installed before on an upgrade. `installway_features` then turns the
-//! user's checked set into the `{ enable, disable }` delta the host applies. The
+//! current set (`active`) — the base the host picked per `feature_mode`: the build
+//! defaults on a fresh install, then either the prior install's set (`sticky`) or
+//! the build defaults again (`override`) on an upgrade. `installway_features` then
+//! turns the user's checked set into the `{ enable, disable }` delta the host applies. The
 //! host persists the result itself (in `installer_info.json`); the plugin keeps
 //! no state. In silent/compact mode the page falls back to its defaults, so the
 //! base set installs unattended. Mirrors `sdk/installway_plugin.h`.

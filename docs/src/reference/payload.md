@@ -63,6 +63,7 @@ struct Manifest {
     total_patch_size: u64,
     features: Vec<String>,             // declared feature-pack ids (see Feature packs)
     default_features: Vec<String>,     // subset enabled by default on a fresh install
+    feature_mode: FeatureMode,         // upgrade base: "sticky" (default) | "override"
 }
 
 struct FileEntry {
@@ -93,7 +94,8 @@ uninstaller: `product`, `product_id`, `publisher`, `version`, `install_dir`,
 `associations`, the resolved `shortcuts`, the resolved `registry` entries to
 remove, `requires_admin` (drives the `HKLM`/`%ProgramData%` vs
 `HKCU`/`%LOCALAPPDATA%` choice), and `features` (the active feature packs, read
-back on the next upgrade — see [Feature packs](../packaging/features.md)). Records written before the product/id split
+back on the next upgrade to clean up dropped features and, under `feature_mode =
+"sticky"`, to seed the base — see [Feature packs](../packaging/features.md)). Records written before the product/id split
 have no `product_id`; readers fall back to `registry_key` and a sanitized
 `product`.
 

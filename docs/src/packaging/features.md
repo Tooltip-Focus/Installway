@@ -19,18 +19,40 @@ contribute a checkbox page the installer renders), so you stay in control.
 3. **Resolve** — just before staging the host queries each plugin's
    `installway_features` (with this run's page answers); each returns an
    `{ enable, disable }` delta. The active set is `(base ∪ enable) \ disable`,
-   where *base* is the previously-installed set on an upgrade or the build's
-   **default features** (`default = true`) on a fresh install. Only ids the build
-   declares are kept.
+   where *base* depends on `feature_mode` (see below): the previously-installed
+   set on an upgrade (`sticky`, the default) or this build's **default features**
+   (`override`). A fresh install always starts from the build defaults. Only ids
+   the build declares are kept.
 4. **Filter** — the manifest is reduced to *base + active features* and used for
    the whole install (staging, verification, disk-space, the on-disk manifest
    the uninstaller reads).
-5. **Persist** — the active set is written to `installer_info.json`, so the next
-   upgrade re-installs the same features by default.
+5. **Persist** — the active set is written to `installer_info.json`: the next
+   upgrade reads it to clean up any feature it deactivates, and — under `sticky`
+   — to re-seed its base.
 
-Defaults seed only the **fresh** install; thereafter the set is sticky and only
-the plugin changes it. A feature with `default = false` (the default) and no
-plugin enabling it is never installed.
+A feature with `default = false` (the default) and no plugin enabling it is never
+installed.
+
+### Upgrade base: `sticky` vs `override`
+
+`feature_mode` (a top-level `pack.toml` key) decides how an **upgrade** seeds the
+base — the only thing it affects; a fresh install always seeds from the build
+defaults:
+
+| `feature_mode` | Upgrade base | Effect |
+|---|---|---|
+| `sticky` *(default)* | the previously-installed set | Features are **sticky**: what was installed before carries over, and only a plugin's delta changes it. |
+| `override` | this build's `default = true` features | The **running build wins**: an upgrade resets to the new build's defaults. A feature a prior install added is dropped unless this build defaults it on or a plugin re-enables it. |
+
+```toml
+feature_mode = "override"   # omit for the default, "sticky"
+```
+
+Either way the plugin still has the final say via its `{ enable, disable }` delta,
+and the previously-installed set is always used to clean up files of a feature the
+upgrade drops. Use `override` when the build should dictate the feature set;
+keep `sticky` (or omit the key) when a user's prior selection should persist, and
+have the plugin detect and re-apply it if you need finer control.
 
 ## Declaring features (build)
 
@@ -78,8 +100,9 @@ The active set is `(base ∪ enable) \ disable`. A plugin that doesn't export it
 plugins are unioned.
 
 To **decide at runtime**, the plugin reads `ctx.features_json` —
-`{ "all": [...], "active": [...] }` (declared features + the current base) — and
-any of:
+`{ "all": [...], "active": [...] }` (declared features + the base, which follows
+`feature_mode`: the prior install's set under `sticky`, the build defaults under
+`override`) — and any of:
 - **a checkbox page** (`ui = true`): `installway_pages` emits a `multi_choice`
   listing `all`, pre-checked to `active`; `installway_features` turns the checked
   set into the delta. Shown on every interactive install; silent/compact installs
@@ -105,14 +128,21 @@ ui       = true
 
 ## Upgrades, patches & removal
 
-- **Sticky.** The active set is remembered in `installer_info.json`, so upgrades
-  keep the same features unless a plugin's delta changes them.
+- **Upgrade base follows `feature_mode`.** Under `sticky` (default) an upgrade
+  inherits the previously-installed set, so features stay put unless a plugin
+  changes them. Under `override` an upgrade re-seeds from *this build's* defaults,
+  so a silent upgrade resets to them and a feature a prior install added is dropped
+  unless this build defaults it on or a plugin re-enables it. Either way, to carry
+  a prior selection forward under your own rules, detect it in the plugin (e.g.
+  probe the machine or the install dir) and emit the matching delta.
 - **Adding a feature later** works on both full and patch payloads: a patch ships
   full bytes for a newly-activated feature's files (there's no previous version
   on disk to delta against), which the installer handles automatically.
-- **Deactivating a feature** (a plugin `disable`) on a copy that *had* it
-  installed removes its files: they're scheduled into the same transactional
-  delete pass as a patch's removals (backed up, rollback-safe), and emptied
-  folders are pruned. A feature that was never installed is simply not staged.
-  Because the set is sticky, *omitting* a feature from the plugin's `enable` is
-  not enough to drop it — disable it explicitly.
+- **Deactivating a feature** on a copy that *had* it installed removes its files:
+  they're scheduled into the same transactional delete pass as a patch's removals
+  (backed up, rollback-safe), and emptied folders are pruned. A feature that was
+  never installed is simply not staged. A feature is deactivated when a plugin
+  `disable`s it, or — under `override` — when the new build no longer defaults it
+  on and no plugin re-enables it, so the base no longer carries it. Under `sticky`,
+  *omitting* a feature from a plugin's `enable` is not enough to drop it — the
+  plugin must `disable` it explicitly.

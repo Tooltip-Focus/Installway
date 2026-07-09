@@ -185,6 +185,7 @@ mod tests {
             total_patch_size: 0,
             features: vec![],
             default_features: vec![],
+            feature_mode: Default::default(),
         }
     }
 

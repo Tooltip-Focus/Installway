@@ -82,6 +82,8 @@ default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
 
 # feature packs: map path globs to a feature id a plugin activates - see Feature packs
 # default = true installs it on a fresh install (a plugin can override at runtime)
+# how an upgrade seeds the active set: "sticky" (default, inherit) or "override"
+# feature_mode = "override"
 # [[feature]]
 # id = "Maps"; paths = ["data/maps", "extra/*.pak"]; default = true
 ```
@@ -121,5 +123,7 @@ installer](full.md)) also fails the build.
   `_`/`-`-insensitive).
 - **`launch_option`**: a scalar (CLI wins, then file); defaults to `checked`.
   Accepts `checked` / `unchecked` / `hidden` (case-insensitive).
+- **`feature_mode`**: a scalar (config-file only); defaults to `sticky`. Accepts
+  `sticky` / `override` (case-insensitive). See [Feature packs](../packaging/features.md).
 
 Next: [License, icon & version info](../packaging/branding.md).

@@ -65,6 +65,8 @@ pub fn run(args: &PackArgs) -> Result<()> {
     };
     // Tag files with their feature pack in the manifest (the zip keeps every file).
     crate::features::apply(&mut manifest, &args.features)?;
+    // Record how upgrades seed the active feature base (sticky vs. override).
+    manifest.feature_mode = args.feature_mode;
 
     let license_text = load_license(args)?;
     let banner_png = args

@@ -173,6 +173,7 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
             total_patch_size: 0,
             features: Vec::new(),
             default_features: Vec::new(),
+            feature_mode: Default::default(),
         },
         license_text: None,
         associations: Vec::new(),
