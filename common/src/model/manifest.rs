@@ -1,3 +1,4 @@
+use crate::model::feature_mode::FeatureMode;
 use crate::model::file_entry::FileEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,6 +20,10 @@ pub struct Manifest {
     /// Subset of `features` enabled by default on a fresh install.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub default_features: Vec<String>,
+    /// How an upgrade seeds the active feature base (sticky inherit vs. override
+    /// with this build's defaults). Defaults to `Sticky`.
+    #[serde(default, skip_serializing_if = "FeatureMode::is_default")]
+    pub feature_mode: FeatureMode,
 }
 
 impl Manifest {

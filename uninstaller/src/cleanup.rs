@@ -296,6 +296,7 @@ mod tests {
             total_patch_size: 0,
             features: Vec::new(),
             default_features: Vec::new(),
+            feature_mode: Default::default(),
         };
 
         assert_eq!(remove_payload_files(app, &m), 1);

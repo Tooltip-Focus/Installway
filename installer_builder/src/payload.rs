@@ -95,6 +95,7 @@ pub(crate) fn build_full(
         total_patch_size: 0,
         features: Vec::new(),
         default_features: Vec::new(),
+        feature_mode: Default::default(),
     };
     Ok((zip_bytes, manifest))
 }
@@ -261,6 +262,7 @@ pub(crate) fn build_patch(
         total_patch_size,
         features: Vec::new(),
         default_features: Vec::new(),
+        feature_mode: Default::default(),
     };
     Ok((zip_bytes, manifest))
 }

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 use anyhow::{Context, Result, bail};
+use common::model::feature_mode::FeatureMode;
 use common::model::install_info::InstallInfo;
 use common::model::installer_payload::InstallerPayload;
 use common::model::manifest::Manifest;
@@ -1048,8 +1049,9 @@ fn extract_plugins_to_temp(
 }
 
 /// Prior install's recorded features, with the data dir holding them (machine
-/// dir first, then per-user). `None` features = no prior record (fresh install),
-/// so the caller seeds from the build defaults.
+/// dir first, then per-user). Always the `previously_installed` set for cleanup
+/// (which feature files a past install staged), and also the active base under
+/// `Sticky`. `None` features = no prior record (fresh install).
 fn read_prior_features(payload: &InstallerPayload) -> (PathBuf, Option<Vec<String>>) {
     match prior_install_info(payload) {
         Some((dir, info)) => (dir, Some(info.features)),
@@ -1090,9 +1092,10 @@ fn feature_catalog_json(all: &[String], active: &[String]) -> String {
     serde_json::json!({ "all": all, "active": active }).to_string()
 }
 
-/// Resolve the active feature packs: `base` (prior set on upgrade, or the build
-/// defaults on a fresh install) plus each plugin's `installway_features` delta,
-/// kept to ids the build declares. The plugins get the feature catalog and this
+/// Resolve the active feature packs: `base` (the seed set the caller chose per
+/// the manifest's `feature_mode` — this build's defaults or the prior install's
+/// set) plus each plugin's `installway_features` delta, kept to ids the build
+/// declares. The plugins get the feature catalog and this
 /// run's page answers (`plugin_inputs`). A query that errors is ignored, never
 /// fatal. Empty when the build declares no features.
 fn resolve_active_features(
@@ -1177,9 +1180,17 @@ pub fn resolve_and_filter(
         std::process::id(),
     ));
     let (data_dir, prior) = read_prior_features(&loaded.payload);
-    let base = prior
-        .clone()
-        .unwrap_or_else(|| loaded.payload.manifest.default_features.clone());
+    // The base is the "to activate" set a plugin's delta is applied on top of.
+    // `Override` always seeds it from this build's declared defaults, so an
+    // upgrade activates the current install's set; `Sticky` inherits the prior
+    // install's set on an upgrade (build defaults on a fresh install). Either way
+    // `previously_installed` stays the prior on-disk set, so a feature this run
+    // drops still gets its files cleaned up.
+    let defaults = &loaded.payload.manifest.default_features;
+    let base = match loaded.payload.manifest.feature_mode {
+        FeatureMode::Override => defaults.clone(),
+        FeatureMode::Sticky => prior.clone().unwrap_or_else(|| defaults.clone()),
+    };
     let previously_installed = prior.unwrap_or_default();
     let active = resolve_active_features(
         &loaded.payload,
@@ -1303,10 +1314,16 @@ pub fn extract_ui_plugins(
     // fine here.
     let mut base_ctx = PluginContext::for_install(payload, install_dir, false);
     // Hand the feature catalog to the pages so a plugin can pre-check the picker
-    // to the current base (prior install, or the build defaults).
+    // to the base — this build's defaults (`Override`), or the prior install's set
+    // on an upgrade (`Sticky`). Kept consistent with `resolve_and_filter`.
     if !payload.manifest.features.is_empty() {
-        let (_, prior) = read_prior_features(payload);
-        let base = prior.unwrap_or_else(|| payload.manifest.default_features.clone());
+        let defaults = &payload.manifest.default_features;
+        let base = match payload.manifest.feature_mode {
+            FeatureMode::Override => defaults.clone(),
+            FeatureMode::Sticky => read_prior_features(payload)
+                .1
+                .unwrap_or_else(|| defaults.clone()),
+        };
         base_ctx.features_json = feature_catalog_json(&payload.manifest.features, &base);
     }
     Some(UiPlugins {
@@ -1729,6 +1746,7 @@ mod tests {
             total_patch_size: 0,
             features: Vec::new(),
             default_features: Vec::new(),
+            feature_mode: Default::default(),
         };
 
         let no_cancel = AtomicBool::new(false);
@@ -1780,6 +1798,7 @@ mod tests {
             total_patch_size: 0,
             features: features.iter().map(|s| s.to_string()).collect(),
             default_features: Vec::new(),
+            feature_mode: Default::default(),
         }
     }
 

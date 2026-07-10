@@ -18,8 +18,9 @@ use windows::Win32::Globalization::GetUserDefaultLocaleName;
 
 const EN: &str = include_str!("../locales/en.toml");
 const FR: &str = include_str!("../locales/fr.toml");
+const IT: &str = include_str!("../locales/it.toml");
 
-const SUPPORTED: &[(&str, &str)] = &[("en", EN), ("fr", FR)];
+const SUPPORTED: &[(&str, &str)] = &[("en", EN), ("fr", FR), ("it", IT)];
 const DEFAULT_LANG: &str = "en";
 
 static TABLES: OnceLock<HashMap<&'static str, HashMap<String, String>>> = OnceLock::new();

@@ -3,6 +3,7 @@
 
 pub mod choice_option;
 pub mod choice_style;
+pub mod feature_mode;
 pub mod feature_select;
 pub mod file_assoc;
 pub mod file_entry;
@@ -329,5 +330,26 @@ mod tests {
     #[test]
     fn resolve_empty_is_empty() {
         assert!(FeatureSelection::resolve(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn manifest_feature_mode_defaults_and_roundtrips() {
+        use crate::model::feature_mode::FeatureMode;
+        use crate::model::manifest::Manifest;
+        // A manifest predating `feature_mode` deserializes to Sticky, so already
+        // built payloads keep their original inherit-on-upgrade behavior.
+        let m: Manifest = serde_json::from_str(r#"{"version":"1.0","files":{}}"#).unwrap();
+        assert_eq!(m.feature_mode, FeatureMode::Sticky);
+        // Sticky (the default) is omitted on serialize; Override is written and
+        // round-trips as the lowercase string.
+        assert!(!serde_json::to_string(&m).unwrap().contains("feature_mode"));
+        let mut o = m;
+        o.feature_mode = FeatureMode::Override;
+        let s = serde_json::to_string(&o).unwrap();
+        assert!(s.contains(r#""feature_mode":"override""#));
+        assert_eq!(
+            serde_json::from_str::<Manifest>(&s).unwrap().feature_mode,
+            FeatureMode::Override
+        );
     }
 }

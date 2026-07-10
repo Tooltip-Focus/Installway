@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
+use common::model::feature_mode::FeatureMode;
 use common::model::file_assoc::FileAssoc;
 use common::model::install_dir_restriction::InstallDirRestriction;
 use common::model::launch_option::LaunchOption;
@@ -317,6 +318,9 @@ pub struct PackFile {
     /// to a feature id; a plugin activates them at install time.
     #[serde(default, rename = "feature")]
     pub features: Vec<FeatureFileEntry>,
+    /// How an upgrade seeds the active feature base: `sticky` (default, inherit
+    /// the previously-installed set) or `override` (always this build's defaults).
+    pub feature_mode: Option<String>,
 }
 
 /// Fully resolved `pack` options consumed by `pack::run`. CLI > TOML > default.
@@ -355,6 +359,7 @@ pub struct PackArgs {
     pub plugins: Vec<ResolvedPlugin>,
     pub shortcuts: Vec<ShortcutEntry>,
     pub features: Vec<ResolvedFeature>,
+    pub feature_mode: FeatureMode,
 }
 
 impl PackArgs {
@@ -449,7 +454,21 @@ impl PackArgs {
             plugins: build_plugins(file.plugins)?,
             shortcuts: build_shortcuts(file.shortcuts, &features)?,
             features,
+            feature_mode: parse_feature_mode(file.feature_mode)?,
         })
+    }
+}
+
+/// Parse the optional `feature_mode` value (config-file only). Accepts `sticky`
+/// / `override` (case-insensitive). Absent → [`FeatureMode::Sticky`].
+fn parse_feature_mode(v: Option<String>) -> Result<FeatureMode> {
+    let Some(s) = v else {
+        return Ok(FeatureMode::Sticky);
+    };
+    match s.trim().to_ascii_lowercase().as_str() {
+        "sticky" => Ok(FeatureMode::Sticky),
+        "override" => Ok(FeatureMode::Override),
+        other => bail!("unknown feature-mode '{other}' (sticky | override)"),
     }
 }
 
@@ -1107,6 +1126,27 @@ force_reinstall = true
         );
         // Unknown value errors.
         assert!(resolve_with("\ninstall_dir_restriction = 'nope'\n").is_err());
+    }
+
+    #[test]
+    fn feature_mode_defaults_and_parses() {
+        // Absent → Sticky (backward-compatible inherit-on-upgrade).
+        assert_eq!(resolve_with("").unwrap().feature_mode, FeatureMode::Sticky);
+        // From file, case-insensitive.
+        assert_eq!(
+            resolve_with("\nfeature_mode = 'override'\n")
+                .unwrap()
+                .feature_mode,
+            FeatureMode::Override
+        );
+        assert_eq!(
+            resolve_with("\nfeature_mode = 'STICKY'\n")
+                .unwrap()
+                .feature_mode,
+            FeatureMode::Sticky
+        );
+        // Unknown value errors.
+        assert!(resolve_with("\nfeature_mode = 'nope'\n").is_err());
     }
 
     #[test]

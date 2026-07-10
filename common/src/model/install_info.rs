@@ -43,8 +43,10 @@ pub struct InstallInfo {
     /// `true` when the install directory required administrator rights.
     #[serde(default)]
     pub requires_admin: bool,
-    /// Feature packs staged for this install. Persisted so the next upgrade keeps
-    /// the same set by default.
+    /// Feature packs staged for this install. Persisted so the next upgrade knows
+    /// which feature files are on disk and can clean up any it deactivates, and
+    /// (under `feature_mode = "sticky"`) so it can re-seed the active base from
+    /// this set instead of the new build's defaults.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
 }
