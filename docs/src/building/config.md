@@ -1,98 +1,7 @@
-# Config file
+# The config file
 
-`pack` takes a long command line. Put any options in a TOML file and pass
-`--config` instead. **CLI args override the file**; anything absent from both
-uses the built-in default (only `min_installer_version` has one: `1.0.0`).
-
-Keys are flat, `snake_case`, matching the CLI long names. **Unknown keys are
-rejected** as a typo guard. Booleans are `true`/`false`; `assoc` is an array.
-
-```toml
-# pack.toml
-product    = "My App"        # display name
-product_id = "myapp"         # registry-safe id, stable across versions
-publisher  = "My Company"
-to_version = "1.0"
-input      = "build/myapp-1.0"
-exe        = "myapp.exe"
-license    = "legal/EULA-myapp-en.txt"
-banner     = "branding/header-1400x144.png"   # PNG header banner (optional); see Branding
-assoc      = [".myx:MyApp Document", ".myz:MyApp Archive"]
-priv_key   = "keys/priv.key"   # path to key file; or use priv_key_literal (see below)
-pub_key    = "keys/pub.key"    # path to key file; or use pub_key_literal (see below)
-out        = "dist/setup-myapp-1.0.exe"
-
-# default install dir the UI proposes (per-app); %VAR% tokens are expanded.
-default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
-
-# trim the wizard (optional)
-# skip_license = true   # hide the License page
-# skip_path    = true   # hide the Choose-location page
-
-# allow a fresh interactive install into a NON-EMPTY folder (optional).
-#   enforce          = block a non-empty destination (default)
-#   default_dir_only = allow only the proposed default_install_dir
-#   bypass           = allow any folder
-# Use when replacing a legacy InstallShield/MSI install in its own directory:
-# pair with purge_unknown_files and a plugin that validates the old install
-# (pre-install) and tears it down at uninstall (down).
-# install_dir_restriction = "default_dir_only"
-
-# use the compact minimal UI for upgrades (first install still uses the wizard)
-# upgrade_minimal_ui = true
-
-# show the "uninstall complete" message box at the end of an interactive uninstall
-# show_uninstall_complete = true
-
-# the "launch now" checkbox on the installer's final page (optional)
-#   checked   = visible and ticked (default)
-#   unchecked = visible but not ticked (user opts in)
-#   hidden    = no checkbox; never offer to launch
-# launch_option = "unchecked"
-
-# patch mode (optional)
-# from_version = "0.9"
-# from_dir     = "build/myapp-0.9"
-
-# CI/CD: pass keys as hex strings instead of file paths (each mutually exclusive
-# with its path counterpart).
-# priv_key_literal = "a1b2c3..."   # 64 hex chars (32 bytes)
-# pub_key_literal  = "a1b2c3..."   # 64 hex chars (32 bytes)
-
-# toolchain-free mode (optional) — see the toolchain chapter.
-# With these set, pub_key above is IGNORED: the stub carries its own baked-in
-# key, and priv_key / priv_key_literal must match it (pack self-verifies and fails if it doesn't).
-# installer_stub = "kit/installer.exe"
-# uninstaller    = "kit/uninstall.exe"
-
-# remove unknown/leftover files on a Full install (upgrade/reinstall); patches ignore it
-# purge_unknown_files = true
-
-# dev (optional)
-# force_reinstall = true
-# reuse_stub      = true
-
-# shortcuts to create (.lnk) - see the Shortcuts page. None created unless declared.
-# [[shortcut]]
-# dir = "%DESKTOP%"; name = "My App"; target = "%EXE%"; args = ""
-
-# free-form registry keys (HKCU, or HKLM when machine-wide) - see the Registry keys page
-# [[registry]]
-# hive = "HKCU"; key = "%APP_KEY%"; name = "InstallDir"; type = "sz"; value = "%INSTALL_DIR%"
-
-# feature packs: map path globs to a feature id a plugin activates - see Feature packs
-# default = true installs it on a fresh install (a plugin can override at runtime)
-# how an upgrade seeds the active set: "sticky" (default, inherit) or "override"
-# feature_mode = "override"
-# [[feature]]
-# id = "Maps"; paths = ["data/maps", "extra/*.pak"]; default = true
-```
-
-> `[[shortcut]]`, `[[registry]]`, `[[plugin]]` and `[[feature]]` are
-> arrays-of-tables: put all flat keys above them, then the table blocks at the
-> end of the file (standard TOML ordering).
-
-Run it:
+`pack` takes a long command line. Put the options in a TOML file instead and
+pass `--config`:
 
 ```pwsh
 # everything from the file
@@ -102,28 +11,140 @@ Run it:
 .\target\release\installer_builder.exe pack --config .\pack.toml --to-version 1.1
 ```
 
-## Required keys
-
-Via CLI **or** file: `product`, `product_id`, `publisher`, `to_version`,
-`input`, `exe`, `out`, and exactly one of `priv_key` / `priv_key_literal`. A
-missing one fails with a message naming it. An invalid `product_id` (see [Full
-installer](full.md)) also fails the build.
+Keys are flat and `snake_case`, matching the CLI long names. Unknown keys are
+rejected, which catches typos. Booleans are `true` or `false`.
 
 ## Merge rules
 
-- **Scalars / paths**: CLI value wins; otherwise the file value; otherwise the
-  default (or an error if required).
-- **`assoc` list**: a CLI `--assoc` list *replaces* the file's list when given
-  (it does not merge).
-- **Booleans** (`force_reinstall`, `purge_unknown_files`, `skip_license`,
-  `skip_path`, `reuse_stub`): either source can turn them on.
-- **`min_installer_version`**: defaults to `1.0.0` when set in neither.
-- **`install_dir_restriction`**: a scalar (CLI wins, then file); defaults to
-  `enforce`. Accepts `enforce` / `default_dir_only` / `bypass` (case- and
-  `_`/`-`-insensitive).
-- **`launch_option`**: a scalar (CLI wins, then file); defaults to `checked`.
-  Accepts `checked` / `unchecked` / `hidden` (case-insensitive).
-- **`feature_mode`**: a scalar (config-file only); defaults to `sticky`. Accepts
-  `sticky` / `override` (case-insensitive). See [Feature packs](../packaging/features.md).
+CLI arguments override the file. Anything absent from both uses the built-in
+default, or fails with a message naming the missing key if it is required.
 
-Next: [License, icon & version info](../packaging/branding.md).
+- **Scalars and paths.** The CLI value wins; otherwise the file value;
+  otherwise the default.
+- **The `assoc` list.** A CLI `--assoc` list replaces the file's list
+  entirely when given. It does not merge.
+- **Booleans** (`force_reinstall`, `purge_unknown_files`, `skip_license`,
+  `skip_path`, `upgrade_minimal_ui`, `show_uninstall_complete`,
+  `reuse_stub`). Either source can turn them on.
+- **Tables** (`[[shortcut]]`, `[[registry]]`, `[[plugin]]`, `[[feature]]`)
+  and `feature_mode` are config-file only. There are no CLI equivalents.
+
+## Required keys
+
+Via CLI or file: `product`, `product_id`, `publisher`, `to_version`, `input`,
+`out`, and exactly one of `priv_key` / `priv_key_literal`. In toolchain mode,
+one of `pub_key` / `pub_key_literal` is also required. An invalid
+`product_id` fails the build; see [Full installers](full.md).
+
+## Key reference
+
+### Identity and content
+
+| Key | Type | Description |
+|---|---|---|
+| `product` | string | Display name. |
+| `product_id` | string | Registry-safe id, stable across versions. |
+| `publisher` | string | Vendor name. |
+| `to_version` | string | Version being packaged. |
+| `input` | path | Directory of files to install. |
+| `exe` | string | Main executable, relative to `input`. |
+| `out` | path | Output installer path. |
+
+### Signing and stub
+
+| Key | Type | Description |
+|---|---|---|
+| `priv_key` | path | Ed25519 private key file. |
+| `priv_key_literal` | string | Private key as 64 hex chars. Mutually exclusive with `priv_key`. |
+| `pub_key` | path | Public key file, compiled into the stub. Ignored in toolchain-free mode. |
+| `pub_key_literal` | string | Public key as 64 hex chars. Mutually exclusive with `pub_key`. |
+| `installer_stub` | path | Prebuilt `installer.exe`. Switches to [toolchain-free mode](toolchain.md); requires `uninstaller`. |
+| `uninstaller` | path | Prebuilt `uninstall.exe`, paired with `installer_stub`. |
+| `reuse_stub` | bool | Skip rebuilding the stub and uninstaller when they already exist (toolchain mode). |
+
+### Patch mode
+
+| Key | Type | Description |
+|---|---|---|
+| `from_version` | string | Previous version. Required together with `from_dir`. |
+| `from_dir` | path | Previous version's files, for delta generation. |
+
+### Wizard and install behavior
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `license` | path | built-in placeholder | UTF-8 EULA text shown on the License page. |
+| `banner` | path | flat gray header | PNG painted across the wizard header. See [Branding](../packaging/branding.md). |
+| `assoc` | array | `[]` | File associations, entries of the form `".ext:Description"`. |
+| `default_install_dir` | string | `%LOCALAPPDATA%\Programs\<product>` | Install path the UI proposes. `%VAR%` env tokens are expanded. |
+| `skip_license` | bool | `false` | Hide the License page. |
+| `skip_path` | bool | `false` | Hide the Choose-location page. |
+| `install_dir_restriction` | string | `enforce` | Whether a fresh interactive install may target a non-empty folder: `enforce`, `default_dir_only`, or `bypass`. See [Wizard pages and install location](../packaging/wizard.md). |
+| `launch_option` | string | `checked` | The "launch now" checkbox on the final page: `checked`, `unchecked`, or `hidden`. |
+| `upgrade_minimal_ui` | bool | `false` | Upgrades use the compact minimal UI; a first install still gets the wizard. |
+| `show_uninstall_complete` | bool | `false` | Show a confirmation message box at the end of an interactive uninstall. |
+| `min_installer_version` | string | `1.0.0` | Minimum installer stub version allowed to run this payload. |
+| `purge_unknown_files` | bool | `false` | On a full install over an existing copy, remove files not in this build. Ignored for patches. |
+| `force_reinstall` | bool | `false` | Dev: rewrite all files, remove orphans, skip the from-version check. |
+| `feature_mode` | string | `sticky` | How an upgrade seeds the active feature set: `sticky` or `override`. See [Feature packs](../packaging/features.md). |
+
+### Tables
+
+Declared as arrays of tables. Standard TOML ordering applies: put all flat
+keys above them, then the table blocks at the end of the file.
+
+| Table | Purpose |
+|---|---|
+| `[[shortcut]]` | Shortcuts to create. See [Shortcuts](../packaging/shortcuts.md). |
+| `[[registry]]` | Free-form registry entries. See [Registry keys](../packaging/registry.md). |
+| `[[plugin]]` | Native DLL plugins. See [Plugins](../packaging/plugins.md). |
+| `[[feature]]` | Feature packs mapping path globs to a feature id. See [Feature packs](../packaging/features.md). |
+
+## Complete example
+
+```toml
+# pack.toml
+product    = "My App"
+product_id = "myapp"
+publisher  = "My Company"
+to_version = "1.0"
+input      = "build/myapp-1.0"
+exe        = "myapp.exe"
+out        = "dist/setup-myapp-1.0.exe"
+
+priv_key = "keys/priv.key"
+pub_key  = "keys/pub.key"
+
+license = "legal/EULA-myapp-en.txt"
+banner  = "branding/header-1400x144.png"
+assoc   = [".myx:MyApp Document", ".myz:MyApp Archive"]
+
+default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"
+launch_option       = "checked"
+
+# Patch mode: uncomment to build a patch instead of a full installer.
+# from_version = "0.9"
+# from_dir     = "build/myapp-0.9"
+
+# Toolchain-free mode: point at prebuilt binaries instead of cargo builds.
+# pub_key above is then ignored; the stub carries its own baked-in key.
+# installer_stub = "kit/installer.exe"
+# uninstaller    = "kit/uninstall.exe"
+
+[[shortcut]]
+dir    = "%DESKTOP%"
+name   = "%PRODUCT%"
+target = "%EXE%"
+
+[[shortcut]]
+dir    = "%START_MENU%"
+name   = "%PRODUCT%"
+target = "%EXE%"
+
+[[registry]]
+hive  = "HKCU"
+key   = "%APP_KEY%"
+name  = "InstallDir"
+type  = "sz"
+value = "%INSTALL_DIR%"
+```

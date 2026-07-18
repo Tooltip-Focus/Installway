@@ -1,6 +1,6 @@
 [book]
 title = "Installway"
-description = "Single-file Rust installer for Windows — build, sign, and ship .exe installers with an embedded, signed payload."
+description = "Single-file Rust installer for Windows. Build, sign, and ship .exe installers with an embedded, signed payload."
 authors = ["Gaëtan Dezeiraud", "Louis Pinaud"]
 language = "en"
 src = "src"
@@ -18,3 +18,7 @@ level = 1
 
 [output.html.search]
 enable = true
+
+[output.html.redirect]
+"/getting-started/build-the-builder.html" = "quickstart.html"
+"/getting-started/keygen.html" = "signing-keys.html"

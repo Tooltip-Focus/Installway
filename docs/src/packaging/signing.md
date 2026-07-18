@@ -1,12 +1,13 @@
-# Signing (Authenticode)
+# Authenticode signing
 
-Installway signs the **payload** with Ed25519 (see [the security
-model](../introduction.md#security-model)), but it does **not** apply an
-**Authenticode** signature to the `.exe` itself. That's a separate, standard
-post-build step using your code-signing certificate — and it's what stops
-SmartScreen and AV from flagging your installer as an unknown publisher.
+Installway signs the payload inside the `.exe` with Ed25519 (see the
+[security model](../introduction.md#security-model)), but it does not apply
+an Authenticode signature to the `.exe` itself. That is a separate, standard
+post-build step using your code-signing certificate, and it is what stops
+SmartScreen and antivirus engines from flagging your installer as coming from
+an unknown publisher.
 
-After `pack` finishes it prints the exact command:
+After `pack` finishes, it prints the exact command:
 
 ```text
 Next step (Authenticode): signtool sign /fd SHA256 /tr http://timestamp.digicert.com setup-myapp-1.0.exe
@@ -21,26 +22,26 @@ signtool sign /fd SHA256 `
     .\dist\setup-myapp-1.0.exe
 ```
 
-- `/fd SHA256` — file digest algorithm.
-- `/tr <url> /td SHA256` — RFC 3161 timestamp, so the signature stays valid
-  after the cert expires.
-- `/a` — auto-select the best cert from your store (or use `/f cert.pfx /p
-  <password>` for a file-based cert).
+- `/fd SHA256` selects the file digest algorithm.
+- `/tr <url> /td SHA256` adds an RFC 3161 timestamp, so the signature stays
+  valid after the certificate expires.
+- `/a` auto-selects the best certificate from your store. Use
+  `/f cert.pfx /p <password>` for a file-based certificate instead.
 
 ## Why signing comes last
 
-The payload zip is appended as a **PE overlay** *before* signing. `signtool`
-appends its certificate table after the overlay, and the installer locates the
-overlay from the PE **section table** (not the end of the file) — so the
-trailing certificate is harmless and the order is safe:
+The payload zip is appended as a PE overlay before signing. `signtool`
+appends its certificate table after the overlay, and the installer locates
+the overlay from the PE section table rather than the end of the file, so
+the trailing certificate is harmless and the order is safe:
 
 ```text
-pack  →  embed resources  →  stamp icon + version  →  append payload overlay  →  signtool
-                                                                                  ▲ you, here
+pack  >  embed resources  >  stamp icon + version  >  append payload overlay  >  signtool
+                                                                                 you, here
 ```
 
-Never modify the `.exe` after signing (no further `pack`, resource edits, or
-overlay appends) — any change invalidates the Authenticode signature.
+Never modify the `.exe` after signing: no further `pack`, resource edits, or
+overlay appends. Any change invalidates the Authenticode signature.
 
 ## Verifying
 
@@ -48,7 +49,5 @@ overlay appends) — any change invalidates the Authenticode signature.
 signtool verify /pa /v .\dist\setup-myapp-1.0.exe
 ```
 
-This is independent of Installway's own `--verify`, which checks the *embedded
-payload* signature rather than the Authenticode signature.
-
-Next: [Install modes](../running/install.md).
+This is independent of Installway's own `--verify`, which checks the embedded
+payload signature rather than the Authenticode signature.

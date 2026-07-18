@@ -1,4 +1,7 @@
-# CLI reference
+# Builder CLI
+
+Complete reference for `installer_builder`. For the flags of the built
+installer itself, see [Installer runtime flags](installer-cli.md).
 
 ```text
 installer_builder <COMMAND>
@@ -8,84 +11,69 @@ Commands:
   pack     Build an installer .exe with an embedded payload
 ```
 
-## `keygen`
+## keygen
 
-| Option | Required | Meaning |
+| Option | Required | Description |
 |---|---|---|
-| `--out <DIR>` | yes | Output directory for `priv.key` + `pub.key` (hex-encoded). |
+| `-o, --out <DIR>` | Yes | Output directory for `priv.key` and `pub.key` (hex-encoded). |
 
-## `pack`
+See [Signing keys](../getting-started/signing-keys.md).
 
-Every value may come from the CLI **or** a `--config` TOML file; the CLI wins.
-Required fields are checked after merging. See [Config file](../building/config.md).
+## pack
 
-### Identity & content
+Every value may come from the CLI or from a `--config` TOML file; the CLI
+wins. Required fields are checked after merging. See
+[The config file](../building/config.md) for the file format and merge rules.
 
-| Option | Required | Meaning |
+### Identity and content
+
+| Option | Required | Description |
 |---|---|---|
-| `--product <NAME>` | yes | Display name (ARP DisplayName, version-info, UI, shortcut label). |
-| `--product-id <ID>` | yes | Registry-safe internal id (HKCU Uninstall key, ProgIDs, data folder, upgrade detection). `^[A-Za-z][A-Za-z0-9._-]{0,49}$`; keep stable across versions. |
-| `--publisher <NAME>` | yes | Vendor name (ARP field + uninstall data folder). Must not be empty. |
-| `--to-version <VER>` | yes | New version; also parsed `a.b.c.d` for version-info. |
-| `--input <DIR>` | yes | Source dir of the new version's files. |
-| `--exe <REL>` | yes | Main executable, relative to `--input`. |
-| `--out <FILE>` | yes | Output installer `.exe` path. |
+| `-p, --product <NAME>` | Yes | Display name: Windows Apps, version info, wizard UI, shortcut labels. |
+| `--product-id <ID>` | Yes | Registry-safe internal id: Uninstall key, ProgIDs, data folder, upgrade detection. Must match `^[A-Za-z][A-Za-z0-9._-]{0,49}$`; keep it stable across versions. |
+| `--publisher <NAME>` | Yes | Vendor name: Apps "Publisher" field and the uninstall data folder. Must not be empty. |
+| `--to-version <VER>` | Yes | New version. Also parsed as `a.b.c.d` for the version-info resource. |
+| `--input <DIR>` | Yes | Source directory of the new version's files. |
+| `-e, --exe <REL>` | No | Main executable, relative to `--input`. Omit only if the product has no executable; see [Full installers](../building/full.md#the-main-executable). |
+| `-o, --out <FILE>` | Yes | Output installer `.exe` path. |
 
-### Signing & stub
+### Signing and stub
 
-| Option | Required | Meaning |
+| Option | Required | Description |
 |---|---|---|
-| `--priv-key <FILE>` | yes¹ | Ed25519 private key path that signs the payload. |
-| `--priv-key-literal <HEX>` | yes¹ | Ed25519 private key as a hex string (CI/CD pipelines). Mutually exclusive with `--priv-key`. |
-| `--pub-key <FILE>` | toolchain mode only² | Public key path compiled into the stub. Omit when using `--installer-stub`. |
-| `--pub-key-literal <HEX>` | toolchain mode only² | Public key as a hex string (CI/CD pipelines). Mutually exclusive with `--pub-key`. |
-| `--installer-stub <FILE>` | with `--uninstaller` | Prebuilt stub; switches to [toolchain-free mode](../building/toolchain.md). |
-| `--uninstaller <FILE>` | with `--installer-stub` | Prebuilt uninstaller. |
-| `--reuse-stub` | no | Skip rebuilding the stub/uninstaller if they already exist (toolchain mode). |
-
-¹ Exactly one of `--priv-key` / `--priv-key-literal` is required.
-² Exactly one of `--pub-key` / `--pub-key-literal` is required in toolchain mode (omit both when using `--installer-stub`).
+| `--priv-key <FILE>` | One of the two | Ed25519 private key file that signs the payload. |
+| `--priv-key-literal <HEX>` | One of the two | The private key as 64 hex chars, for CI pipelines. Mutually exclusive with `--priv-key`. |
+| `--pub-key <FILE>` | Toolchain mode: one of the two | Public key file compiled into the stub. Ignored with `--installer-stub`. |
+| `--pub-key-literal <HEX>` | Toolchain mode: one of the two | The public key as 64 hex chars. Mutually exclusive with `--pub-key`. |
+| `--installer-stub <FILE>` | With `--uninstaller` | Prebuilt stub. Switches to [toolchain-free mode](../building/toolchain.md). |
+| `--uninstaller <FILE>` | With `--installer-stub` | Prebuilt uninstaller. |
+| `--reuse-stub` | No | Skip rebuilding the stub and uninstaller when they already exist (toolchain mode). |
 
 ### Patch mode
 
-| Option | Required | Meaning |
+| Option | Required | Description |
 |---|---|---|
-| `--from-version <VER>` | with `--from-dir` | Previous version string; pins the target. |
-| `--from-dir <DIR>` | with `--from-version` | Previous version's files, for delta generation. |
+| `--from-version <VER>` | With `--from-dir` | Previous version string. Pins the target install. |
+| `--from-dir <DIR>` | With `--from-version` | Previous version's files, for delta generation. |
 
-### Packaging
+### Packaging and behavior
 
-| Option | Meaning |
-|---|---|
-| `--license <FILE>` | UTF-8 EULA shown on the License page. |
-| `--banner <FILE.png>` | PNG painted across the wizard header (replaces the flat gray card). Author at 2× (1400×144) for high-DPI; keep the left edge light. See [Branding](../packaging/branding.md#header-banner). |
-| `--assoc ".ext:Description"` | File association (repeatable). |
-| `--default-install-dir <DIR>` | Proposed install path; `%VAR%` tokens expanded. |
-| `--skip-license` | Hide the License page. |
-| `--skip-path` | Hide the Choose-location page. |
-| `--launch-option <checked\|unchecked\|hidden>` | Final-page "launch now" checkbox: ticked (default), shown-unticked, or hidden. |
-| `--upgrade-minimal-ui` | Use the compact minimal UI for upgrades (full or patch); first install still uses the wizard. |
-| `--min-installer-version <VER>` | Anti-rollback floor (default `1.0.0`). |
-| `--force-reinstall` | Dev: rewrite all files, remove orphans, skip from-check. |
-| `--purge-unknown-files` | Full installs: remove unknown/leftover files on upgrade/reinstall (known files still hash-skipped). Ignored for patches. |
-| `--config <FILE.toml>` | Read any of the above from a TOML file. |
+| Option | Default | Description |
+|---|---|---|
+| `--license <FILE>` | Built-in placeholder | UTF-8 EULA shown on the License page. |
+| `--banner <FILE.png>` | Flat gray header | PNG painted across the wizard header. Author at 1400 x 144 px; see [Branding](../packaging/branding.md#header-banner). |
+| `--assoc ".ext:Description"` | None | File association. Repeatable; a CLI list replaces the config file's list. |
+| `--default-install-dir <DIR>` | `%LOCALAPPDATA%\Programs\<product>` | Proposed install path. `%VAR%` tokens are expanded. |
+| `--skip-license` | Off | Hide the License page. |
+| `--skip-path` | Off | Hide the Choose-location page. |
+| `--install-dir-restriction <enforce\|default-dir-only\|bypass>` | `enforce` | Non-empty-folder guard for fresh interactive installs. See [Wizard pages and install location](../packaging/wizard.md#the-non-empty-folder-guard). |
+| `--launch-option <checked\|unchecked\|hidden>` | `checked` | State of the final-page "launch now" checkbox. |
+| `--upgrade-minimal-ui` | Off | Upgrades use the compact minimal UI; a first install still gets the wizard. |
+| `--show-uninstall-complete` | Off | Show a confirmation message box at the end of an interactive uninstall. |
+| `--min-installer-version <VER>` | `1.0.0` | Minimum installer stub version allowed to run this payload. |
+| `--purge-unknown-files` | Off | Full installs: remove unknown or leftover files on an upgrade or reinstall. Known files are still hash-skipped. Ignored for patches. |
+| `--force-reinstall` | Off | Dev: rewrite all files, remove orphans, skip the from-version check. |
+| `--config <FILE.toml>` | None | Read any of the above from a TOML file. |
 
-Free-form [registry keys](../packaging/registry.md) are config-file only
-(`[[registry]]` tables), not CLI flags.
-
-## Installer (`setup-*.exe`) runtime flags
-
-The built installer, not the builder:
-
-| Flag | Meaning |
-|---|---|
-| `--silent "<dir>"` | Headless install to `<dir>`; progress on stderr. |
-| `--minimal "<dir>"` | Compact self-update UI. |
-| `--launch` | Run the installed exe after a silent/minimal install. |
-| `--verify` | Print payload kind / versions / size; don't install. |
-| `--verify-install "<dir>"` | Re-hash an installed copy; report OK/MISSING/CORRUPT. |
-| `--lang <code>` | Force UI language (e.g. `fr`); else `INSTALLWAY_LANG`, else OS locale, else English. |
-| `--ignore-desktop-shortcuts` | Don't create desktop shortcuts (any `%DESKTOP%` location). |
-| `--ignore-start-menu-shortcuts` | Don't create Start Menu shortcuts (any `%START_MENU%` location). |
-
-See [Install modes](../running/install.md) and [Exit codes](exit-codes.md).
+Shortcuts, registry entries, plugins, feature packs, and `feature_mode` are
+config-file only. See [The config file](../building/config.md#tables).

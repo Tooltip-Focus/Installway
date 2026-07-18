@@ -4,35 +4,40 @@
 
 # Getting started
 
-- [Build the builder](getting-started/build-the-builder.md)
-- [Generate a signing key](getting-started/keygen.md)
+- [Quickstart](getting-started/quickstart.md)
+- [Signing keys](getting-started/signing-keys.md)
 
 # Building installers
 
-- [Full installer](building/full.md)
-- [Patch installer](building/patch.md)
-- [With vs. without the Rust toolchain](building/toolchain.md)
-- [Config file](building/config.md)
-- [Hintway analytics](building/hintway.md)
+- [Full installers](building/full.md)
+- [Patch installers](building/patch.md)
+- [The config file](building/config.md)
+- [Packaging without the Rust toolchain](building/toolchain.md)
 
-# Packaging options
+# Customizing the installer
 
-- [Branding: license, banner, icon & version](packaging/branding.md)
-- [File associations](packaging/associations.md)
+- [Branding](packaging/branding.md)
+- [Wizard pages and install location](packaging/wizard.md)
 - [Shortcuts](packaging/shortcuts.md)
+- [File associations](packaging/associations.md)
 - [Registry keys](packaging/registry.md)
-- [Plugins (custom DLLs)](packaging/plugins.md)
 - [Feature packs](packaging/features.md)
-- [Trimming the wizard](packaging/wizard.md)
-- [Signing (Authenticode)](packaging/signing.md)
+- [Plugins](packaging/plugins.md)
 
-# Installing & uninstalling
+# Shipping
+
+- [Authenticode signing](packaging/signing.md)
+- [Install analytics](building/hintway.md)
+
+# Installing and uninstalling
 
 - [Install modes](running/install.md)
+- [Per-user and machine-wide installs](running/machine-wide.md)
 - [Uninstall](running/uninstall.md)
 
 # Reference
 
-- [Manifest & payload format](reference/payload.md)
-- [CLI reference](reference/cli.md)
+- [Builder CLI](reference/cli.md)
+- [Installer runtime flags](reference/installer-cli.md)
 - [Exit codes](reference/exit-codes.md)
+- [Manifest and payload format](reference/payload.md)

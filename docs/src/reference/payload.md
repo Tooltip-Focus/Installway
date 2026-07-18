@@ -1,19 +1,21 @@
-# Manifest & payload format
+# Manifest and payload format
 
 These are the `common` crate types that describe what an installer carries.
-They're serialized to JSON, signed, and embedded as `RT_RCDATA` id=2. Field
-docs come from [`common/src/models.rs`](https://github.com/Tooltip-Focus/Installway/blob/main/common/src/models.rs).
+They are serialized to JSON, signed, and embedded as resources. Field
+documentation lives in
+[`common/src/model/`](https://github.com/Tooltip-Focus/Installway/tree/main/common/src/model).
 
-## What's embedded in the installer `.exe`
+## What is embedded in the installer `.exe`
 
-| Resource | id | Contents |
+| Resource | Id | Contents |
 |---|---|---|
-| `RT_RCDATA` | 2 | `SignedPayload` JSON (the manifest + metadata, plus its signature) |
-| `RT_RCDATA` | 3 | the uninstaller `.exe` |
-| `RT_RCDATA` | 4 | payload length (`u64`, little-endian) |
-| PE overlay | — | `MAGIC` + the payload zip, appended after all resource passes |
+| `RT_RCDATA` | 2 | `SignedPayload` JSON: the manifest and metadata, plus the signature. |
+| `RT_RCDATA` | 3 | The uninstaller `.exe`. |
+| `RT_RCDATA` | 4 | The payload length, a little-endian `u64`. |
+| `RT_RCDATA` | 5 | The optional header banner PNG. Not signed; see [Branding](../packaging/branding.md#header-banner). |
+| PE overlay | | A magic marker followed by the payload zip, appended after all resource passes. |
 
-## `SignedPayload`
+## SignedPayload
 
 ```rust
 struct SignedPayload {
@@ -22,89 +24,93 @@ struct SignedPayload {
 }
 ```
 
-The verifier checks the signature against the **raw `payload_json` bytes**, then
-parses `InstallerPayload` from them — avoiding any serializer-determinism trap.
+The verifier checks the signature against the raw `payload_json` bytes, then
+parses `InstallerPayload` from them. Signing the exact bytes avoids any
+serializer-determinism trap.
 
-## `InstallerPayload`
+## InstallerPayload
 
 | Field | Type | Notes |
 |---|---|---|
-| `kind` | `Full` \| `Patch` | |
-| `product` | `String` | display name (ARP DisplayName, version-info, UI, shortcut) |
-| `product_id` | `String` | registry-safe id: Uninstall key, ProgIDs, data folder, upgrade detection |
-| `publisher` | `String` | uninstall data folder + ARP "Publisher" |
-| `from_version` | `Option<String>` | set for patches; pins the target version |
+| `kind` | `Full` or `Patch` | |
+| `product` | `String` | Display name. |
+| `product_id` | `String` | Registry-safe id: Uninstall key, ProgIDs, data folder, upgrade detection. |
+| `publisher` | `String` | Uninstall data folder and the Apps "Publisher" field. |
+| `from_version` | `Option<String>` | Set for patches; pins the target version. |
 | `to_version` | `String` | |
-| `min_installer_version` | `String` | anti-rollback floor; default `1.0.0` |
-| `payload_blake3` | `String` | BLAKE3 of the zip, re-verified before extract |
+| `min_installer_version` | `String` | Minimum stub version allowed to run this payload. Default `1.0.0`. |
+| `payload_blake3` | `String` | BLAKE3 of the zip, re-verified before extraction. |
 | `created_at_unix` | `i64` | |
-| `manifest` | `Manifest` | per-file table (below) |
-| `license_text` | `Option<String>` | EULA shown on the License page |
-| `associations` | `Vec<FileAssoc>` | file types to register under `Software\Classes` (HKLM if machine-wide, else HKCU) |
-| `shortcuts` | `Vec<ShortcutEntry>` | [shortcuts](../packaging/shortcuts.md) to create (`dir`/`target`/`args` are token templates); none created unless declared |
-| `registry` | `Vec<RegistryEntry>` | free-form HKCU/HKLM [registry entries](../packaging/registry.md) (key/value are token templates) |
-| `force_reinstall` | `bool` | dev: rewrite all, remove orphans, skip from-check |
-| `purge_unknown_files` | `bool` | Full installs: remove unknown/leftover files (known files still hash-skipped); ignored for patches |
-| `skip_license` / `skip_path` | `bool` | trim the wizard |
-| `install_dir_restriction` | `Enforce` \| `DefaultDirOnly` \| `Bypass` | whether a fresh interactive install may target a non-empty folder; default `Enforce` (block). See [Config file](../building/config.md) |
-| `default_install_dir` | `Option<String>` | proposed path; `%VAR%` tokens expanded |
-| `upgrade_minimal_ui` | `bool` | upgrades use the minimal UI; first install always uses the wizard |
-| `show_uninstall_complete` | `bool` | show the "uninstall complete" message box at the end (off by default) |
+| `manifest` | `Manifest` | The per-file table; see below. |
+| `license_text` | `Option<String>` | EULA shown on the License page. |
+| `associations` | `Vec<FileAssoc>` | File types to register under `Software\Classes`. |
+| `plugins` | `Vec<PluginEntry>` | Bundled [plugins](../packaging/plugins.md) and their phases. |
+| `shortcuts` | `Vec<ShortcutEntry>` | [Shortcuts](../packaging/shortcuts.md) to create. `dir`, `target`, and `args` are token templates. None are created unless declared. |
+| `registry` | `Vec<RegistryEntry>` | Free-form [registry entries](../packaging/registry.md). Key and value are token templates. |
+| `force_reinstall` | `bool` | Dev: rewrite all, remove orphans, skip the from-version check. |
+| `purge_unknown_files` | `bool` | Full installs: remove unknown or leftover files. Ignored for patches. |
+| `skip_license`, `skip_path` | `bool` | Trim the wizard. |
+| `install_dir_restriction` | `Enforce`, `DefaultDirOnly`, or `Bypass` | Whether a fresh interactive install may target a non-empty folder. Default `Enforce`. |
+| `default_install_dir` | `Option<String>` | Proposed path; `%VAR%` tokens are expanded. |
+| `launch_option` | `Checked`, `Unchecked`, or `Hidden` | The final-page "launch now" checkbox. |
+| `upgrade_minimal_ui` | `bool` | Upgrades use the minimal UI; a first install always gets the wizard. |
+| `show_uninstall_complete` | `bool` | Show the "uninstall complete" message box. Off by default. |
 
-## `Manifest` / `FileEntry` / `PatchInfo`
+## Manifest, FileEntry, and PatchInfo
 
 ```rust
 struct Manifest {
     version: String,
-    exe: String,                       // main exe, relative to install root
+    exe: Option<String>,               // main exe, relative to the install root
     files: HashMap<String, FileEntry>, // keyed by relative path
     deleted_files: Vec<String>,        // removed at install time (patches)
     full_size: u64,
     total_patch_size: u64,
-    features: Vec<String>,             // declared feature-pack ids (see Feature packs)
+    features: Vec<String>,             // declared feature-pack ids
     default_features: Vec<String>,     // subset enabled by default on a fresh install
-    feature_mode: FeatureMode,         // upgrade base: "sticky" (default) | "override"
+    feature_mode: FeatureMode,         // upgrade base: "sticky" (default) or "override"
 }
 
 struct FileEntry {
-    hash: String,            // BLAKE3, checked after each write/patch
+    hash: String,            // BLAKE3, checked after each write or patch
     size: u64,
     patch: Option<PatchInfo>,
     feature: Option<String>, // feature pack this file belongs to; None = base
 }
 
 struct PatchInfo {
-    file: String,   // in-zip path: `patches/<blake3(rel)>.patch`
+    file: String,   // in-zip path: patches/<blake3(rel)>.patch
     size: u64,
 }
 ```
 
-> **Payload zip layout.** Full files live under `full/<rel>`; binary patches
-> under `patches/<blake3(rel)>.patch`. The installer reads `PatchInfo.file`
-> verbatim as the in-zip path, so the name in the manifest and the actual zip
-> entry name are produced from one function in the builder — they must always
-> match. Unchanged files (in a patch) have no zip entry and no `FileEntry`
-> beyond their recorded hash.
+**Payload zip layout.** Full files live under `full/<rel>`; binary patches
+under `patches/<blake3(rel)>.patch`. The installer reads `PatchInfo.file`
+verbatim as the in-zip path, so the name in the manifest and the actual zip
+entry name are produced by one function in the builder; they always match.
+Unchanged files in a patch have no zip entry, only their recorded hash.
 
-## `InstallInfo`
+## InstallInfo
 
-Persisted to `<data-dir>\installer_info.json` by the installer and read by the
-uninstaller: `product`, `product_id`, `publisher`, `version`, `install_dir`,
-`installed_at_unix`, `registry_key` (equal to `product_id`), `exe`, the
-`associations`, the resolved `shortcuts`, the resolved `registry` entries to
-remove, `requires_admin` (drives the `HKLM`/`%ProgramData%` vs
-`HKCU`/`%LOCALAPPDATA%` choice), and `features` (the active feature packs, read
-back on the next upgrade to clean up dropped features and, under `feature_mode =
-"sticky"`, to seed the base — see [Feature packs](../packaging/features.md)). Records written before the product/id split
-have no `product_id`; readers fall back to `registry_key` and a sanitized
-`product`.
+Persisted to `<data-dir>\installer_info.json` by the installer and read by
+the uninstaller. It holds `product`, `product_id`, `publisher`, `version`,
+`install_dir`, `installed_at_unix`, `registry_key` (equal to `product_id`),
+`exe`, the `associations`, the resolved `shortcuts`, the resolved `registry`
+entries to remove, `requires_admin` (which drives the `HKLM` and
+`%ProgramData%` versus `HKCU` and `%LOCALAPPDATA%` choice), and `features`,
+the active feature packs. The next upgrade reads `features` to clean up
+dropped features and, under `feature_mode = "sticky"`, to seed its base. See
+[Feature packs](../packaging/features.md).
 
-In the payload, `registry` and `shortcuts` hold **token templates**; in
-`installer_info.json` they hold the **resolved** entries actually written
-(absolute paths), so the uninstaller matches and removes exactly those.
+In the payload, `registry` and `shortcuts` hold token templates. In
+`installer_info.json` they hold the resolved entries actually written, with
+absolute paths, so the uninstaller matches and removes exactly those.
+
+Records written before the product/id split have no `product_id`; readers
+fall back to `registry_key` and a sanitized `product`.
 
 ## Backward compatibility
 
 New fields use `#[serde(default)]`, so installers can read JSON written by
-older versions (missing fields take sensible defaults). The round-trip is
-covered by tests in `models.rs`.
+older versions; missing fields take sensible defaults. The round-trip is
+covered by tests in the model modules.

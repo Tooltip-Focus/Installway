@@ -24,7 +24,7 @@ possible; otherwise make it a no-op (`return 0`). The host passes an
 **Custom wizard pages** are optional: a plugin marked `ui = true` also exports
 `installway_pages`, which describes form pages (the host renders them; the plugin
 never draws UI) and hands the answers back to `up` via `ctx->inputs_json`. See the
-[custom-pages guide](https://tooltip-focus.github.io/Installway/packaging/plugins.html#custom-wizard-pages-forms)
+[custom-pages guide](https://tooltip-focus.github.io/Installway/packaging/plugins.html#custom-wizard-pages)
 and [`examples/country_picker/`](examples/country_picker).
 
 ## Examples (Rust)
