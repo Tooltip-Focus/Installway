@@ -19,10 +19,10 @@ Full guide: **<https://tooltip-focus.github.io/Installway/>**
 
 Jump to:
 
-- [Build the builder](https://tooltip-focus.github.io/Installway/getting-started/build-the-builder.html)
-- [With vs. without the Rust toolchain](https://tooltip-focus.github.io/Installway/building/toolchain.html)
+- [Quickstart](https://tooltip-focus.github.io/Installway/getting-started/quickstart.html)
+- [Packaging without the Rust toolchain](https://tooltip-focus.github.io/Installway/building/toolchain.html)
 - [Install modes](https://tooltip-focus.github.io/Installway/running/install.html)
-- [CLI reference](https://tooltip-focus.github.io/Installway/reference/cli.html)
+- [Builder CLI reference](https://tooltip-focus.github.io/Installway/reference/cli.html)
 
 ## Why Installway
 

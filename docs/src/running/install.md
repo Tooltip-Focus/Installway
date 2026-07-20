@@ -1,38 +1,43 @@
 # Install modes
 
-A built installer runs in three modes. Mode is chosen by command-line flags;
-the same `.exe` serves all three.
+A built installer runs in three modes. The mode is chosen by command-line
+flags; the same `.exe` serves all three. The full flag list is in
+[Installer runtime flags](../reference/installer-cli.md).
 
 ## Interactive
 
-Double-click the `.exe`. The wizard walks License → Choose location → Progress →
-Done. The Done page offers a **"Run program now"** checkbox (checked by default
-when the manifest has an exe); Finish launches it.
+Double-click the `.exe`. The wizard walks License, Choose location, Progress,
+Done. The Done page offers a "Run program now" checkbox (its default state is
+a [build-time option](../packaging/wizard.md#the-launch-now-checkbox)), and
+Finish launches the product when it is ticked.
 
-No admin elevation by default (`asInvoker` manifest). If the chosen install
-folder requires administrator rights (e.g. `C:\Program Files\...`), a UAC
-prompt is shown automatically: the main UI stays visible while a hidden elevated
-subprocess performs the file operations. In that case the install is recorded
-machine-wide so every user on the machine sees it: the uninstaller data and the
-Add/Remove Programs entry (`%ProgramData%` + `HKLM`), file associations
-(`HKLM\Software\Classes`), `HKLM` registry entries, and All-Users shortcuts.
-Segoe UI, Common Controls
-v6 visual styles, DPI-aware (`PerMonitorV2`). See
-[Trimming the wizard](../packaging/wizard.md) to hide pages.
+The UI uses Segoe UI, Common Controls v6 visual styles, and is DPI-aware
+(PerMonitorV2). To hide pages or change the flow, see
+[Wizard pages and install location](../packaging/wizard.md).
+
+There is no elevation prompt by default. If the user picks a folder that
+requires administrator rights, such as `C:\Program Files`, a UAC prompt
+appears automatically and the install becomes machine-wide. See
+[Per-user and machine-wide installs](machine-wide.md).
 
 ## Minimal (app-triggered self-update)
 
-A compact windowed UI for updates an app launches for itself — no license page,
-no folder picker, no Install button. It starts the moment it opens and shows
-progress:
+A compact windowed UI for updates an app launches for itself: no license
+page, no folder picker, no Install button. It starts the moment it opens and
+shows progress:
 
 ```pwsh
 .\setup-myapp-1.1.exe --minimal "C:\path\to\install"
 .\setup-myapp-1.1.exe --minimal "C:\path\to\install" --launch
 ```
 
-It closes itself shortly after reaching 100 %; on error it stays open with the
-message.
+It closes itself shortly after reaching 100%. On error, it stays open with
+the message.
+
+You can also make regular upgrades use this UI without passing a flag, via
+the build-time
+[`--upgrade-minimal-ui`](../packaging/wizard.md#minimal-ui-for-upgrades)
+option.
 
 ## Silent
 
@@ -41,57 +46,53 @@ message.
 .\setup-myapp-1.0.exe --silent "C:\path\to\install" --launch
 ```
 
-Progress prints to stderr; `--launch` runs the installed exe afterward. Branch
-on the [exit code](../reference/exit-codes.md) — notably `10` means "wrong
-installed version for this patch."
+Progress prints to stderr, and `--launch` runs the installed exe afterward.
+Branch on the [exit code](../reference/exit-codes.md): notably, `10` means
+the installed version does not match this patch.
 
-> **Silent has no UAC prompt.** Unlike the wizard and minimal modes, silent
-> never auto-elevates (a prompt would defeat "silent"). Installing to a machine
-> location such as `Program Files` therefore fails with a permission error unless
-> you run the silent installer from an already-elevated context (e.g. an admin
-> shell or deployment tool). For a per-user location no elevation is needed.
+Silent mode never shows a UAC prompt, since a prompt would defeat "silent".
+Installing to a machine location such as `Program Files` therefore fails
+with a permission error unless you run the silent installer from an
+already-elevated context, such as an admin shell or a deployment tool. A
+per-user location needs no elevation.
 
-## Skipping shortcuts
+If a plugin contributes wizard pages, a silent install answers them from
+their declared defaults. A required field with no usable default fails the
+install; see [Plugins](../packaging/plugins.md#silent-installs).
 
-Any mode accepts `--ignore-desktop-shortcuts` and `--ignore-start-menu-shortcuts`
-to suppress. See [Shortcuts](../packaging/shortcuts.md#suppressing-shortcuts-at-install-time).
-
-```pwsh
-.\setup-myapp-1.0.exe --silent --ignore-desktop-shortcuts --ignore-start-menu-shortcuts
-```
-
-## Runtime behavior (every mode)
+## What every mode does per file
 
 For each file in the manifest:
 
-1. **Already correct** — destination exists and its BLAKE3 matches → skip. A
-   re-run is effectively instant.
-2. **Patchable** — patch installer, destination exists, manifest has a
-   `PatchInfo` → apply the HDiffPatch delta, verify BLAKE3, atomic rename. Falls
-   back to full extract on any failure.
-3. **Full** — read `full/<rel>` from the payload, verify BLAKE3, atomic rename.
+1. **Already correct.** The destination exists and its BLAKE3 hash matches:
+   skip. A re-run is effectively instant.
+2. **Patchable.** Patch installer, the destination exists, and the manifest
+   has patch info: apply the HDiffPatch delta, verify the BLAKE3 hash, and
+   rename atomically. Falls back to a full extract on any failure.
+3. **Full.** Read the file from the payload, verify the BLAKE3 hash, and
+   rename atomically.
 
-Files in `deleted_files` are removed afterward. `version.json` and
+Files listed in `deleted_files` are removed afterward. `version.json` and
 `installer_manifest.json` are written to the install root as the canonical
-record (and the state any later patch needs).
+record, and as the state any later patch needs.
 
-### Transactional & crash-safe
+## Transactional and crash-safe
 
-Installs are two-phase: every changed file is staged and hash-verified **before**
-anything in the live install is touched, then committed via backup + rename with
-~5 s lock-retry (AV / Explorer / indexer). A failure rolls back to the exact
-pre-install state; an interrupted commit self-heals from the journal on next
-launch. Disk space is pre-checked; a single named mutex per install dir prevents
-two installers racing on the same folder.
+Installs are two-phase. Every changed file is staged and hash-verified before
+anything in the live install is touched, then committed via backup and rename
+with a retry window of about five seconds for files locked by antivirus,
+Explorer, or the indexer. A failure rolls back to the exact pre-install
+state. An interrupted commit self-heals from the journal on the next launch.
+Disk space is pre-checked, and a named mutex per install directory prevents
+two installers from racing on the same folder.
 
-## Inspect / verify without installing
+## Inspect and verify without installing
 
 ```pwsh
 .\setup-myapp-1.0.exe --verify                          # check the embedded payload
 .\setup-myapp-1.0.exe --verify-install "C:\path\to\app" # re-hash an installed copy
 ```
 
-`--verify-install` reports `OK` / `MISSING` / `CORRUPT` per file (exit `0` clean,
-`1` if anything is wrong) — handy for scripted health checks.
-
-Next: [Uninstall](uninstall.md).
+`--verify-install` reports `OK`, `MISSING`, or `CORRUPT` per file, and exits
+`0` when clean or `1` when anything is wrong. It is handy for scripted health
+checks.
