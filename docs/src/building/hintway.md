@@ -34,29 +34,46 @@ Error categories (the value of `install_error.category`):
 `version_mismatch`, `permission_denied`, `elevation_cancelled`,
 `signature_failed`, `disk_full`, `unknown`.
 
-## Building with analytics
+## Configure analytics for a project
 
-Set `HINTWAY_TENANT_ID` to your tenant UUID at build time; it is baked into
-the binary. If the variable is absent, the feature compiles cleanly but
-telemetry is silently disabled.
+Set the tenant UUID in the project's `pack.toml`:
+
+```toml
+hintway_tenant_id = "your-tenant-id"
+```
+
+The tenant UUID is stored in the signed installer payload, then copied to
+`installer_info.json` for the uninstaller. It is configuration, not a private
+key; the payload signature prevents it from being changed without detection.
+
+Hintway support still has to be compiled into the installer and uninstaller.
+In the default toolchain mode, `pack` detects `hintway_tenant_id` and enables
+the `hintway` Cargo feature automatically for both binaries:
 
 ```pwsh
-$env:HINTWAY_TENANT_ID = "your-tenant-id"
+.\target\release\installer_builder.exe pack --config .\pack.toml
+```
+
+When using `--reuse-stub`, the existing `installer.exe` and `uninstall.exe`
+must already have been built with Hintway support. Omit `--reuse-stub` once
+after adding `hintway_tenant_id` so the correct variants are rebuilt.
+
+## Build a reusable Hintway kit
+
+For [toolchain-free packaging](toolchain.md), build a generic Hintway-enabled
+kit once. No tenant is baked into these binaries:
+
+```pwsh
 $env:INSTALLER_PUB_KEY = (Get-Content .\keys\pub.key).Trim()
 
 cargo build --release -p installer -p uninstaller `
     --features installer/hintway,uninstaller/hintway
 ```
 
-Then pack as usual. No extra `pack` flags are needed:
-
-```pwsh
-.\target\release\installer_builder.exe pack --config .\pack.toml --reuse-stub
-```
-
-Since analytics is a property of the stub and uninstaller binaries, this
-pairs naturally with [toolchain-free packaging](toolchain.md): build the kit
-once with the feature enabled, and every installer packed from it reports.
+Distribute those `installer.exe` and `uninstall.exe` files with
+`installer_builder.exe`. Each project selects its own tenant through
+`hintway_tenant_id` when it packs an installer. A kit built without the
+feature ignores this field and contains no Hintway code.
 
 ## Identity and privacy
 
@@ -69,6 +86,7 @@ product's privacy policy.
 
 ## Disabling analytics
 
-Omit the `--features` flag. The `hintway_analytics` crate is declared
-`optional = true` and is not downloaded, compiled, or linked when the feature
-is off.
+Omit `hintway_tenant_id` from `pack.toml`. A Hintway-enabled binary then sends
+no telemetry. To produce binaries containing no Hintway code at all, also
+build without the `hintway` Cargo feature; the `hintway_analytics` crate is
+optional and is not linked in that variant.

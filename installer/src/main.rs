@@ -176,14 +176,19 @@ fn run(cli: Cli) -> Result<()> {
 
     // Determine analytics context now that payload is loaded (version + operation known).
     #[cfg(feature = "hintway")]
-    let (hintway_version, hintway_operation, hintway_lang) = {
+    let (hintway_tenant_id, hintway_version, hintway_operation, hintway_lang) = {
         let already = previous_install_dir(&loaded.payload).is_some();
         let op = match (&loaded.payload.kind, already) {
             (common::model::payload_kind::PayloadKind::Patch, _)
             | (common::model::payload_kind::PayloadKind::Full, true) => "update",
             _ => "install",
         };
-        (loaded.payload.to_version.as_str(), op, translator.lang())
+        (
+            loaded.payload.hintway_tenant_id.as_deref(),
+            loaded.payload.to_version.as_str(),
+            op,
+            translator.lang(),
+        )
     };
 
     // Compact auto-start update UI (app-triggered self-update): no license,
@@ -194,6 +199,7 @@ fn run(cli: Cli) -> Result<()> {
         let path = resolve_install_path(cli.install_dir.as_deref(), &loaded.payload);
         #[cfg(feature = "hintway")]
         analytics::init(
+            hintway_tenant_id,
             hintway_version,
             hintway_operation,
             "minimal",
@@ -211,6 +217,7 @@ fn run(cli: Cli) -> Result<()> {
         let path = resolve_install_path(cli.install_dir.as_deref(), &loaded.payload);
         #[cfg(feature = "hintway")]
         analytics::init(
+            hintway_tenant_id,
             hintway_version,
             hintway_operation,
             "silent",
@@ -277,6 +284,7 @@ fn run(cli: Cli) -> Result<()> {
 
     #[cfg(feature = "hintway")]
     analytics::init(
+        hintway_tenant_id,
         hintway_version,
         hintway_operation,
         "interactive",

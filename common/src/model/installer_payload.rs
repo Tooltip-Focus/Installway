@@ -23,6 +23,10 @@ pub struct InstallerPayload {
     /// and the Add/Remove Programs "Publisher" field.
     #[serde(default)]
     pub publisher: String,
+    /// Hintway tenant UUID.
+    /// Ignored by binaries built without the `hintway` feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hintway_tenant_id: Option<String>,
     pub from_version: Option<String>,
     pub to_version: String,
     pub min_installer_version: String,
@@ -94,6 +98,7 @@ impl Default for InstallerPayload {
             product: "P".into(),
             product_id: "P_id".into(),
             publisher: "Pub".into(),
+            hintway_tenant_id: None,
             from_version: Some("1.0".into()),
             to_version: "1.1".into(),
             min_installer_version: "1.0.0".into(),
