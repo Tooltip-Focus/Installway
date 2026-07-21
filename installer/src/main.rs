@@ -339,7 +339,7 @@ fn run_silent(
     );
     let progress = Arc::new(|done: u64, total: u64, name: &str| {
         if let Some(pct) = (done * 100).checked_div(total) {
-            eprintln!("[{:>3}%] {}", pct, name);
+            println!("[{:>3}%] {}", pct, name);
         }
     }) as common::ProgressFn;
 
