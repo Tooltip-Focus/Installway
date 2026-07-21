@@ -14,6 +14,8 @@ pub struct InstallInfo {
     pub product_id: String,
     #[serde(default)]
     pub publisher: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hintway_tenant_id: Option<String>,
     pub version: String,
     pub install_dir: String,
     pub installed_at_unix: i64,

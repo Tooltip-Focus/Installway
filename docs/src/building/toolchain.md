@@ -43,6 +43,9 @@ cargo build -p installer --release      # INSTALLER_PUB_KEY=<pub.key>
 cargo build -p uninstaller --release
 ```
 
+When `pack.toml` contains `hintway_tenant_id`, `pack` also enables the
+`hintway` feature on both builds. See [Install analytics](hintway.md).
+
 This mode requires a working Rust toolchain and the Installway source tree on
 the machine running `pack`.
 

@@ -159,6 +159,7 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
         product: "Sample App".to_string(),
         product_id: "SampleApp".to_string(),
         publisher: "Acme Corp".to_string(),
+        hintway_tenant_id: None,
         from_version: is_patch.then(|| "1.1.0".to_string()),
         to_version: "1.2.0".to_string(),
         min_installer_version: "1.0.0".to_string(),

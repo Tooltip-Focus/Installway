@@ -36,6 +36,7 @@ serializer-determinism trap.
 | `product` | `String` | Display name. |
 | `product_id` | `String` | Registry-safe id: Uninstall key, ProgIDs, data folder, upgrade detection. |
 | `publisher` | `String` | Uninstall data folder and the Apps "Publisher" field. |
+| `hintway_tenant_id` | `Option<String>` | Hintway tenant UUID configured at pack time. |
 | `from_version` | `Option<String>` | Set for patches; pins the target version. |
 | `to_version` | `String` | |
 | `min_installer_version` | `String` | Minimum stub version allowed to run this payload. Default `1.0.0`. |
@@ -93,10 +94,11 @@ Unchanged files in a patch have no zip entry, only their recorded hash.
 ## InstallInfo
 
 Persisted to `<data-dir>\installer_info.json` by the installer and read by
-the uninstaller. It holds `product`, `product_id`, `publisher`, `version`,
-`install_dir`, `installed_at_unix`, `registry_key` (equal to `product_id`),
-`exe`, the `associations`, the resolved `shortcuts`, the resolved `registry`
-entries to remove, `requires_admin` (which drives the `HKLM` and
+the uninstaller. It holds `product`, `product_id`, `publisher`,
+`hintway_tenant_id`, `version`, `install_dir`, `installed_at_unix`,
+`registry_key` (equal to `product_id`), `exe`, the `associations`, the
+resolved `shortcuts`, the resolved `registry` entries to remove,
+`requires_admin` (which drives the `HKLM` and
 `%ProgramData%` versus `HKCU` and `%LOCALAPPDATA%` choice), and `features`,
 the active feature packs. The next upgrade reads `features` to clean up
 dropped features and, under `feature_mode = "sticky"`, to seed its base. See

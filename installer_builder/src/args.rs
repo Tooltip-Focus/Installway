@@ -271,6 +271,7 @@ pub struct PackFile {
     pub product: Option<String>,
     pub product_id: Option<String>,
     pub publisher: Option<String>,
+    pub hintway_tenant_id: Option<String>,
     pub to_version: Option<String>,
     pub input: Option<PathBuf>,
     pub from_dir: Option<PathBuf>,
@@ -329,6 +330,7 @@ pub struct PackArgs {
     pub product: String,
     pub product_id: String,
     pub publisher: String,
+    pub hintway_tenant_id: Option<String>,
     pub to_version: String,
     pub input: PathBuf,
     pub from_dir: Option<PathBuf>,
@@ -397,6 +399,12 @@ impl PackArgs {
         if publisher.trim().is_empty() {
             bail!("--publisher must not be empty");
         }
+        let hintway_tenant_id = file
+            .hintway_tenant_id
+            .map(|tenant_id| tenant_id.trim().to_string());
+        if hintway_tenant_id.as_deref() == Some("") {
+            bail!("'hintway_tenant_id' must not be empty");
+        }
 
         // Features: shortcuts may reference them by id (validated below).
         let features = build_features(file.features)?;
@@ -408,6 +416,7 @@ impl PackArgs {
                 .with_context(|| req("product"))?,
             product_id,
             publisher,
+            hintway_tenant_id,
             to_version: cli
                 .to_version
                 .or(file.to_version)
@@ -803,6 +812,7 @@ mod tests {
 product = 'myapp'
 product_id = 'myapp'
 publisher = 'Acme'
+hintway_tenant_id = 'tenant-123'
 to_version = '1.0'
 input = 'build/myapp'
 exe = 'myapp.exe'
@@ -829,6 +839,7 @@ force_reinstall = true
         assert_eq!(r.product, "myapp");
         assert_eq!(r.product_id, "myapp");
         assert_eq!(r.publisher, "Acme");
+        assert_eq!(r.hintway_tenant_id.as_deref(), Some("tenant-123"));
         assert_eq!(r.assoc, vec![".myx:Doc".to_string()]);
         assert_eq!(r.min_installer_version, "1.0.0"); // default, absent in file
         assert!(r.force_reinstall); // from file
