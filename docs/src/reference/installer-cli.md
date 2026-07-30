@@ -15,7 +15,7 @@ The optional positional `<install-dir>` sets the target directory for
 
 | Flag | Description |
 |---|---|
-| `--silent` | Headless install. Progress prints to stderr; see [Install modes](../running/install.md#silent). |
+| `--silent` | Headless install. Progress prints to stdout; see [Install modes](../running/install.md#silent). |
 | `--minimal` | Compact self-update UI; see [Install modes](../running/install.md#minimal-app-triggered-self-update). |
 | `--launch` | Launch the installed exe after a successful silent or minimal install. |
 | `--verify` | Verify the embedded payload and signature, print a summary, and exit without installing. |

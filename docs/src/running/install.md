@@ -46,9 +46,19 @@ option.
 .\setup-myapp-1.0.exe --silent "C:\path\to\install" --launch
 ```
 
-Progress prints to stderr, and `--launch` runs the installed exe afterward.
+Progress prints to stdout, and `--launch` runs the installed exe afterward.
 Branch on the [exit code](../reference/exit-codes.md): notably, `10` means
 the installed version does not match this patch.
+
+Because the installer is a Windows GUI-subsystem executable, PowerShell does
+not wait for it automatically. Start it as a process and wait explicitly when
+the next step depends on the completed installation, for example in an Azure
+Pipeline:
+
+```pwsh
+$p = Start-Process .\setup-dev.exe -ArgumentList "--silent", "$(Pipeline.Workspace)\INSTALL" -PassThru
+$p.WaitForExit()
+```
 
 Silent mode never shows a UAC prompt, since a prompt would defeat "silent".
 Installing to a machine location such as `Program Files` therefore fails
