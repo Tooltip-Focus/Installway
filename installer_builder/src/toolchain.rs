@@ -10,11 +10,13 @@ use std::path::PathBuf;
 
 /// `cargo build --release -p <package>` in the workspace root, reusing the
 /// existing artifact when `reuse` is set. `env` is applied to the build (e.g.
-/// `INSTALLER_PUB_KEY` for the stub). Returns the built exe path.
+/// `INSTALLER_PUB_KEY` for the stub), and `feature` enables an optional Cargo
+/// feature such as `hintway`. Returns the built exe path.
 pub(crate) fn cargo_build_release(
     package: &str,
     exe_name: &str,
     env: Option<(&str, &str)>,
+    feature: Option<&str>,
     reuse: bool,
 ) -> Result<PathBuf> {
     let workspace_root = find_workspace_root()?;
@@ -25,10 +27,18 @@ pub(crate) fn cargo_build_release(
         return Ok(target_exe);
     }
 
-    println!("Building {package} (cargo build -p {package} --release)...");
+    println!(
+        "Building {package} (cargo build -p {package} --release{})...",
+        feature
+            .map(|name| format!(" --features {name}"))
+            .unwrap_or_default()
+    );
     let mut cmd = std::process::Command::new("cargo");
     cmd.args(["build", "-p", package, "--release"])
         .current_dir(&workspace_root);
+    if let Some(feature) = feature {
+        cmd.args(["--features", feature]);
+    }
     if let Some((k, v)) = env {
         cmd.env(k, v);
     }

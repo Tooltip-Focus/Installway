@@ -6,14 +6,13 @@ use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-const TENANT_ID: Option<&str> = option_env!("HINTWAY_TENANT_ID");
 const URL: &str = "https://in.hintway.app";
 
 /// Initialize analytics for one uninstaller run.
 ///
 /// Identity is a random UUID generated here.
-pub fn init(mode: &str, privilege: &str) {
-    let Some(tenant_id) = TENANT_ID else { return };
+pub fn init(tenant_id: Option<&str>, mode: &str, privilege: &str) {
+    let Some(tenant_id) = tenant_id else { return };
 
     let mgr = AnalyticsManager::instance();
 

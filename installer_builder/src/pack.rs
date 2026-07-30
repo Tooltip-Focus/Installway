@@ -212,6 +212,7 @@ fn sign_payload(
         product: args.product.clone(),
         product_id: args.product_id.clone(),
         publisher: args.publisher.clone(),
+        hintway_tenant_id: args.hintway_tenant_id.clone(),
         from_version: args.from_version.clone(),
         to_version: args.to_version.clone(),
         min_installer_version: args.min_installer_version.clone(),
@@ -265,6 +266,7 @@ fn resolve_stub(args: &PackArgs, pub_key_hex: Option<&str>) -> Result<PathBuf> {
                 "INSTALLER_PUB_KEY",
                 pub_key_hex.expect("pub_key_hex set in toolchain mode"),
             )),
+            args.hintway_tenant_id.as_ref().map(|_| "hintway"),
             args.reuse_stub,
         ),
     }
@@ -316,7 +318,13 @@ fn prepare_uninstaller(args: &PackArgs, icons: Option<&ExeIcons>) -> Result<Vec<
             }
             p.clone()
         }
-        None => cargo_build_release("uninstaller", "uninstall.exe", None, args.reuse_stub)?,
+        None => cargo_build_release(
+            "uninstaller",
+            "uninstall.exe",
+            None,
+            args.hintway_tenant_id.as_ref().map(|_| "hintway"),
+            args.reuse_stub,
+        )?,
     };
 
     let staging = tempfile::tempdir().context("create uninstaller staging dir")?;

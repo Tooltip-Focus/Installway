@@ -159,7 +159,10 @@ fn run() -> Result<()> {
                     Ok(pd) if !pd.is_empty() && data_dir.starts_with(&pd) => "admin",
                     _ => "user",
                 };
-                analytics::init(mode, privilege);
+                let tenant_id = cleanup::read_info(&data_dir)
+                    .ok()
+                    .and_then(|info| info.hintway_tenant_id);
+                analytics::init(tenant_id.as_deref(), mode, privilege);
             }
             stages::uninstall::run(cli.silent)
         }

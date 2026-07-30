@@ -45,6 +45,7 @@ one of `pub_key` / `pub_key_literal` is also required. An invalid
 | `product` | string | Display name. |
 | `product_id` | string | Registry-safe id, stable across versions. |
 | `publisher` | string | Vendor name. |
+| `hintway_tenant_id` | string | Optional Hintway tenant UUID. Enables the Hintway build in toolchain mode; see [Install analytics](hintway.md). |
 | `to_version` | string | Version being packaged. |
 | `input` | path | Directory of files to install. |
 | `exe` | string | Main executable, relative to `input`. |
@@ -107,6 +108,7 @@ keys above them, then the table blocks at the end of the file.
 product    = "My App"
 product_id = "myapp"
 publisher  = "My Company"
+hintway_tenant_id = "your-tenant-id" # optional
 to_version = "1.0"
 input      = "build/myapp-1.0"
 exe        = "myapp.exe"

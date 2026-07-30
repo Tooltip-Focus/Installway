@@ -115,6 +115,7 @@ pub fn finalize(
         product: payload.product.clone(),
         product_id: payload.product_id.clone(),
         publisher: payload.publisher.clone(),
+        hintway_tenant_id: payload.hintway_tenant_id.clone(),
         version: payload.to_version.clone(),
         install_dir: install_dir.to_string_lossy().into_owned(),
         installed_at_unix: SystemTime::now()

@@ -58,6 +58,7 @@ mod tests {
         let p: InstallerPayload = serde_json::from_str(j).unwrap();
         assert_eq!(p.publisher, "");
         assert_eq!(p.product_id, "");
+        assert!(p.hintway_tenant_id.is_none());
         assert!(!p.force_reinstall);
         assert!(!p.purge_unknown_files);
         assert_eq!(p.install_dir_restriction, InstallDirRestriction::Enforce);
@@ -79,17 +80,22 @@ mod tests {
         let i: InstallInfo = serde_json::from_str(j).unwrap();
         assert_eq!(i.publisher, "");
         assert_eq!(i.product_id, "");
+        assert!(i.hintway_tenant_id.is_none());
         assert!(i.associations.is_empty());
         assert!(i.shortcuts.is_empty());
     }
 
     #[test]
     fn payload_roundtrips() {
-        let p = InstallerPayload::default();
+        let p = InstallerPayload {
+            hintway_tenant_id: Some("tenant-123".into()),
+            ..Default::default()
+        };
         let s = serde_json::to_string(&p).unwrap();
         let back: InstallerPayload = serde_json::from_str(&s).unwrap();
         assert_eq!(back.publisher, "Pub");
         assert_eq!(back.product_id, "P_id");
+        assert_eq!(back.hintway_tenant_id.as_deref(), Some("tenant-123"));
         assert_eq!(back.registry.len(), 1);
         assert_eq!(back.registry[0].kind, RegistryKind::Dword);
         assert_eq!(back.registry[0].value, RegistryValue::Int(42));

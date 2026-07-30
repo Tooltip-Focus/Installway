@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
-const TENANT_ID: Option<&str> = option_env!("HINTWAY_TENANT_ID");
 const URL: &str = "https://in.hintway.app";
 
 thread_local! {
@@ -34,8 +33,15 @@ fn apply_custom(mgr: &AnalyticsManager) {
 /// - `mode`:      `"silent"` | `"minimal"` | `"interactive"`
 /// - `privilege`: `"admin"` | `"user"` (updated post-install for interactive via `set_privilege`)
 /// - `lang`:      detected ISO-639-1 code (e.g. `"en"`, `"fr"`)
-pub fn init(app_version: &str, operation: &str, mode: &str, privilege: &str, lang: &str) {
-    let Some(tenant_id) = TENANT_ID else { return };
+pub fn init(
+    tenant_id: Option<&str>,
+    app_version: &str,
+    operation: &str,
+    mode: &str,
+    privilege: &str,
+    lang: &str,
+) {
+    let Some(tenant_id) = tenant_id else { return };
 
     {
         let mut c = custom_map().lock().unwrap();
