@@ -17,8 +17,7 @@ use crate::ui::helpers::{
     WM_APP_PLUGIN_PROGRESS, WM_APP_PLUGIN_STEP, get_window_text, post_wparam, scale_progress,
     set_dlg_text, set_progress,
 };
-use common::model::install_dir_restriction::InstallDirRestriction;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -237,33 +236,20 @@ pub(super) unsafe fn on_accept_toggle(hwnd: HWND) {
 }
 
 pub(super) unsafe fn on_browse(hwnd: HWND) {
-    unsafe {
-        if let Some(picked) = pick_folder_com(hwnd) {
-            set_dlg_text(hwnd, ID_PATH_EDIT, &with_product_subdir(&picked));
-        }
-    }
-}
-
-/// Append the product name as a subfolder to a browsed parent folder
-fn with_product_subdir(picked: &str) -> String {
     let product = PAYLOAD.with(|p| {
         p.borrow()
             .as_ref()
-            .map(|p| p.product.trim().to_string())
+            .map(|p| p.product.clone())
             .unwrap_or_default()
     });
-    if product.is_empty() {
-        return picked.to_string();
-    }
-    let pb = PathBuf::from(picked);
-    let already = pb
-        .file_name()
-        .map(|n| n.eq_ignore_ascii_case(product.as_str()))
-        .unwrap_or(false);
-    if already {
-        picked.to_string()
-    } else {
-        pb.join(&product).to_string_lossy().into_owned()
+    unsafe {
+        if let Some(picked) = pick_folder_com(hwnd) {
+            set_dlg_text(
+                hwnd,
+                ID_PATH_EDIT,
+                &crate::ui::dest::with_product_subdir(&picked, &product),
+            );
+        }
     }
 }
 
@@ -306,73 +292,7 @@ unsafe fn pick_folder_com(hwnd: HWND) -> Option<String> {
     }
 }
 
-/// True when `path` is an existing directory that contains at least one file
-/// (at any depth). A missing path, a truly empty folder, or a folder that
-/// contains only empty sub-directories are all considered safe — the installer
-/// will create or populate them without clobbering user data.
-fn dir_has_entries(path: &str) -> bool {
-    let p = path.trim();
-    if p.is_empty() {
-        return false;
-    }
-    dir_has_files_recursive(Path::new(p))
-}
-
-fn dir_has_files_recursive(path: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let ep = entry.path();
-        if ep.is_file() {
-            return true;
-        }
-        if ep.is_dir() && dir_has_files_recursive(&ep) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Normalize a Windows path for a tolerant equality test: trim, unify slashes.
-fn norm_dir(p: &str) -> String {
-    p.trim()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_ascii_lowercase()
-}
-
-/// Whether `path` points at the same directory as `default_path`.
-fn same_dir(path: &str, default_path: &str) -> bool {
-    !path.trim().is_empty() && norm_dir(path) == norm_dir(default_path)
-}
-
-/// Whether the install must be blocked because the destination is a non-empty
-/// folder. The emptiness guard only applies to a fresh install where the user
-/// actually picks the folder (`skip_path` false). When the path is fixed
-/// (update/upgrade/patch over an existing install, or a build-time `skip_path`),
-/// the destination legitimately already holds the product's own files, so the
-/// check is skipped.
-///
-/// `restriction` (build-time, signed) can relax the guard for apps that install
-/// over an existing layout (e.g. replacing a legacy InstallShield/MSI install):
-/// `Bypass` allows any non-empty folder; `DefaultDirOnly` allows it only when
-/// the chosen folder is still the proposed `default_path`.
-fn should_block_nonempty(
-    restriction: InstallDirRestriction,
-    skip_path: bool,
-    default_path: &str,
-    path: &str,
-) -> bool {
-    if skip_path || !dir_has_entries(path) {
-        return false;
-    }
-    match restriction {
-        InstallDirRestriction::Bypass => false,
-        InstallDirRestriction::DefaultDirOnly => !same_dir(path, default_path),
-        InstallDirRestriction::Enforce => true,
-    }
-}
+use crate::ui::dest::should_block_nonempty;
 
 /// Re-evaluate the chosen folder: show/hide the non-empty warning and
 /// enable/disable the Install button accordingly. Called when entering the
@@ -702,111 +622,4 @@ pub(super) fn start_elevated_install(
             }
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{dir_has_entries, same_dir, should_block_nonempty};
-    use common::model::install_dir_restriction::InstallDirRestriction::{
-        Bypass, DefaultDirOnly, Enforce,
-    };
-    use std::fs;
-    use tempfile::tempdir;
-
-    #[test]
-    fn dir_has_entries_false_for_missing_path() {
-        let dir = tempdir().unwrap();
-        let missing = dir.path().join("does-not-exist");
-        assert!(!dir_has_entries(&missing.to_string_lossy()));
-    }
-
-    #[test]
-    fn dir_has_entries_false_for_empty_or_blank() {
-        let dir = tempdir().unwrap();
-        assert!(!dir_has_entries(&dir.path().to_string_lossy()));
-        assert!(!dir_has_entries(""));
-        assert!(!dir_has_entries("   "));
-    }
-
-    #[test]
-    fn dir_has_entries_true_when_populated() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("file.txt"), b"x").unwrap();
-        assert!(dir_has_entries(&dir.path().to_string_lossy()));
-    }
-
-    #[test]
-    fn dir_has_entries_false_when_only_empty_subdirs() {
-        let dir = tempdir().unwrap();
-        fs::create_dir(dir.path().join("subdir")).unwrap();
-        assert!(!dir_has_entries(&dir.path().to_string_lossy()));
-    }
-
-    #[test]
-    fn dir_has_entries_true_when_file_nested_in_subdir() {
-        let dir = tempdir().unwrap();
-        let sub = dir.path().join("subdir");
-        fs::create_dir(&sub).unwrap();
-        fs::write(sub.join("file.txt"), b"x").unwrap();
-        assert!(dir_has_entries(&dir.path().to_string_lossy()));
-    }
-
-    #[test]
-    fn fresh_install_blocks_on_nonempty_folder() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("file.txt"), b"x").unwrap();
-        let path = dir.path().to_string_lossy();
-        // skip_path = false: the user picked this folder, it must be empty.
-        assert!(should_block_nonempty(Enforce, false, "", &path));
-    }
-
-    #[test]
-    fn update_does_not_block_on_nonempty_folder() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("app.exe"), b"x").unwrap();
-        let path = dir.path().to_string_lossy();
-        assert!(!should_block_nonempty(Enforce, true, "", &path));
-    }
-
-    #[test]
-    fn fresh_install_allows_empty_folder() {
-        let dir = tempdir().unwrap();
-        assert!(!should_block_nonempty(
-            Enforce,
-            false,
-            "",
-            &dir.path().to_string_lossy()
-        ));
-    }
-
-    #[test]
-    fn bypass_allows_any_nonempty_folder() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("legacy.dll"), b"x").unwrap();
-        let path = dir.path().to_string_lossy();
-        assert!(!should_block_nonempty(Bypass, false, "C:\\Other", &path));
-    }
-
-    #[test]
-    fn default_dir_only_allows_default_blocks_others() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("legacy.dll"), b"x").unwrap();
-        let path = dir.path().to_string_lossy().into_owned();
-        // Same folder as the proposed default → allowed.
-        assert!(!should_block_nonempty(DefaultDirOnly, false, &path, &path));
-        // A different non-empty folder → still blocked.
-        assert!(should_block_nonempty(
-            DefaultDirOnly,
-            false,
-            "C:\\Some\\Other\\Dir",
-            &path
-        ));
-    }
-
-    #[test]
-    fn same_dir_normalizes_slashes_case_and_trailing_sep() {
-        assert!(same_dir("C:/Program Files/App", "c:\\program files\\app\\"));
-        assert!(!same_dir("C:\\App", "C:\\Other"));
-        assert!(!same_dir("", "C:\\App"));
-    }
 }

@@ -3,10 +3,17 @@
 
 //! Installer UIs over a shared set of Win32 helpers ([`helpers`]):
 //! the full wizard ([`win32`]) and the compact auto-update window ([`minimal`]).
+//!
+//! The `winui` feature adds a WinUI 3 build of both. The entry points below pick
+//! the backend at runtime, falling back to Win32 with no App SDK runtime.
 
+mod dest;
 mod helpers;
 pub mod minimal;
 pub mod win32;
+#[cfg(feature = "winui")]
+pub mod winui;
+mod wizard_engine;
 
 use anyhow::{Result, bail};
 #[cfg(debug_assertions)]
@@ -23,6 +30,68 @@ use common::model::payload_kind::PayloadKind;
 use common::model::plugin_page::PluginInputs;
 use common::model::plugin_page::PluginPage;
 use common::model::plugin_widget::PluginWidget;
+use std::path::PathBuf;
+
+pub fn run_wizard(
+    loaded: crate::payload::LoadedPayload,
+    default_path: PathBuf,
+    launch: bool,
+    already_installed: bool,
+    translator: common::i18n::Translator,
+    ui_plugins: Option<crate::extract::UiPlugins>,
+) -> Result<()> {
+    // Probed before the payload moves: it is not clonable, so the Win32 fallback
+    // needs it back untouched.
+    #[cfg(feature = "winui")]
+    if winui::available() {
+        winui::run(
+            loaded,
+            default_path,
+            launch,
+            already_installed,
+            translator,
+            ui_plugins,
+        )?;
+        return Ok(());
+    }
+    win32::run(
+        loaded,
+        default_path,
+        launch,
+        already_installed,
+        translator,
+        ui_plugins,
+    )
+}
+
+pub fn run_minimal(
+    loaded: crate::payload::LoadedPayload,
+    install_dir: PathBuf,
+    launch: bool,
+    translator: common::i18n::Translator,
+) -> Result<()> {
+    #[cfg(feature = "winui")]
+    if winui::available() {
+        winui::run_minimal(loaded, install_dir, launch, translator)?;
+        return Ok(());
+    }
+    minimal::run(loaded, install_dir, launch, translator)
+}
+
+/// Dev-only: render one view with sample data.
+#[cfg(debug_assertions)]
+pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
+    #[cfg(feature = "winui")]
+    if winui::available() {
+        winui::preview(view, translator)?;
+        return Ok(());
+    }
+    if view == "minimal" {
+        minimal::preview(translator)
+    } else {
+        win32::preview(view, translator)
+    }
+}
 
 /// Fill one page's answers from each widget's declared default, for the
 /// non-interactive paths (`--silent` / compact upgrade UI) where there is no form

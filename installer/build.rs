@@ -17,6 +17,8 @@ fn main() {
         embed_manifest(m).expect("embed installer manifest");
     }
 
+    stage_winui_runtime();
+
     let pub_key_hex = env::var("INSTALLER_PUB_KEY").unwrap_or_else(|_| {
         // Zero key = dev mode. Stub refuses to verify any payload at runtime.
         eprintln!("warning: INSTALLER_PUB_KEY not set - building dev stub (rejects all payloads)");
@@ -39,6 +41,26 @@ fn main() {
     let body = format!("pub const PUB_KEY: [u8; 32] = [{}];\n", arr);
     fs::write(&dest, body).expect("write pub_key.rs");
 }
+
+/// Stage the Windows App SDK bootstrapper for the `winui` feature.
+///
+/// Framework-dependent only. The self-contained model `windows-reactor-setup`
+/// also offers stages ~119 files that would have to travel next to the setup
+/// exe, which an installer cannot do.
+#[cfg(feature = "winui")]
+fn stage_winui_runtime() {
+    windows_reactor_setup::as_framework_dependent();
+    // Delay-loaded so a bare exe without the bootstrapper beside it falls back
+    // to the Win32 UI instead of failing to start. `ui::winui::available`
+    // guards the first call with a `LoadLibrary` check.
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg-bins=/DELAYLOAD:microsoft.windowsappruntime.bootstrap.dll");
+        println!("cargo:rustc-link-arg-bins=delayimp.lib");
+    }
+}
+
+#[cfg(not(feature = "winui"))]
+fn stage_winui_runtime() {}
 
 mod hex {
     pub fn decode_lower(s: &str) -> Option<Vec<u8>> {

@@ -11,6 +11,7 @@ path = "src/main.rs"
 [features]
 default = []
 hintway = ["dep:hintway_analytics", "dep:uuid"]
+winui = ["dep:windows-reactor", "dep:windows-reactor-setup"]
 
 [dependencies]
 common = { path = "../common" }
@@ -50,9 +51,11 @@ windows = { version = "0.59", features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_Security",
 ] }
+windows-reactor = { git = "https://github.com/microsoft/windows-rs.git", rev = "ccca06a7ff561476cf10c8bf328ae870a472024e", optional = true }
 
 [build-dependencies]
 embed-manifest = "1.4"
+windows-reactor-setup = { git = "https://github.com/microsoft/windows-rs.git", rev = "ccca06a7ff561476cf10c8bf328ae870a472024e", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

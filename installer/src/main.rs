@@ -164,11 +164,7 @@ fn run(cli: Cli) -> Result<()> {
     // e.g. `installer --preview minimal`, `--preview license`.
     #[cfg(debug_assertions)]
     if let Some(view) = cli.preview.as_deref() {
-        return if view == "minimal" {
-            ui::minimal::preview(translator)
-        } else {
-            ui::win32::preview(view, translator)
-        };
+        return ui::preview(view, translator);
     }
 
     let loaded = payload::load_and_verify()?;
@@ -210,7 +206,7 @@ fn run(cli: Cli) -> Result<()> {
             },
             hintway_lang,
         );
-        return ui::minimal::run(loaded, path, launch, translator);
+        return ui::run_minimal(loaded, path, launch, translator);
     }
 
     if cli.silent {
@@ -279,7 +275,7 @@ fn run(cli: Cli) -> Result<()> {
     // Opt-in: an upgrade over an existing install uses the compact UI when the
     // new payload asks for it. First install always uses the full wizard.
     if already_installed && loaded.payload.upgrade_minimal_ui {
-        return ui::minimal::run(loaded, default_path, launch, translator);
+        return ui::run_minimal(loaded, default_path, launch, translator);
     }
 
     #[cfg(feature = "hintway")]
@@ -303,7 +299,7 @@ fn run(cli: Cli) -> Result<()> {
     let ui_plugins =
         extract::extract_ui_plugins(&loaded.payload, &default_path, &self_exe, loaded.zip());
 
-    ui::win32::run(
+    ui::run_wizard(
         loaded,
         default_path,
         launch,

@@ -17,10 +17,13 @@ use super::{
 };
 use crate::extract::TempDirGuard;
 use crate::ui::helpers;
+pub(super) use crate::ui::wizard_engine::{
+    StepArgs, StepOutcome, run_plugin_then_step, run_step_query,
+};
+use crate::ui::wizard_engine::{advance_steps, page_marquee};
 use common::model::choice_style::ChoiceStyle;
 use common::model::page_step::PageStep;
 use common::model::plugin_ctx::PluginContext;
-use common::model::plugin_entry::PluginEntry;
 use common::model::plugin_page::PluginInputs;
 use common::model::plugin_page::PluginPage;
 use common::model::plugin_widget::PluginWidget;
@@ -280,7 +283,7 @@ impl Wizard {
             cur: self.cur,
             answers: self.answers.clone(),
             finished: self.finished.clone(),
-            _keepalive: self.tmp.clone(),
+            keepalive: self.tmp.clone(),
             on_progress: None,
         })
     }
@@ -308,17 +311,7 @@ impl Wizard {
                 self.answers = answers;
                 self.finished = finished;
                 let auto_run = !page.buttons;
-                let marquee = page
-                    .widgets
-                    .iter()
-                    .find_map(|w| {
-                        if let PluginWidget::Progress { marquee } = w {
-                            Some(*marquee)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(true);
+                let marquee = page_marquee(&page);
                 unsafe { self.push(hwnd, page, notice, back) };
                 if auto_run {
                     Step::AutoRun { marquee }
@@ -450,153 +443,6 @@ pub(super) fn update_current_progress(hwnd: HWND, scaled: i32) {
     if !bar.is_invalid() {
         unsafe {
             SendMessageW(bar, PBM_SETPOS, Some(WPARAM(scaled as usize)), None);
-        }
-    }
-}
-
-// ---- Background step query ----------------------------------------------
-
-/// Wizard state extracted for the background query thread (all Clone + Send).
-pub(super) struct StepArgs {
-    self_exe: PathBuf,
-    base_ctx: PluginContext,
-    plugins: Vec<(PluginEntry, PathBuf)>,
-    pub(super) cur: usize,
-    pub(super) answers: PluginInputs,
-    pub(super) finished: InputsByPlugin,
-    _keepalive: Option<Arc<TempDirGuard>>,
-    /// Set by `dispatch_plugin_run` when the page has a deterministic progress bar.
-    pub(super) on_progress: Option<Box<dyn Fn(u32) + Send>>,
-}
-
-/// Result of a completed background `run_step_query` call.
-pub(super) enum StepOutcome {
-    /// Every plugin finished — proceed to install with these answers.
-    Install(common::plugin::InputsByPlugin),
-    /// Show this page (it belongs to plugin `cur`).
-    Page {
-        cur: usize,
-        answers: PluginInputs,
-        finished: common::plugin::InputsByPlugin,
-        page: PluginPage,
-        notice: String,
-        back: bool,
-    },
-}
-
-/// Run on a background thread: call `installway_up` for the current plugin,
-/// commit its answers, then continue querying from the next plugin.
-pub(super) fn run_plugin_then_step(args: StepArgs) -> StepOutcome {
-    let StepArgs {
-        self_exe,
-        base_ctx,
-        plugins,
-        cur,
-        mut answers,
-        mut finished,
-        _keepalive,
-        on_progress,
-    } = args;
-    if let Some((entry, dll)) = plugins.get(cur) {
-        let inputs_json = serde_json::to_string(&answers).unwrap_or_else(|_| "{}".into());
-        if let Err(e) = common::plugin::run_up_single(
-            &self_exe,
-            &base_ctx,
-            entry,
-            dll,
-            &inputs_json,
-            on_progress,
-        ) {
-            common::log::warn(format!("plugin '{}' up (wizard): {e:#}", entry.name));
-        }
-        finished
-            .entry(entry.name.clone())
-            .or_default()
-            .extend(std::mem::take(&mut answers));
-    }
-    let next = cur + 1;
-    advance_steps(
-        &plugins,
-        next,
-        answers,
-        finished,
-        |entry, dll, answers_json| {
-            common::plugin::query_step(&self_exe, &base_ctx, entry, dll, answers_json)
-        },
-    )
-}
-
-/// Run on a background thread: advance through plugins (spawning each plugin's
-/// step subprocess) until one returns a `Page`, or all are exhausted.
-pub(super) fn run_step_query(args: StepArgs) -> StepOutcome {
-    // `_keepalive` stays bound until this fn returns, holding the temp dir alive
-    // for the whole query (the DLLs are read inside `advance_steps`).
-    let StepArgs {
-        self_exe,
-        base_ctx,
-        plugins,
-        cur,
-        answers,
-        finished,
-        _keepalive,
-        on_progress: _,
-    } = args;
-    advance_steps(
-        &plugins,
-        cur,
-        answers,
-        finished,
-        |entry, dll, answers_json| {
-            common::plugin::query_step(&self_exe, &base_ctx, entry, dll, answers_json)
-        },
-    )
-}
-
-/// Pure stepping core: walk plugins from `cur`, asking `query` for each one's
-/// next step given the answers so far. On `Done`, the current answers are routed
-/// into `finished` under the plugin's name and the next plugin is tried; on
-/// `Page`, stop and return it. A `query` error is logged and treated as `Done`
-/// (the plugin is skipped but its `up` still runs later) so a bad step never
-/// blocks the wizard nor drops the remaining plugins. The plugin call is
-/// injected so this logic is unit-testable without spawning a subprocess.
-fn advance_steps(
-    plugins: &[(PluginEntry, PathBuf)],
-    mut cur: usize,
-    mut answers: PluginInputs,
-    mut finished: InputsByPlugin,
-    mut query: impl FnMut(&PluginEntry, &std::path::Path, &str) -> anyhow::Result<PageStep>,
-) -> StepOutcome {
-    loop {
-        if cur >= plugins.len() {
-            return StepOutcome::Install(finished);
-        }
-        let (entry, dll) = &plugins[cur];
-        let answers_json = serde_json::to_string(&answers).unwrap_or_else(|_| "{}".into());
-        let step = match query(entry, dll, &answers_json) {
-            Ok(step) => step,
-            Err(e) => {
-                common::log::warn(format!("plugin '{}' step: {e:#}", entry.name));
-                PageStep::Done
-            }
-        };
-        match step {
-            PageStep::Done => {
-                finished
-                    .entry(entry.name.clone())
-                    .or_default()
-                    .extend(std::mem::take(&mut answers));
-                cur += 1;
-            }
-            PageStep::Page { page, notice, back } => {
-                return StepOutcome::Page {
-                    cur,
-                    answers,
-                    finished,
-                    page,
-                    notice,
-                    back,
-                };
-            }
         }
     }
 }
@@ -1188,227 +1034,5 @@ unsafe fn read_field(
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{StepOutcome, advance_steps};
-    use common::model::page_step::PageStep;
-    use common::model::plugin_entry::PluginEntry;
-    use common::model::plugin_page::PluginInputs;
-    use common::model::plugin_page::PluginPage;
-    use common::plugin::InputsByPlugin;
-    use std::path::{Path, PathBuf};
-
-    fn plugins(names: &[&str]) -> Vec<(PluginEntry, PathBuf)> {
-        names
-            .iter()
-            .map(|n| {
-                (
-                    PluginEntry {
-                        name: (*n).into(),
-                        ..Default::default()
-                    },
-                    PathBuf::new(),
-                )
-            })
-            .collect()
-    }
-
-    fn page(id: &str) -> PageStep {
-        PageStep::Page {
-            page: PluginPage {
-                id: id.into(),
-                title: String::new(),
-                subtitle: String::new(),
-                widgets: vec![],
-                buttons: true,
-            },
-            notice: String::new(),
-            back: true,
-        }
-    }
-
-    fn answers(pairs: &[(&str, &str)]) -> PluginInputs {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).into(), (*v).into()))
-            .collect()
-    }
-
-    /// Every plugin returning `Done` exhausts the list and proceeds to install,
-    /// recording an entry for each plugin (even with no answers).
-    #[test]
-    fn advance_all_done_installs() {
-        let pl = plugins(&["a", "b"]);
-        let out = advance_steps(
-            &pl,
-            0,
-            PluginInputs::new(),
-            InputsByPlugin::new(),
-            |_, _: &Path, _| Ok(PageStep::Done),
-        );
-        match out {
-            StepOutcome::Install(f) => {
-                assert!(f.contains_key("a"));
-                assert!(f.contains_key("b"));
-            }
-            _ => panic!("expected install"),
-        }
-    }
-
-    /// The first plugin to return a `Page` stops the walk at its index.
-    #[test]
-    fn advance_stops_at_first_page() {
-        let pl = plugins(&["a", "b"]);
-        let out = advance_steps(
-            &pl,
-            0,
-            PluginInputs::new(),
-            InputsByPlugin::new(),
-            |e, _: &Path, _| {
-                if e.name == "a" {
-                    Ok(page("p"))
-                } else {
-                    Ok(PageStep::Done)
-                }
-            },
-        );
-        match out {
-            StepOutcome::Page { cur, .. } => assert_eq!(cur, 0),
-            _ => panic!("expected page"),
-        }
-    }
-
-    /// When a plugin finishes, its collected answers are routed under its name and
-    /// the carried `answers` is reset for the next plugin.
-    #[test]
-    fn advance_routes_answers_to_finishing_plugin() {
-        let pl = plugins(&["a", "b"]);
-        let out = advance_steps(
-            &pl,
-            0,
-            answers(&[("region.country", "FR")]),
-            InputsByPlugin::new(),
-            |e, _: &Path, _| {
-                if e.name == "b" {
-                    Ok(page("p"))
-                } else {
-                    Ok(PageStep::Done)
-                }
-            },
-        );
-        match out {
-            StepOutcome::Page {
-                cur,
-                answers,
-                finished,
-                ..
-            } => {
-                assert_eq!(cur, 1);
-                assert!(answers.is_empty());
-                assert_eq!(finished["a"]["region.country"], "FR");
-            }
-            _ => panic!("expected page"),
-        }
-    }
-
-    /// A step-query error is non-fatal: the plugin is finalized (its answers kept
-    /// for `up`) and the walk continues to the remaining plugins.
-    #[test]
-    fn advance_skips_plugin_on_error() {
-        let pl = plugins(&["a", "b"]);
-        let out = advance_steps(
-            &pl,
-            0,
-            answers(&[("a.k", "v")]),
-            InputsByPlugin::new(),
-            |e, _: &Path, _| {
-                if e.name == "a" {
-                    Err(anyhow::anyhow!("boom"))
-                } else {
-                    Ok(PageStep::Done)
-                }
-            },
-        );
-        match out {
-            StepOutcome::Install(f) => {
-                assert_eq!(f["a"]["a.k"], "v");
-                assert!(f.contains_key("b"));
-            }
-            _ => panic!("expected install"),
-        }
-    }
-
-    /// The answers collected so far are serialized into the JSON handed to each
-    /// step query (so a plugin can branch on a prior page's answer).
-    #[test]
-    fn advance_passes_answers_json_to_query() {
-        let pl = plugins(&["a"]);
-        let mut seen = String::new();
-        advance_steps(
-            &pl,
-            0,
-            answers(&[("region.country", "DOM")]),
-            InputsByPlugin::new(),
-            |_, _: &Path, json| {
-                seen = json.to_string();
-                Ok(PageStep::Done)
-            },
-        );
-        assert!(seen.contains("region.country"));
-        assert!(seen.contains("DOM"));
-    }
-
-    /// State threads across successive calls (one per Next click): a plugin shows
-    /// a page, then on the follow-up call returns Done with the page's answers
-    /// routed under its name.
-    #[test]
-    fn advance_threads_state_across_calls() {
-        let pl = plugins(&["a"]);
-        let out1 = advance_steps(
-            &pl,
-            0,
-            PluginInputs::new(),
-            InputsByPlugin::new(),
-            |_, _: &Path, _| Ok(page("page1")),
-        );
-        let (cur, mut answers, finished) = match out1 {
-            StepOutcome::Page {
-                cur,
-                answers,
-                finished,
-                page,
-                ..
-            } => {
-                assert_eq!(page.id, "page1");
-                (cur, answers, finished)
-            }
-            _ => panic!("expected page1"),
-        };
-        // The user fills page1; the handler would collect these before re-querying.
-        answers.insert("page1.x".into(), "1".into());
-        let out2 = advance_steps(&pl, cur, answers, finished, |_, _: &Path, _| {
-            Ok(PageStep::Done)
-        });
-        match out2 {
-            StepOutcome::Install(f) => assert_eq!(f["a"]["page1.x"], "1"),
-            _ => panic!("expected install"),
-        }
-    }
-
-    /// An empty plugin list installs immediately with no recorded answers.
-    #[test]
-    fn advance_empty_plugins_installs() {
-        let pl: Vec<(PluginEntry, PathBuf)> = Vec::new();
-        let out = advance_steps(
-            &pl,
-            0,
-            PluginInputs::new(),
-            InputsByPlugin::new(),
-            |_, _: &Path, _| Ok(PageStep::Done),
-        );
-        assert!(matches!(out, StepOutcome::Install(f) if f.is_empty()));
     }
 }
