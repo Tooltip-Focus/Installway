@@ -42,20 +42,15 @@ fn main() {
     fs::write(&dest, body).expect("write pub_key.rs");
 }
 
-/// Stage the Windows App SDK bootstrapper for the `winui` feature.
-///
-/// Framework-dependent only. The self-contained model `windows-reactor-setup`
-/// also offers stages ~119 files that would have to travel next to the setup
-/// exe, which an installer cannot do.
+/// Stage the Windows App SDK support files for the `winui` feature.
 #[cfg(feature = "winui")]
 fn stage_winui_runtime() {
     windows_reactor_setup::as_framework_dependent();
-    // Delay-loaded so a bare exe without the bootstrapper beside it falls back
-    // to the Win32 UI instead of failing to start. `ui::winui::available`
-    // guards the first call with a `LoadLibrary` check.
-    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        println!("cargo:rustc-link-arg-bins=/DELAYLOAD:microsoft.windowsappruntime.bootstrap.dll");
-        println!("cargo:rustc-link-arg-bins=delayimp.lib");
+
+    // OUT_DIR is target/<profile>/build/<pkg>-<hash>/out; the exe is three up.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    if let Some(target_dir) = out_dir.ancestors().nth(3) {
+        let _ = fs::remove_file(target_dir.join("microsoft.windowsappruntime.bootstrap.dll"));
     }
 }
 

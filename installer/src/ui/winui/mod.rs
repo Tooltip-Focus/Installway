@@ -16,6 +16,7 @@ mod icon;
 mod minimal;
 mod model;
 mod plugin_page;
+mod runtime;
 mod wizard;
 mod wizard_state;
 mod worker;
@@ -30,11 +31,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::LibraryLoader::LoadLibraryW;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SW_HIDE, ShowWindow, WM_CLOSE};
-use windows::core::w;
 
 thread_local! {
     /// Holds staged temp files (banner, icon) for the whole run.
@@ -60,25 +59,15 @@ pub fn available() -> bool {
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("resources.pri").is_file()))
             .unwrap_or(false);
-
-        if !beside_exe
-            || unsafe { LoadLibraryW(w!("microsoft.windowsappruntime.bootstrap.dll")) }.is_err()
-        {
-            common::log::info(
-                "WinUI bootstrap files not found beside the exe; falling back to the Win32 UI",
-            );
+        if !beside_exe {
+            common::log::info("resources.pri not found beside the exe; using the Win32 UI");
             return false;
         }
-        match windows_reactor::bootstrap() {
-            Ok(()) => true,
-            Err(e) => {
-                // No (or too old a) Windows App SDK runtime on the machine.
-                common::log::info(format!(
-                    "windows-reactor bootstrap failed ({e}); falling back to the Win32 UI"
-                ));
-                false
-            }
+        if !runtime::bind() {
+            common::log::info("no Windows App Runtime on this machine; using the Win32 UI");
+            return false;
         }
+        true
     })
 }
 

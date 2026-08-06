@@ -50,6 +50,7 @@ windows = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_Security",
+    "Win32_Storage_Packaging_Appx",
 ] }
 windows-reactor = { git = "https://github.com/microsoft/windows-rs.git", rev = "ccca06a7ff561476cf10c8bf328ae870a472024e", optional = true }
 
