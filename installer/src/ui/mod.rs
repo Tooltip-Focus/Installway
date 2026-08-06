@@ -1,17 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Installer UIs over a shared set of Win32 helpers ([`helpers`]):
-//! the full wizard ([`win32`]) and the compact auto-update window ([`minimal`]).
-//!
-//! The `winui` feature adds a WinUI 3 build of both. The entry points below pick
-//! the backend at runtime, falling back to Win32 with no App SDK runtime.
-
 mod dest;
 mod helpers;
 pub mod minimal;
 pub mod win32;
-#[cfg(feature = "winui")]
 pub mod winui;
 mod wizard_engine;
 
@@ -42,7 +35,6 @@ pub fn run_wizard(
 ) -> Result<()> {
     // Probed before the payload moves: it is not clonable, so the Win32 fallback
     // needs it back untouched.
-    #[cfg(feature = "winui")]
     if winui::available() {
         winui::run(
             loaded,
@@ -70,7 +62,6 @@ pub fn run_minimal(
     launch: bool,
     translator: common::i18n::Translator,
 ) -> Result<()> {
-    #[cfg(feature = "winui")]
     if winui::available() {
         winui::run_minimal(loaded, install_dir, launch, translator)?;
         return Ok(());
@@ -81,7 +72,6 @@ pub fn run_minimal(
 /// Dev-only: render one view with sample data.
 #[cfg(debug_assertions)]
 pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
-    #[cfg(feature = "winui")]
     if winui::available() {
         winui::preview(view, translator)?;
         return Ok(());

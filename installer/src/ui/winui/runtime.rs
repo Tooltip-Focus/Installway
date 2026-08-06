@@ -17,18 +17,27 @@ use windows::core::PCWSTR;
 const RELEASE_MAJOR: u16 = 2;
 const RELEASE_MINOR: u16 = 0;
 
-/// Minimum runtime version, mirroring reactor's
-/// `WINDOWSAPPSDK_RUNTIME_VERSION_UINT64`: 2.0.1.0 packed as major/minor/build/rev.
-const MIN_VERSION: u64 = 0x0002_0000_0001_0000;
-
 const PUBLISHER_ID: &str = "8wekyb3d8bbwe";
 
-pub(super) fn bind() -> bool {
+/// A `PACKAGE_VERSION` packed into the `UINT64` the dependency APIs take.
+const fn version(major: u16, minor: u16, build: u16, revision: u16) -> u64 {
+    ((major as u64) << 48) | ((minor as u64) << 32) | ((build as u64) << 16) | revision as u64
+}
+
+/// Minimum runtime when `resources.pri` ships beside the exe, mirroring
+/// reactor's `WINDOWSAPPSDK_RUNTIME_VERSION_UINT64`.
+pub(super) const MIN_VERSION: u64 = version(2, 0, 1, 0);
+
+/// Minimum runtime that can start XAML with **no** `resources.pri` beside the
+/// exe.
+pub(super) const MIN_VERSION_WITHOUT_PRI: u64 = version(2, 4, 0, 0);
+
+pub(super) fn bind(min_version: u64) -> bool {
     for family in candidate_families() {
         if !family_is_installed(&family) {
             continue;
         }
-        if add_dependency(&family) {
+        if add_dependency(&family, min_version) {
             common::log::info(format!("bound to Windows App Runtime '{family}'"));
             return true;
         }
@@ -66,11 +75,11 @@ fn family_is_installed(family: &str) -> bool {
     count > 0
 }
 
-fn add_dependency(family: &str) -> bool {
+fn add_dependency(family: &str, min_version: u64) -> bool {
     let name = common::utils::wide(family);
     let min = PACKAGE_VERSION {
         Anonymous: PACKAGE_VERSION_0 {
-            Version: MIN_VERSION,
+            Version: min_version,
         },
     };
     unsafe {
@@ -108,5 +117,35 @@ fn add_dependency(family: &str) -> bool {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MIN_VERSION, MIN_VERSION_WITHOUT_PRI, candidate_families, version};
+
+    /// The packing must match reactor's `WINDOWSAPPSDK_RUNTIME_VERSION_UINT64`,
+    /// which is the literal this mirrors.
+    #[test]
+    fn version_packing_matches_reactor() {
+        assert_eq!(version(2, 0, 1, 0), 0x0002_0000_0001_0000);
+        assert_eq!(MIN_VERSION, 562_949_953_486_848);
+        assert_eq!(version(0, 0, 0, 1), 1);
+        assert_eq!(version(1, 8, 0, 0), 0x0001_0008_0000_0000);
+    }
+
+    #[test]
+    #[allow(clippy::absurd_extreme_comparisons, clippy::assertions_on_constants)]
+    fn no_pri_floor_is_not_below_the_base_floor() {
+        assert!(MIN_VERSION_WITHOUT_PRI >= MIN_VERSION);
+    }
+
+    /// 2.x dropped the minor from the family name; the installed package here is
+    /// `Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe`.
+    #[test]
+    fn family_candidates_cover_both_naming_schemes() {
+        let fams = candidate_families();
+        assert!(fams.contains(&"Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe".to_string()));
+        assert!(fams.contains(&"Microsoft.WindowsAppRuntime.2.0_8wekyb3d8bbwe".to_string()));
     }
 }

@@ -42,8 +42,6 @@ fn main() {
     fs::write(&dest, body).expect("write pub_key.rs");
 }
 
-/// Stage the Windows App SDK support files for the `winui` feature.
-#[cfg(feature = "winui")]
 fn stage_winui_runtime() {
     windows_reactor_setup::as_framework_dependent();
 
@@ -51,11 +49,9 @@ fn stage_winui_runtime() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     if let Some(target_dir) = out_dir.ancestors().nth(3) {
         let _ = fs::remove_file(target_dir.join("microsoft.windowsappruntime.bootstrap.dll"));
+        let _ = fs::remove_file(target_dir.join("resources.pri"));
     }
 }
-
-#[cfg(not(feature = "winui"))]
-fn stage_winui_runtime() {}
 
 mod hex {
     pub fn decode_lower(s: &str) -> Option<Vec<u8>> {

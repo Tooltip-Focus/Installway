@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Declarative WinUI 3 front-end, behind the `winui` feature. Same two surfaces
-//! as the Win32 backend, the wizard and the compact updater, built on
-//! [`windows_reactor`] instead of hand-managed controls.
-//!
 //! WinUI 3 needs the Windows App SDK runtime. If not present, fallback to win32.
-//!
-//! Reactor exposes no "window is closing, veto it" hook, so the guarantee that
-//! closing mid-install cannot leave a half-applied install is kept by
-//! subclassing the top-level HWND; see [`close_guard`].
 
 mod banner;
 mod icon;
@@ -52,19 +44,27 @@ static CLOSE_SEQ: AtomicU64 = AtomicU64::new(0);
 const SUBCLASS_ID: usize = 0x1_5A11;
 
 /// Whether the WinUI stack is usable in this process.
+///
+/// A missing `resources.pri` is not fatal on its own: a runtime carrying the MRM
+/// fix starts XAML without one. Older runtimes die with an uncatchable stowed
+/// exception instead, so the file's absence raises the required runtime version
+/// rather than failing outright. Today nothing reaches that floor, so a bare exe
+/// still lands on Win32; see [`runtime::MIN_VERSION_WITHOUT_PRI`].
 pub fn available() -> bool {
     static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *READY.get_or_init(|| {
-        let beside_exe = std::env::current_exe()
+        let has_pri = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("resources.pri").is_file()))
             .unwrap_or(false);
-        if !beside_exe {
-            common::log::info("resources.pri not found beside the exe; using the Win32 UI");
-            return false;
-        }
-        if !runtime::bind() {
-            common::log::info("no Windows App Runtime on this machine; using the Win32 UI");
+        let min = if has_pri {
+            runtime::MIN_VERSION
+        } else {
+            common::log::info("no resources.pri beside the exe; a fixed runtime is required");
+            runtime::MIN_VERSION_WITHOUT_PRI
+        };
+        if !runtime::bind(min) {
+            common::log::info("no suitable Windows App Runtime; using the Win32 UI");
             return false;
         }
         true
