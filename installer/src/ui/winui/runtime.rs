@@ -3,14 +3,38 @@
 
 //! Binds the process to the Windows App Runtime installed on the machine.
 
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Security::PSID;
 use windows::Win32::Storage::Packaging::Appx::{
-    AddPackageDependency, AddPackageDependencyOptions_None, CreatePackageDependencyOptions_None,
-    GetPackagesByPackageFamily, PACKAGE_VERSION, PACKAGE_VERSION_0, PACKAGEDEPENDENCY_CONTEXT,
-    PackageDependencyLifetimeKind_Process, PackageDependencyProcessorArchitectures_None,
-    TryCreatePackageDependency,
+    GetPackagesByPackageFamily, PACKAGEDEPENDENCY_CONTEXT,
 };
-use windows::core::PCWSTR;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::core::{HRESULT, PCSTR, PCWSTR, PWSTR, s, w};
+
+/// `TryCreatePackageDependency` and `AddPackageDependency` arrived in Windows 10
+/// 2004. Linking them normally would make the whole installer refuse to start on
+/// anything older, before any code could pick the Win32 UI, so they are resolved
+/// by name instead and a miss just means no WinUI.
+type TryCreateFn =
+    unsafe extern "system" fn(PSID, PCWSTR, u64, i32, i32, PCWSTR, i32, *mut PWSTR) -> HRESULT;
+type AddFn = unsafe extern "system" fn(
+    PCWSTR,
+    i32,
+    i32,
+    *mut PACKAGEDEPENDENCY_CONTEXT,
+    *mut PWSTR,
+) -> HRESULT;
+
+/// `PackageDependencyProcessorArchitectures_None`: match this process.
+const ARCH_NONE: i32 = 0;
+/// `PackageDependencyLifetimeKind_Process`: released when we exit.
+const LIFETIME_PROCESS: i32 = 0;
+/// `CreatePackageDependencyOptions_None` / `AddPackageDependencyOptions_None`.
+const OPTIONS_NONE: i32 = 0;
+
+fn proc_address(module: HMODULE, name: PCSTR) -> Option<unsafe extern "system" fn() -> isize> {
+    unsafe { GetProcAddress(module, name) }
+}
 
 /// Windows App SDK release this build targets, mirroring reactor's
 /// `WINDOWSAPPSDK_RELEASE_MAJORMINOR` (0x00020000).
@@ -77,46 +101,52 @@ fn family_is_installed(family: &str) -> bool {
 
 fn add_dependency(family: &str, min_version: u64) -> bool {
     let name = common::utils::wide(family);
-    let min = PACKAGE_VERSION {
-        Anonymous: PACKAGE_VERSION_0 {
-            Version: min_version,
-        },
-    };
     unsafe {
-        // `None` architecture means "whatever this process is". A Process
-        // lifetime needs no artifact and is released when we exit.
-        let id = match TryCreatePackageDependency(
+        // kernelbase is already loaded; this only looks the exports up.
+        let Ok(kernelbase) = GetModuleHandleW(w!("kernelbase.dll")) else {
+            return false;
+        };
+        let (Some(try_create), Some(add)) = (
+            proc_address(kernelbase, s!("TryCreatePackageDependency")),
+            proc_address(kernelbase, s!("AddPackageDependency")),
+        ) else {
+            common::log::info("dynamic package dependencies need Windows 10 2004 or later");
+            return false;
+        };
+        let try_create: TryCreateFn = std::mem::transmute(try_create);
+        let add: AddFn = std::mem::transmute(add);
+
+        let mut id = PWSTR::null();
+        let hr = try_create(
             PSID::default(),
             PCWSTR(name.as_ptr()),
-            min,
-            PackageDependencyProcessorArchitectures_None,
-            PackageDependencyLifetimeKind_Process,
+            min_version,
+            ARCH_NONE,
+            LIFETIME_PROCESS,
             PCWSTR::null(),
-            CreatePackageDependencyOptions_None,
-        ) {
-            Ok(id) => id,
-            Err(e) => {
-                common::log::info(format!("no runtime for '{family}': {e}"));
-                return false;
-            }
-        };
+            OPTIONS_NONE,
+            &mut id,
+        );
+        if hr.is_err() || id.is_null() {
+            common::log::info(format!("no runtime for '{family}': {hr:?}"));
+            return false;
+        }
+
         let mut ctx = PACKAGEDEPENDENCY_CONTEXT::default();
-        let added = AddPackageDependency(
+        let hr = add(
             PCWSTR(id.0),
             0,
-            AddPackageDependencyOptions_None,
+            OPTIONS_NONE,
             &mut ctx,
-            None,
+            std::ptr::null_mut(),
         );
         // The id allocation and the context are deliberately leaked: the package
         // must stay in the graph for as long as the UI runs, which is until exit.
-        match added {
-            Ok(()) => true,
-            Err(e) => {
-                common::log::info(format!("add package dependency '{family}': {e}"));
-                false
-            }
+        if hr.is_err() {
+            common::log::info(format!("add package dependency '{family}': {hr:?}"));
+            return false;
         }
+        true
     }
 }
 
