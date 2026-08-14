@@ -25,6 +25,11 @@ use common::model::plugin_page::PluginPage;
 use common::model::plugin_widget::PluginWidget;
 use std::path::PathBuf;
 
+#[cfg(feature = "hintway")]
+pub fn backend_name() -> &'static str {
+    if winui::available() { "winui" } else { "win32" }
+}
+
 pub fn run_wizard(
     loaded: crate::payload::LoadedPayload,
     default_path: PathBuf,

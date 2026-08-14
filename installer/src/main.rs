@@ -205,6 +205,7 @@ fn run(cli: Cli) -> Result<()> {
                 "user"
             },
             hintway_lang,
+            ui::backend_name(),
         );
         return ui::run_minimal(loaded, path, launch, translator);
     }
@@ -223,6 +224,8 @@ fn run(cli: Cli) -> Result<()> {
                 "user"
             },
             hintway_lang,
+            // Silent draws nothing, so probing a UI backend would be misleading.
+            "none",
         );
         return run_silent(loaded, path, launch, translator);
     }
@@ -286,6 +289,7 @@ fn run(cli: Cli) -> Result<()> {
         "interactive",
         "unknown",
         hintway_lang,
+        ui::backend_name(),
     );
 
     // Save before `loaded` is moved into the UI call below.
