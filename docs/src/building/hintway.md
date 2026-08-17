@@ -16,6 +16,12 @@ machine identifier, and no persistent file on disk.
 | `mode` | `silent`, `minimal`, or `interactive` |
 | `privilege` | `admin`, `user`, or `unknown` |
 | `lang` | Detected UI language code, such as `en` or `fr` |
+| `ui` | `winui`, `win32`, or `none` |
+
+`ui` reports which front-end actually drew the window. The installer prefers
+WinUI 3 and falls back to the Win32 wizard when the machine has no suitable
+Windows App SDK runtime, so this tells you how that split looks across your
+users. Silent installs draw nothing and report `none`.
 
 Events sent:
 

@@ -17,6 +17,8 @@ fn main() {
         embed_manifest(m).expect("embed installer manifest");
     }
 
+    stage_winui_runtime();
+
     let pub_key_hex = env::var("INSTALLER_PUB_KEY").unwrap_or_else(|_| {
         // Zero key = dev mode. Stub refuses to verify any payload at runtime.
         eprintln!("warning: INSTALLER_PUB_KEY not set - building dev stub (rejects all payloads)");
@@ -38,6 +40,17 @@ fn main() {
     let dest = out_dir.join("pub_key.rs");
     let body = format!("pub const PUB_KEY: [u8; 32] = [{}];\n", arr);
     fs::write(&dest, body).expect("write pub_key.rs");
+}
+
+fn stage_winui_runtime() {
+    windows_reactor_setup::as_framework_dependent();
+
+    // OUT_DIR is target/<profile>/build/<pkg>-<hash>/out; the exe is three up.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    if let Some(target_dir) = out_dir.ancestors().nth(3) {
+        let _ = fs::remove_file(target_dir.join("microsoft.windowsappruntime.bootstrap.dll"));
+        let _ = fs::remove_file(target_dir.join("resources.pri"));
+    }
 }
 
 mod hex {

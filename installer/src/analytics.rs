@@ -33,6 +33,7 @@ fn apply_custom(mgr: &AnalyticsManager) {
 /// - `mode`:      `"silent"` | `"minimal"` | `"interactive"`
 /// - `privilege`: `"admin"` | `"user"` (updated post-install for interactive via `set_privilege`)
 /// - `lang`:      detected ISO-639-1 code (e.g. `"en"`, `"fr"`)
+/// - `ui`:        `"winui"` | `"win32"` | `"none"` (silent runs draw nothing)
 pub fn init(
     tenant_id: Option<&str>,
     app_version: &str,
@@ -40,6 +41,7 @@ pub fn init(
     mode: &str,
     privilege: &str,
     lang: &str,
+    ui: &str,
 ) {
     let Some(tenant_id) = tenant_id else { return };
 
@@ -49,6 +51,7 @@ pub fn init(
         c.insert("mode".to_string(), json!(mode));
         c.insert("privilege".to_string(), json!(privilege));
         c.insert("lang".to_string(), json!(lang));
+        c.insert("ui".to_string(), json!(ui));
     }
 
     let mgr = AnalyticsManager::instance();
