@@ -7,6 +7,9 @@
 //! shape. Version 2.4 is the minimum; newer compatible 2.x runtimes are
 //! accepted automatically.
 
+mod async_value;
+pub use async_value::{AsyncValue, Progress};
+
 #[cfg(windows)]
 pub mod compat;
 #[cfg(windows)]

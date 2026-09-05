@@ -17,46 +17,7 @@ use common::model::plugin_page::PluginInputs;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-
-/// Latest value published by a worker thread and sampled by the Reactor
-/// component. Reactor's second preview deliberately moved cross-thread work to
-/// components; this small mailbox keeps streaming progress independent from
-/// the view implementation.
-#[derive(Clone)]
-pub(super) struct AsyncValue<T>(Arc<Mutex<T>>);
-
-impl<T: Default> Default for AsyncValue<T> {
-    fn default() -> Self {
-        Self(Arc::new(Mutex::new(T::default())))
-    }
-}
-
-impl<T> AsyncValue<T> {
-    pub(super) fn call(&self, value: T) {
-        if let Ok(mut slot) = self.0.lock() {
-            *slot = value;
-        }
-    }
-}
-
-impl<T: Default> AsyncValue<T> {
-    /// Atomically consume a one-shot value without racing a concurrent writer.
-    pub(super) fn take(&self) -> T {
-        self.0
-            .lock()
-            .map(|mut value| std::mem::take(&mut *value))
-            .unwrap_or_default()
-    }
-}
-
-impl<T: Clone> AsyncValue<T> {
-    pub(super) fn get(&self) -> T {
-        self.0
-            .lock()
-            .map(|value| value.clone())
-            .unwrap_or_else(|e| e.into_inner().clone())
-    }
-}
+pub(super) use winui_support::{AsyncValue, Progress};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Phase {
@@ -72,15 +33,6 @@ pub(super) enum Phase {
 pub(super) enum Dialog {
     Warn(String),
     ConfirmCancel,
-}
-
-/// Install progress from the worker thread. The component samples the latest
-/// value asynchronously, keeping the UI thread free while work continues.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub(super) struct Progress {
-    pub done: u64,
-    pub total: u64,
-    pub name: String,
 }
 
 /// A one-shot edge from a background thread. Heavier payloads are parked in the
