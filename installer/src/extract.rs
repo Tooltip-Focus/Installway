@@ -139,38 +139,48 @@ pub struct InstallCtx<'a> {
     pub translator: common::i18n::Translator,
 }
 
-/// Returns the per-install-dir lock so callers keep holding it across
-/// `install::finalize`; dropping it earlier would let a second installer
-/// start staging while this one still writes metadata/registry state.
-pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
-    let manifest = &ctx.payload.manifest;
+/// The scratch areas under `<install_dir>/.installer_tmp`: `staged/` holds
+/// rebuilt file content before it is committed, `backup/` holds the previous
+/// version of anything the commit overwrites or removes, and the journal at
+/// `root` records what to undo if the commit is interrupted.
+struct TempAreas {
+    root: PathBuf,
+    staged: PathBuf,
+    backup: PathBuf,
+}
 
-    // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
-    // Named by product_id (filesystem-safe, stable across versions).
-    common::log::init(common::log::log_path_installer_temp(
-        &ctx.payload.product_id,
-        std::process::id(),
-    ));
-    common::log::prune_temp_logs(&ctx.payload.product_id, 14);
-    let started = std::time::Instant::now();
-    common::log::info(format!(
-        "install start: product={} version={} kind={:?} install_dir={}",
-        ctx.payload.product,
-        ctx.payload.to_version,
-        ctx.payload.kind,
-        ctx.install_dir.display()
-    ));
-    common::log::info(format!(
-        "payload {} bytes, {} files, deleted {}",
-        ctx.zip_bytes.len(),
-        manifest.files.len(),
-        manifest.deleted_files.len()
-    ));
+impl TempAreas {
+    /// Roll back a commit an earlier run left half-applied, then start from
+    /// empty scratch areas. A leftover temp with no journal means a previous
+    /// run was interrupted during staging (live install untouched), so discard
+    /// it and start over; correct files are hash-skipped during staging.
+    fn prepare(install_dir: &Path) -> Result<Self> {
+        let root = install_dir.join(".installer_tmp");
 
-    // Single-instance lock per install dir, so two runs can't race on the temp
-    // dirs. OS frees it on exit or crash.
-    let install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
+        // Roll back a commit interrupted by a previous run before doing anything.
+        recover_if_interrupted(&root, install_dir);
 
+        let areas = Self {
+            staged: root.join("staged"),
+            backup: root.join("backup"),
+            root,
+        };
+        if areas.root.exists() {
+            common::log::warn("discarding leftover staging from a previous incomplete run");
+        }
+        let _ = fs::remove_dir_all(&areas.root);
+        fs::create_dir_all(&areas.staged).context("create staging dir")?;
+        fs::create_dir_all(&areas.backup).context("create backup dir")?;
+        Ok(areas)
+    }
+}
+
+/// Pre-flight gates, in the order the install depends on them: refuse a patch
+/// aimed at the wrong installed version (nothing touched yet), then confirm the
+/// destination is writable and roomy, then close anything running from it.
+///
+/// Every failure here leaves the live install untouched.
+fn check_preconditions(ctx: &InstallCtx<'_>) -> Result<()> {
     if ctx.payload.force_reinstall {
         common::log::info("force_reinstall set: skipping version check, reinstalling from scratch");
     }
@@ -202,59 +212,35 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
 
     check_writable(&ctx.install_dir)?;
 
-    check_disk_space(&ctx.install_dir, manifest, ctx.payload.kind)?;
+    check_disk_space(&ctx.install_dir, &ctx.payload.manifest, ctx.payload.kind)?;
 
     // Close any process running from the install dir before writing files.
-    {
-        let pcb = ctx.on_progress.clone();
-        crate::proc::ensure_closed(
-            &ctx.install_dir,
-            ctx.hwnd_parent,
-            ctx.translator,
-            &ctx.cancel,
-            &move |msg| pcb(0, 0, msg),
-        )?;
-    }
+    let pcb = ctx.on_progress.clone();
+    crate::proc::ensure_closed(
+        &ctx.install_dir,
+        ctx.hwnd_parent,
+        ctx.translator,
+        &ctx.cancel,
+        &move |msg| pcb(0, 0, msg),
+    )
+}
 
-    // Pre-install plugins run before any file is staged, so a required failure
-    // aborts cleanly (live install untouched).
-    run_zip_plugins(&ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
-
-    let temp_dir = ctx.install_dir.join(".installer_tmp");
-
-    // Roll back a commit interrupted by a previous run before doing anything.
-    recover_if_interrupted(&temp_dir, &ctx.install_dir);
-
-    // Fresh staging + backup areas. A leftover temp with no journal means a
-    // previous run was interrupted during staging (live install untouched), so
-    // discard it and start over; correct files are hash-skipped below.
-    let staged_dir = temp_dir.join("staged");
-    let backup_dir = temp_dir.join("backup");
-    if temp_dir.exists() {
-        common::log::warn("discarding leftover staging from a previous incomplete run");
-    }
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&staged_dir).context("create staging dir")?;
-    fs::create_dir_all(&backup_dir).context("create backup dir")?;
-
-    let total_bytes: u64 = manifest.files.values().map(|e| e.size).sum();
+/// PHASE 1: build every new/changed file under `temp.staged`, verified by hash.
+/// The live install is not touched, so cancelling or crashing here leaves it
+/// intact. Returns the sorted set of relative paths that need committing; files
+/// already correct on disk are hash-skipped and left out of it.
+///
+/// Files are independent, so staging fans out across cores; `map_init` gives
+/// each worker its own `ZipArchive` view over the shared mmap slice (one
+/// central-directory parse per core, not per file).
+fn stage_all(ctx: &InstallCtx<'_>, temp: &TempAreas, total_bytes: u64) -> Result<Vec<String>> {
     let done = Arc::new(AtomicU64::new(0));
-
-    // Validate the embedded zip up front (clean error if corrupt) before the
-    // parallel workers each open their own view of it.
-    ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
 
     // Deterministic order - easier UX and reproducible.
     let mut entries: Vec<(&String, &common::model::file_entry::FileEntry)> =
-        manifest.files.iter().collect();
+        ctx.payload.manifest.files.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
 
-    // ---- PHASE 1: STAGE (parallel) ------------------------------------
-    // Build every new/changed file in `staged/`, verified by hash. The live
-    // install is not touched, so cancelling/crashing here leaves it intact.
-    // Files are independent, so staging fans out across cores; `map_init` gives
-    // each worker its own `ZipArchive` view over the shared mmap slice (one
-    // central-directory parse per core, not per file).
     let staged: Vec<Result<Option<String>>> = entries
         .par_iter()
         .map_init(
@@ -286,7 +272,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
                 let archive = archive
                     .as_mut()
                     .map_err(|e| anyhow::anyhow!("open embedded zip: {e}"))?;
-                let staged_path = staged_dir.join(staged_name(rel));
+                let staged_path = temp.staged.join(staged_name(rel));
                 stage_file(archive, ctx.payload.kind, rel, entry, &dest, &staged_path)?;
 
                 done.fetch_add(entry.size, Ordering::Relaxed);
@@ -304,16 +290,23 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
             Ok(None) => {}
             Err(e) => {
                 common::log::warn(format!("staging failed/cancelled: {e:#}"));
-                cleanup(&temp_dir);
                 return Err(e);
             }
         }
     }
     to_commit.sort(); // parallel completion order is nondeterministic
+    Ok(to_commit)
+}
 
-    // ---- PHASE 2: COMMIT ----------------------------------------------
-    // Swap staged files into place. A journal records every touched path so an
-    // interruption can be rolled back.
+/// Which live files this run should remove: the manifest's `deleted_files` that
+/// actually exist, plus - when purging is on - anything in the install dir this
+/// build does not know about. Unsafe paths are skipped, not fatal.
+///
+/// Order matters to the caller: manifest deletions first, then purged orphans
+/// in `collect_files` order.
+fn plan_deletions(ctx: &InstallCtx<'_>) -> Vec<String> {
+    let manifest = &ctx.payload.manifest;
+
     let mut deleted: Vec<String> = Vec::new();
     for rel in &manifest.deleted_files {
         if safe_rel(rel).is_err() {
@@ -347,6 +340,208 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
         }
     }
 
+    deleted
+}
+
+/// PHASE 2: swap staged content into place and prove it landed intact.
+///
+/// Runs inside the journalled transaction the caller opened with
+/// `write_journal`: every failure path rolls the install back to its previous
+/// state before returning, leaving the caller to clear the temp dir. On success
+/// the journal is dropped so recovery won't fire on the next launch.
+fn commit_and_verify(
+    ctx: &InstallCtx<'_>,
+    temp: &TempAreas,
+    to_commit: &[String],
+    deleted: &[String],
+    total_bytes: u64,
+) -> Result<()> {
+    let commit_result = (|| -> Result<()> {
+        for rel in to_commit {
+            if ctx.cancel.load(Ordering::Relaxed) {
+                bail!("cancelled by user");
+            }
+            commit_one(&ctx.install_dir, &temp.staged, &temp.backup, rel)?;
+        }
+        for rel in deleted {
+            if ctx.cancel.load(Ordering::Relaxed) {
+                bail!("cancelled by user");
+            }
+            backup_then_remove(&ctx.install_dir, &temp.backup, rel)?;
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = commit_result {
+        common::log::error(format!("commit failed: {e:#} - rolling back"));
+        rollback(&temp.root, &ctx.install_dir, to_commit, deleted);
+        return Err(e).context("install failed and was rolled back");
+    }
+
+    if let Err(e) = verify_and_repair(ctx, temp, to_commit, total_bytes) {
+        rollback(&temp.root, &ctx.install_dir, to_commit, deleted);
+        return Err(e);
+    }
+
+    // Verified - drop the journal so recovery won't fire.
+    let _ = fs::remove_file(journal_path(&temp.root));
+
+    if !deleted.is_empty() {
+        common::utils::prune_empty_dirs(&long_path(&ctx.install_dir));
+    }
+    Ok(())
+}
+
+/// Re-read each committed file from disk to catch corruption from the
+/// write/rename itself (bad sector, FS glitch). Still inside the transaction,
+/// backups intact, so the caller can still roll back on any error from here.
+fn verify_and_repair(
+    ctx: &InstallCtx<'_>,
+    temp: &TempAreas,
+    to_commit: &[String],
+    total_bytes: u64,
+) -> Result<()> {
+    let manifest = &ctx.payload.manifest;
+
+    (ctx.on_progress)(
+        total_bytes,
+        total_bytes,
+        &ctx.translator.get("install.progress_verifying"),
+    );
+    common::log::info(format!("verifying {} committed file(s)", to_commit.len()));
+    let verify_started = Instant::now();
+    let mut corrupt = find_corrupt(&ctx.install_dir, manifest, to_commit, &ctx.cancel);
+    common::log::info(format!(
+        "verification finished in {:.1}s",
+        verify_started.elapsed().as_secs_f64()
+    ));
+
+    // A cancel during the (potentially long) re-hash short-circuits the
+    // remaining files inside `find_corrupt`; the caller rolls back so the live
+    // install returns to its previous version rather than half-committed.
+    if ctx.cancel.load(Ordering::Relaxed) {
+        common::log::warn("cancelled by user during verification - rolling back");
+        bail!("cancelled by user");
+    }
+
+    // Repair before a full rollback: corrupt content is reproducible from
+    // the payload, and rewriting to a fresh location dodges transient
+    // glitches. Backups stay untouched so rollback remains possible.
+    if !corrupt.is_empty() {
+        common::log::warn(format!(
+            "{} file(s) failed post-install verification - attempting repair from payload",
+            corrupt.len()
+        ));
+        for attempt in 1..=VERIFY_REPAIR_ATTEMPTS {
+            (ctx.on_progress)(
+                total_bytes,
+                total_bytes,
+                &ctx.translator.get("install.progress_repairing"),
+            );
+            let repair = repair_corrupt(
+                ctx.zip_bytes,
+                ctx.payload.kind,
+                manifest,
+                &temp.staged,
+                &temp.backup,
+                &ctx.install_dir,
+                &corrupt,
+            );
+            if let Err(e) = repair {
+                common::log::error(format!("repair attempt {} failed: {e:#}", attempt));
+                break;
+            }
+            corrupt = find_corrupt(&ctx.install_dir, manifest, &corrupt, &ctx.cancel);
+            if corrupt.is_empty() {
+                common::log::info(format!("repair succeeded on attempt {}", attempt));
+                break;
+            }
+            common::log::warn(format!(
+                "{} file(s) still corrupt after repair attempt {}",
+                corrupt.len(),
+                attempt
+            ));
+        }
+    }
+
+    // Repair exhausted and still corrupt - the caller rolls back to the
+    // previous version.
+    if !corrupt.is_empty() {
+        common::log::error(format!(
+            "post-install verification failed for {} file(s) after repair - rolling back",
+            corrupt.len()
+        ));
+        bail!(
+            "{} installed file(s) failed verification and could not be repaired; \
+             the install was rolled back to the previous version",
+            corrupt.len()
+        );
+    }
+    common::log::info(format!("verified {} committed file(s)", to_commit.len()));
+    Ok(())
+}
+
+/// Returns the per-install-dir lock so callers keep holding it across
+/// `install::finalize`; dropping it earlier would let a second installer
+/// start staging while this one still writes metadata/registry state.
+pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
+    let manifest = &ctx.payload.manifest;
+
+    // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
+    // Named by product_id (filesystem-safe, stable across versions).
+    common::log::init(common::log::log_path_installer_temp(
+        &ctx.payload.product_id,
+        std::process::id(),
+    ));
+    common::log::prune_temp_logs(&ctx.payload.product_id, 14);
+    let started = std::time::Instant::now();
+    common::log::info(format!(
+        "install start: product={} version={} kind={:?} install_dir={}",
+        ctx.payload.product,
+        ctx.payload.to_version,
+        ctx.payload.kind,
+        ctx.install_dir.display()
+    ));
+    common::log::info(format!(
+        "payload {} bytes, {} files, deleted {}",
+        ctx.zip_bytes.len(),
+        manifest.files.len(),
+        manifest.deleted_files.len()
+    ));
+
+    // Single-instance lock per install dir, so two runs can't race on the temp
+    // dirs. OS frees it on exit or crash.
+    let install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
+
+    check_preconditions(&ctx)?;
+
+    // Pre-install plugins run before any file is staged, so a required failure
+    // aborts cleanly (live install untouched).
+    run_zip_plugins(&ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
+
+    let temp = TempAreas::prepare(&ctx.install_dir)?;
+
+    let total_bytes: u64 = manifest.files.values().map(|e| e.size).sum();
+
+    // Validate the embedded zip up front (clean error if corrupt) before the
+    // parallel workers each open their own view of it. Deliberately outside the
+    // staging call below: a corrupt zip returns without clearing the temp dir,
+    // as it always has.
+    ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
+
+    let to_commit = match stage_all(&ctx, &temp, total_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            cleanup(&temp.root);
+            return Err(e);
+        }
+    };
+
+    // ---- PHASE 2: COMMIT ----------------------------------------------
+    // Swap staged files into place. A journal records every touched path so an
+    // interruption can be rolled back.
+    let deleted = plan_deletions(&ctx);
+
     if to_commit.is_empty() && deleted.is_empty() {
         common::log::info("nothing to commit (already up to date)");
     } else {
@@ -360,124 +555,19 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
             total_bytes,
             &ctx.translator.get("install.progress_finalizing"),
         );
-        write_journal(&temp_dir, &to_commit, &deleted)?;
+        // Outside the transaction below: a journal that cannot be written
+        // returns without clearing the temp dir, as it always has.
+        write_journal(&temp.root, &to_commit, &deleted)?;
 
-        let commit_result = (|| -> Result<()> {
-            for rel in &to_commit {
-                if ctx.cancel.load(Ordering::Relaxed) {
-                    bail!("cancelled by user");
-                }
-                commit_one(&ctx.install_dir, &staged_dir, &backup_dir, rel)?;
-            }
-            for rel in &deleted {
-                if ctx.cancel.load(Ordering::Relaxed) {
-                    bail!("cancelled by user");
-                }
-                backup_then_remove(&ctx.install_dir, &backup_dir, rel)?;
-            }
-            Ok(())
-        })();
-
-        if let Err(e) = commit_result {
-            common::log::error(format!("commit failed: {e:#} - rolling back"));
-            rollback(&temp_dir, &ctx.install_dir, &to_commit, &deleted);
-            cleanup(&temp_dir);
-            return Err(e).context("install failed and was rolled back");
-        }
-
-        // Re-read each committed file from disk to catch corruption from the
-        // write/rename itself (bad sector, FS glitch). Still inside the
-        // transaction, backups intact.
-        (ctx.on_progress)(
-            total_bytes,
-            total_bytes,
-            &ctx.translator.get("install.progress_verifying"),
-        );
-        common::log::info(format!("verifying {} committed file(s)", to_commit.len()));
-        let verify_started = Instant::now();
-        let mut corrupt = find_corrupt(&ctx.install_dir, manifest, &to_commit, &ctx.cancel);
-        common::log::info(format!(
-            "verification finished in {:.1}s",
-            verify_started.elapsed().as_secs_f64()
-        ));
-
-        // A cancel during the (potentially long) re-hash short-circuits the
-        // remaining files inside `find_corrupt`; here we roll back so the live
-        // install returns to its previous version rather than half-committed.
-        if ctx.cancel.load(Ordering::Relaxed) {
-            common::log::warn("cancelled by user during verification - rolling back");
-            rollback(&temp_dir, &ctx.install_dir, &to_commit, &deleted);
-            cleanup(&temp_dir);
-            bail!("cancelled by user");
-        }
-
-        // Repair before a full rollback: corrupt content is reproducible from
-        // the payload, and rewriting to a fresh location dodges transient
-        // glitches. Backups stay untouched so rollback remains possible.
-        if !corrupt.is_empty() {
-            common::log::warn(format!(
-                "{} file(s) failed post-install verification - attempting repair from payload",
-                corrupt.len()
-            ));
-            for attempt in 1..=VERIFY_REPAIR_ATTEMPTS {
-                (ctx.on_progress)(
-                    total_bytes,
-                    total_bytes,
-                    &ctx.translator.get("install.progress_repairing"),
-                );
-                let repair = repair_corrupt(
-                    ctx.zip_bytes,
-                    ctx.payload.kind,
-                    manifest,
-                    &staged_dir,
-                    &backup_dir,
-                    &ctx.install_dir,
-                    &corrupt,
-                );
-                if let Err(e) = repair {
-                    common::log::error(format!("repair attempt {} failed: {e:#}", attempt));
-                    break;
-                }
-                corrupt = find_corrupt(&ctx.install_dir, manifest, &corrupt, &ctx.cancel);
-                if corrupt.is_empty() {
-                    common::log::info(format!("repair succeeded on attempt {}", attempt));
-                    break;
-                }
-                common::log::warn(format!(
-                    "{} file(s) still corrupt after repair attempt {}",
-                    corrupt.len(),
-                    attempt
-                ));
-            }
-        }
-
-        // Repair exhausted and still corrupt - roll back to the previous version.
-        if !corrupt.is_empty() {
-            common::log::error(format!(
-                "post-install verification failed for {} file(s) after repair - rolling back",
-                corrupt.len()
-            ));
-            rollback(&temp_dir, &ctx.install_dir, &to_commit, &deleted);
-            cleanup(&temp_dir);
-            bail!(
-                "{} installed file(s) failed verification and could not be repaired; \
-                 the install was rolled back to the previous version",
-                corrupt.len()
-            );
-        }
-        common::log::info(format!("verified {} committed file(s)", to_commit.len()));
-
-        // Verified - drop the journal so recovery won't fire.
-        let _ = fs::remove_file(journal_path(&temp_dir));
-
-        if !deleted.is_empty() {
-            common::utils::prune_empty_dirs(&long_path(&ctx.install_dir));
+        if let Err(e) = commit_and_verify(&ctx, &temp, &to_commit, &deleted, total_bytes) {
+            cleanup(&temp.root);
+            return Err(e);
         }
     }
 
     // Installer metadata is written to the per-user data dir by
     // `install::finalize`, not into the app folder.
-    cleanup(&temp_dir);
+    cleanup(&temp.root);
 
     common::log::info(format!(
         "install complete in {}ms",
@@ -1888,5 +1978,377 @@ mod tests {
         apply_active_features(&mut m, &[], &[]);
         assert_eq!(m.files.len(), 1);
         assert!(m.deleted_files.is_empty());
+    }
+
+    // ---- install() characterisation ------------------------------------
+    //
+    // These pin the observable behaviour of the `install` orchestrator itself
+    // (files on disk, error text, progress callbacks, temp-dir cleanup) so it
+    // can be restructured without changing what callers see. They deliberately
+    // use `PayloadKind::Full`, which skips the installed-version lookup and so
+    // never reads the real per-user data dir.
+
+    type ProgressLog = Arc<std::sync::Mutex<Vec<(u64, u64, String)>>>;
+
+    fn progress_recorder() -> (ProgressLog, common::ProgressFn) {
+        let log: ProgressLog = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = log.clone();
+        let f: common::ProgressFn = Arc::new(move |done, total, msg: &str| {
+            sink.lock().unwrap().push((done, total, msg.to_string()));
+        });
+        (log, f)
+    }
+
+    fn messages(log: &ProgressLog) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .map(|(_, _, m)| m.clone())
+            .collect()
+    }
+
+    /// Payload zip holding `full/<rel>` for each file, the way `stage_file`
+    /// reads it back.
+    fn zip_with(files: &[(&str, &[u8])]) -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (rel, content) in files {
+            zip.start_file(
+                format!("{}{}", FULL_PREFIX, rel),
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            std::io::Write::write_all(&mut zip, content).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// A minimal Full payload whose manifest matches `files` exactly: no
+    /// plugins, no purge, no force-reinstall.
+    fn full_payload(files: &[(&str, &[u8])]) -> InstallerPayload {
+        let mut m = feat_manifest(&[], &[]);
+        for (rel, content) in files {
+            m.files.insert(
+                (*rel).to_string(),
+                FileEntry {
+                    hash: bytes_hash(content),
+                    size: content.len() as u64,
+                    patch: None,
+                    feature: None,
+                },
+            );
+        }
+        m.full_size = files.iter().map(|(_, c)| c.len() as u64).sum();
+        InstallerPayload {
+            kind: PayloadKind::Full,
+            from_version: None,
+            manifest: m,
+            force_reinstall: false,
+            purge_unknown_files: false,
+            associations: Vec::new(),
+            shortcuts: Vec::new(),
+            registry: Vec::new(),
+            plugins: Vec::new(),
+            ..Default::default()
+        }
+    }
+
+    fn run_install(
+        dir: &Path,
+        payload: &InstallerPayload,
+        zip: &[u8],
+        cancel: Arc<AtomicBool>,
+        on_progress: common::ProgressFn,
+    ) -> Result<InstallLock> {
+        install(InstallCtx {
+            install_dir: dir.to_path_buf(),
+            payload,
+            zip_bytes: zip,
+            cancel,
+            on_progress,
+            plugin_inputs: Default::default(),
+            requires_admin: false,
+            hwnd_parent: 0,
+            translator: common::i18n::Translator::for_lang("en"),
+        })
+    }
+
+    /// `Result::unwrap_err` needs `T: Debug`, and `InstallLock` wraps a raw
+    /// Win32 `HANDLE`; unwrap the error side by hand instead.
+    fn expect_err(r: Result<InstallLock>) -> anyhow::Error {
+        match r {
+            Ok(_) => panic!("expected the install to fail, but it succeeded"),
+            Err(e) => e,
+        }
+    }
+
+    /// Run with a throwaway recorder, for tests that do not assert on progress.
+    fn install_quiet(dir: &Path, payload: &InstallerPayload, zip: &[u8]) -> Result<InstallLock> {
+        let (_log, prog) = progress_recorder();
+        run_install(dir, payload, zip, Arc::new(AtomicBool::new(false)), prog)
+    }
+
+    // A fresh full install writes every manifest file with the exact payload
+    // bytes, removes the staging dir, and ends on a full-progress "Done".
+    #[test]
+    fn install_fresh_writes_files_and_cleans_temp() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("bin/app.exe", b"EXE-BYTES"), ("data/readme.txt", b"HI")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        let (log, prog) = progress_recorder();
+        let lock =
+            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        drop(lock);
+
+        assert_eq!(fs::read(app.join("bin/app.exe")).unwrap(), b"EXE-BYTES");
+        assert_eq!(fs::read(app.join("data/readme.txt")).unwrap(), b"HI");
+        assert!(!app.join(".installer_tmp").exists());
+
+        let total: u64 = payload.manifest.files.values().map(|e| e.size).sum();
+        assert_eq!(
+            log.lock().unwrap().last().unwrap(),
+            &(total, total, "Done".to_string())
+        );
+    }
+
+    // Re-running over an identical install hash-skips every file, so the commit
+    // phase is never entered: no "Finalizing..." / "Verifying..." progress.
+    #[test]
+    fn install_up_to_date_skips_commit_phase() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("a.txt", b"SAME")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        drop(install_quiet(&app, &payload, &zip).unwrap());
+
+        let (log, prog) = progress_recorder();
+        let lock =
+            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        drop(lock);
+
+        let msgs = messages(&log);
+        assert!(!msgs.iter().any(|m| m == "Finalizing..."));
+        assert!(!msgs.iter().any(|m| m == "Verifying..."));
+        assert_eq!(fs::read(app.join("a.txt")).unwrap(), b"SAME");
+    }
+
+    // `deleted_files` entries present on disk are removed; unsafe entries are
+    // skipped rather than failing the install.
+    #[test]
+    fn install_removes_deleted_files_and_skips_unsafe_ones() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("old.txt"), b"OLD").unwrap();
+
+        let files: &[(&str, &[u8])] = &[("new.txt", b"NEW")];
+        let mut payload = full_payload(files);
+        payload.manifest.deleted_files = vec!["old.txt".into(), "../escape.txt".into()];
+        let zip = zip_with(files);
+
+        drop(install_quiet(&app, &payload, &zip).unwrap());
+
+        assert!(!app.join("old.txt").exists());
+        assert_eq!(fs::read(app.join("new.txt")).unwrap(), b"NEW");
+    }
+
+    // An unknown leftover file survives by default and is purged only when the
+    // Full payload opts in via `purge_unknown_files`.
+    #[test]
+    fn install_purges_unknown_files_only_when_opted_in() {
+        let files: &[(&str, &[u8])] = &[("keep.txt", b"K")];
+        let zip = zip_with(files);
+
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("stray.txt"), b"S").unwrap();
+        drop(install_quiet(&app, &full_payload(files), &zip).unwrap());
+        assert!(app.join("stray.txt").exists(), "not purged by default");
+
+        let d2 = tempfile::tempdir().unwrap();
+        let app2 = d2.path().join("app");
+        fs::create_dir_all(&app2).unwrap();
+        fs::write(app2.join("stray.txt"), b"S").unwrap();
+        let mut purging = full_payload(files);
+        purging.purge_unknown_files = true;
+        drop(install_quiet(&app2, &purging, &zip).unwrap());
+        assert!(!app2.join("stray.txt").exists(), "purged when opted in");
+    }
+
+    // A manifest path that could escape the install dir aborts staging before
+    // anything is committed, and the staging dir is cleaned up.
+    #[test]
+    fn install_rejects_unsafe_manifest_path() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("../escape.txt", b"BAD")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+        assert!(format!("{err:#}").contains("unsafe path component in manifest"));
+        assert!(!app.join(".installer_tmp").exists());
+    }
+
+    // Zip content that does not match the manifest hash fails the install and
+    // leaves nothing committed.
+    #[test]
+    fn install_fails_on_zip_manifest_hash_mismatch() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let payload = full_payload(&[("a.txt", b"EXPECTED")]);
+        let zip = zip_with(&[("a.txt", b"DIFFERENT")]);
+
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+        assert!(format!("{err:#}").contains("hash mismatch for a.txt"));
+        assert!(!app.join("a.txt").exists());
+        assert!(!app.join(".installer_tmp").exists());
+    }
+
+    // A patch payload with no `from_version` is refused up front.
+    #[test]
+    fn install_patch_without_from_version_errors() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let mut payload = full_payload(&[("a.txt", b"A")]);
+        payload.kind = PayloadKind::Patch;
+        payload.from_version = None;
+        let zip = zip_with(&[("a.txt", b"A")]);
+
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+        assert!(format!("{err:#}").contains("patch payload missing from_version"));
+    }
+
+    // A cancel that is already set when `install` is entered is noticed by the
+    // close-running-processes step, which words it "Installation cancelled." -
+    // NOT the "cancelled by user" the staging and commit loops use. Nothing is
+    // written and no staging dir is left behind.
+    #[test]
+    fn install_cancelled_before_staging_reports_process_stage_message() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("a.txt", b"NEW")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        let (_log, prog) = progress_recorder();
+        let err = expect_err(run_install(
+            &app,
+            &payload,
+            &zip,
+            Arc::new(AtomicBool::new(true)),
+            prog,
+        ));
+
+        assert!(format!("{err:#}").contains("Installation cancelled."));
+        assert!(!app.join("a.txt").exists());
+        assert!(!app.join(".installer_tmp").exists());
+    }
+
+    // A patch aimed at a version that is not installed is refused before
+    // anything is touched, and must surface as a *downcastable* VersionMismatch
+    // - `main` and `analytics` both key off the concrete type for their exit
+    // code, so no wrapping context may be added on the way out of `install`.
+    #[test]
+    fn install_patch_version_mismatch_stays_downcastable() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let mut payload = full_payload(&[("a.txt", b"A")]);
+        payload.kind = PayloadKind::Patch;
+        payload.from_version = Some("1.0".into());
+        // A product id that is not installed, so the lookup finds no version.
+        payload.product_id = format!("installway-not-installed-{}", std::process::id());
+        let zip = zip_with(&[("a.txt", b"A")]);
+
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+
+        let mismatch = err
+            .downcast_ref::<VersionMismatch>()
+            .expect("VersionMismatch must survive as a typed error");
+        assert_eq!(mismatch.expected_from, "1.0");
+        assert_eq!(mismatch.found, "");
+        assert_eq!(mismatch.to_version, payload.to_version);
+        // "no version" wording for an absent install.
+        assert!(err.to_string().contains("no version"), "{err}");
+    }
+
+    // Cancelling once staging is underway (tripped from the progress callback)
+    // aborts in the commit loop: the error is "cancelled by user" wrapped in the
+    // rollback context, the previous file content survives, and temp is cleared.
+    #[test]
+    fn install_cancelled_during_commit_rolls_back() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("a.txt"), b"OLD").unwrap();
+
+        let files: &[(&str, &[u8])] = &[("a.txt", b"NEW")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        // One manifest entry, so tripping the flag on the first progress tick
+        // lands deterministically in the commit loop's cancel check.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let trip = cancel.clone();
+        let prog: common::ProgressFn = Arc::new(move |_, _, _: &str| {
+            trip.store(true, Ordering::Relaxed);
+        });
+
+        let err = expect_err(run_install(&app, &payload, &zip, cancel, prog));
+
+        let text = format!("{err:#}");
+        assert!(text.contains("cancelled by user"), "{text}");
+        assert!(
+            text.contains("install failed and was rolled back"),
+            "{text}"
+        );
+        assert_eq!(fs::read(app.join("a.txt")).unwrap(), b"OLD");
+        assert!(!app.join(".installer_tmp").exists());
+    }
+
+    // The per-install-dir lock is single-instance: a second concurrent install
+    // for the same folder is refused while the first lock is alive.
+    #[test]
+    fn install_refuses_second_concurrent_run() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("a.txt", b"A")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        let held = install_quiet(&app, &payload, &zip).unwrap();
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+        assert!(format!("{err:#}").contains("already in progress"));
+        drop(held);
+
+        // Released: a later run succeeds again.
+        drop(install_quiet(&app, &payload, &zip).unwrap());
+    }
+
+    // An empty manifest is a valid no-op install: it still succeeds and reports
+    // a final "Done" at zero bytes.
+    #[test]
+    fn install_empty_manifest_is_a_successful_noop() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let payload = full_payload(&[]);
+        let zip = zip_with(&[]);
+
+        let (log, prog) = progress_recorder();
+        let lock =
+            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        drop(lock);
+
+        assert_eq!(
+            log.lock().unwrap().last().unwrap(),
+            &(0, 0, "Done".to_string())
+        );
+        assert!(!app.join(".installer_tmp").exists());
     }
 }
