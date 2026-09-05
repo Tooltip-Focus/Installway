@@ -43,7 +43,13 @@ fn main() {
 }
 
 fn stage_winui_runtime() {
-    windows_reactor_setup::as_framework_dependent();
+    // Reactor's inline bootstrap imports Dynamic Dependencies APIs introduced
+    // after Windows 10 1703. Delay-load the API set so the executable itself
+    // still starts there and the runtime probe can select the Win32 fallback.
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg-bins=/DELAYLOAD:api-ms-win-appmodel-runtime-l1-1-5.dll");
+        println!("cargo:rustc-link-arg-bins=delayimp.lib");
+    }
 
     // OUT_DIR is target/<profile>/build/<pkg>-<hash>/out; the exe is three up.
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));

@@ -18,6 +18,46 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// Latest value published by a worker thread and sampled by the Reactor
+/// component. Reactor's second preview deliberately moved cross-thread work to
+/// components; this small mailbox keeps streaming progress independent from
+/// the view implementation.
+#[derive(Clone)]
+pub(super) struct AsyncValue<T>(Arc<Mutex<T>>);
+
+impl<T: Default> Default for AsyncValue<T> {
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(T::default())))
+    }
+}
+
+impl<T> AsyncValue<T> {
+    pub(super) fn call(&self, value: T) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = value;
+        }
+    }
+}
+
+impl<T: Default> AsyncValue<T> {
+    /// Atomically consume a one-shot value without racing a concurrent writer.
+    pub(super) fn take(&self) -> T {
+        self.0
+            .lock()
+            .map(|mut value| std::mem::take(&mut *value))
+            .unwrap_or_default()
+    }
+}
+
+impl<T: Clone> AsyncValue<T> {
+    pub(super) fn get(&self) -> T {
+        self.0
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_else(|e| e.into_inner().clone())
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Phase {
     License,
@@ -34,8 +74,8 @@ pub(super) enum Dialog {
     ConfirmCancel,
 }
 
-/// Install progress from the worker thread. The worker builds each value from
-/// what it already knows, which is what lets it ride an `AsyncSetState`.
+/// Install progress from the worker thread. The component samples the latest
+/// value asynchronously, keeping the UI thread free while work continues.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(super) struct Progress {
     pub done: u64,
@@ -46,8 +86,8 @@ pub(super) struct Progress {
 /// A one-shot edge from a background thread. Heavier payloads are parked in the
 /// mailboxes below and picked up on the UI thread.
 ///
-/// The trailing `u64` is a sequence number: an `AsyncSetState` write is a no-op
-/// when the value is unchanged, so consecutive events must not compare equal.
+/// The trailing `u64` preserves the ordering of repeated plugin and close
+/// events published between component polls.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(super) enum Signal {
     #[default]
@@ -69,8 +109,7 @@ pub(super) enum Signal {
 
 /// Lets the `WM_CLOSE` guard raise a signal; it runs in a window subclass with
 /// no `SetState` in hand. Published by the first render.
-pub(super) static SIGNAL_SINK: Mutex<Option<windows_reactor::AsyncSetState<Signal>>> =
-    Mutex::new(None);
+pub(super) static SIGNAL_SINK: Mutex<Option<AsyncValue<Signal>>> = Mutex::new(None);
 
 pub(super) fn raise(signal: Signal) {
     if let Ok(guard) = SIGNAL_SINK.lock()

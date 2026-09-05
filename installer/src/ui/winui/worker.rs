@@ -3,11 +3,11 @@
 
 //! Background work: the install pipeline, the elevated retry, and plugin-step
 //! queries. Nothing here runs on the UI thread. Where the Win32 backend posts
-//! `WM_APP_*`, each thread here pushes a [`Signal`] through an
-//! [`AsyncSetState`], which marshals the write and the re-render for us.
+//! `WM_APP_*`, each thread here publishes a [`Signal`] into the component's
+//! shared feed; its asynchronous poll applies it on the UI thread.
 
 use super::model::{
-    CANCEL, PERM_ERROR, PermError, Progress, QUERIED_STEP, Signal, tr, with_payload,
+    AsyncValue, CANCEL, PERM_ERROR, PermError, Progress, QUERIED_STEP, Signal, tr, with_payload,
 };
 use crate::extract::{InstallCtx, install};
 use crate::install as install_mod;
@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use windows_reactor::AsyncSetState;
 
 /// The primary button stays enabled until the outcome lands, so a double-click
 /// would otherwise race two threads on [`QUERIED_STEP`].
@@ -26,8 +25,8 @@ static QUERY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 /// The setters a background thread needs to talk back to the UI.
 #[derive(Clone)]
 pub(super) struct Feed {
-    pub signal: AsyncSetState<Signal>,
-    pub progress: AsyncSetState<Progress>,
+    pub signal: AsyncValue<Signal>,
+    pub progress: AsyncValue<Progress>,
 }
 
 pub(super) fn start_install(feed: Feed, path: PathBuf, plugin_inputs: InputsByPlugin) {

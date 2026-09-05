@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Compact auto-update UI, the WinUI counterpart of [`crate::ui::minimal`].
-//! Icon left, title and progress right, no buttons, closes itself after 100%.
+//! Compact auto-update UI built on Reactor's component API.
 
-use super::model::{Progress, Signal, tr, with_payload};
+use super::model::{AsyncValue, Progress, Signal, tr, with_payload};
 use crate::extract::{InstallCtx, install};
 use crate::payload::LoadedPayload;
 use std::path::PathBuf;
@@ -17,12 +16,9 @@ pub(super) const WIN_W: f64 = 480.0;
 pub(super) const WIN_H: f64 = 140.0;
 const PAD: f64 = 20.0;
 const ICON_SZ: f64 = 48.0;
-
-/// How long 100% stays up before the window closes.
 const LINGER: Duration = Duration::from_millis(900);
 
 thread_local! {
-    /// Taken by the first render.
     static PENDING: std::cell::RefCell<Option<Job>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -42,104 +38,160 @@ pub(super) fn set_job(loaded: LoadedPayload, install_dir: PathBuf, launch: bool)
     });
 }
 
-pub(super) fn app(cx: &mut RenderCx) -> Element {
-    let (progress, set_progress) = cx.use_async_state(Progress::default());
-    let (signal, set_signal) = cx.use_async_state(Signal::None);
-    let (error, set_error) = cx.use_state(String::new());
+pub(super) enum Message {
+    Poll,
+    Close,
+}
 
-    // Start the update on first render.
-    {
-        let set_progress = set_progress.clone();
-        let set_signal = set_signal.clone();
-        cx.use_effect((), move || {
-            if let Some(job) = PENDING.with(|p| p.borrow_mut().take()) {
-                spawn(job, set_progress, set_signal);
-            }
+pub(super) struct Minimal {
+    progress: Progress,
+    progress_sink: AsyncValue<Progress>,
+    signal: Signal,
+    signal_sink: AsyncValue<Signal>,
+    error: String,
+}
+
+impl Minimal {
+    fn poll(context: &ComponentContext<Self>, delay: Duration) {
+        _ = context.spawn_background(move |_| {
+            std::thread::sleep(delay);
+            Message::Poll
         });
     }
+}
 
-    // Show 100% briefly, then close; or surface the error and stay up.
-    {
-        let signal = signal.clone();
-        let set_error = set_error.clone();
-        cx.use_effect_with_cleanup(signal.clone(), move || match signal {
-            Signal::Done => {
-                let timer = DispatcherTimer::new_one_shot(LINGER, super::close_window).ok();
-                Some(move || drop(timer))
-            }
-            Signal::Error(text) => {
-                set_error.call(text);
-                None
-            }
-            _ => None,
-        });
+impl Component for Minimal {
+    type Input = ();
+    type Message = Message;
+
+    fn create(_input: &(), context: &ComponentContext<Self>) -> Self {
+        let progress_sink = AsyncValue::default();
+        let signal_sink = AsyncValue::default();
+        if let Some(job) = PENDING.with(|p| p.borrow_mut().take()) {
+            spawn(job, progress_sink.clone(), signal_sink.clone());
+        }
+        Self::poll(context, Duration::from_millis(50));
+        Self {
+            progress: Progress::default(),
+            progress_sink,
+            signal: Signal::None,
+            signal_sink,
+            error: String::new(),
+        }
     }
 
-    let (title, sub) = {
+    fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
+        match message {
+            Message::Close => {
+                _ = context.window().request_close();
+            }
+            Message::Poll => {
+                self.progress = self.progress_sink.get();
+                let signal = self.signal_sink.take();
+                if signal != Signal::None {
+                    self.signal = signal;
+                    match &self.signal {
+                        Signal::Done => {
+                            _ = context.spawn_background(|_| {
+                                std::thread::sleep(LINGER);
+                                Message::Close
+                            });
+                            return;
+                        }
+                        Signal::Error(text) => {
+                            self.error = text.clone();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                Self::poll(context, Duration::from_millis(50));
+            }
+        }
+    }
+
+    fn view(&self, _input: &(), context: &mut ViewContext<Self>) -> View {
         let t = tr();
         let (product, version) = with_payload(|p| (p.product.clone(), p.to_version.clone()));
+        let title = t.get("install.minimal_title");
         let sub = t.fmt(
             "install.minimal_sub",
             &[("product", &product), ("version", &version)],
         );
-        (t.get("install.minimal_title"), sub)
-    };
+        context.window_title(title.clone());
+        context.window_visuals(
+            WindowVisuals::new()
+                .backdrop(WindowBackdrop::Mica)
+                .client_size(WIN_W, WIN_H),
+        );
 
-    let status = if !error.is_empty() {
-        error
-    } else if signal == Signal::Done {
-        tr().get("install.minimal_done")
-    } else if progress.total > 0 {
-        let pct = (progress.done as f64 / progress.total as f64 * 100.0) as u32;
-        format!("{pct}%   {}", progress.name)
-    } else {
-        progress.name.clone()
-    };
-    let fraction = if signal == Signal::Done {
-        100.0
-    } else if progress.total > 0 {
-        (progress.done as f64 / progress.total as f64).clamp(0.0, 1.0) * 100.0
-    } else {
-        0.0
-    };
+        let status = if !self.error.is_empty() {
+            self.error.clone()
+        } else if self.signal == Signal::Done {
+            t.get("install.minimal_done")
+        } else if self.progress.total > 0 {
+            format!(
+                "{}%   {}",
+                self.progress
+                    .done
+                    .saturating_mul(100)
+                    .checked_div(self.progress.total)
+                    .unwrap_or_default(),
+                self.progress.name
+            )
+        } else {
+            self.progress.name.clone()
+        };
+        let fraction = if self.signal == Signal::Done {
+            100.0
+        } else if self.progress.total > 0 {
+            (self.progress.done as f64 / self.progress.total as f64).clamp(0.0, 1.0) * 100.0
+        } else {
+            0.0
+        };
 
-    grid(vec![
-        icon_cell().grid_column(0),
-        Element::from(
-            vstack((
-                text_block(title).font_size(16.0).semibold(),
-                text_block(sub)
-                    .font_size(12.0)
-                    .foreground(ThemeRef::SecondaryText),
-                ProgressBar::new(fraction)
-                    .range(0.0, 100.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch),
-                text_block(status).font_size(12.0).wrap(),
+        Grid::new()
+            .columns([GridLength::Auto, GridLength::STAR])
+            .column_spacing(20.0)
+            .margin(PAD)
+            .children((
+                icon_cell().grid_column(0),
+                StackPanel::new()
+                    .spacing(6.0)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .grid_column(1)
+                    .children((
+                        TextBlock::new()
+                            .text(title)
+                            .font_size(16.0)
+                            .font_weight(FontWeight::SEMI_BOLD),
+                        TextBlock::new().text(sub).font_size(12.0),
+                        ProgressBar::new()
+                            .minimum(0.0)
+                            .maximum(100.0)
+                            .value(fraction)
+                            .horizontal_alignment(HorizontalAlignment::Stretch),
+                        TextBlock::new()
+                            .text(status)
+                            .font_size(12.0)
+                            .text_wrapping(TextWrapping::Wrap),
+                    )),
             ))
-            .spacing(6.0)
-            .vertical_alignment(VerticalAlignment::Center),
-        )
-        .grid_column(1),
-    ])
-    .columns([GridLength::Auto, GridLength::STAR])
-    .column_spacing(20.0)
-    .padding(Thickness::uniform(PAD))
-    .into()
-}
-
-fn icon_cell() -> Element {
-    match super::staged_icon_uri() {
-        Some(uri) => Image::new_with_uri(uri)
-            .stretch(Stretch::Uniform)
-            .width(ICON_SZ)
-            .height(ICON_SZ)
-            .vertical_alignment(VerticalAlignment::Center)
-            .into(),
-        None => vstack(()).width(ICON_SZ).into(),
     }
 }
 
-fn spawn(job: Job, progress: AsyncSetState<Progress>, signal: AsyncSetState<Signal>) {
+fn icon_cell() -> Image {
+    let image = Image::new()
+        .stretch(Stretch::Uniform)
+        .width(ICON_SZ)
+        .height(ICON_SZ)
+        .vertical_alignment(VerticalAlignment::Center);
+    super::staged_icon_uri()
+        .and_then(|uri| image.clone().source(uri).ok())
+        .unwrap_or(image)
+}
+
+fn spawn(job: Job, progress: AsyncValue<Progress>, signal: AsyncValue<Signal>) {
     std::thread::spawn(move || {
         let Job {
             mut loaded,
@@ -147,7 +199,6 @@ fn spawn(job: Job, progress: AsyncSetState<Progress>, signal: AsyncSetState<Sign
             launch,
         } = job;
         let requires_admin = common::paths::is_machine_location(&install_dir);
-        // No interactive UI, so plugin pages use their declared defaults.
         let plugin_inputs = match crate::ui::headless_plugin_inputs(&loaded, &install_dir) {
             Ok(i) => i,
             Err(e) => {
@@ -161,7 +212,6 @@ fn spawn(job: Job, progress: AsyncSetState<Progress>, signal: AsyncSetState<Sign
             requires_admin,
             &plugin_inputs,
         );
-
         let on_progress: common::ProgressFn = {
             let progress = progress.clone();
             Arc::new(move |done, total, name: &str| {
@@ -169,7 +219,7 @@ fn spawn(job: Job, progress: AsyncSetState<Progress>, signal: AsyncSetState<Sign
                     done,
                     total,
                     name: name.to_string(),
-                });
+                })
             })
         };
         let ctx = InstallCtx {
@@ -183,7 +233,6 @@ fn spawn(job: Job, progress: AsyncSetState<Progress>, signal: AsyncSetState<Sign
             hwnd_parent: super::active_hwnd(),
             translator: tr(),
         };
-        // Lock held across finalize so a concurrent run can't interleave.
         let _install_lock = match install(ctx) {
             Ok(lock) => lock,
             Err(e) => {
