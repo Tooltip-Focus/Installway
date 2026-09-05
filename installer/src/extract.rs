@@ -139,6 +139,8 @@ pub struct InstallCtx<'a> {
     pub translator: common::i18n::Translator,
 }
 
+const TEMP_DIR_NAME: &str = ".installer_tmp";
+
 /// The scratch areas under `<install_dir>/.installer_tmp`: `staged/` holds
 /// rebuilt file content before it is committed, `backup/` holds the previous
 /// version of anything the commit overwrites or removes, and the journal at
@@ -155,7 +157,7 @@ impl TempAreas {
     /// run was interrupted during staging (live install untouched), so discard
     /// it and start over; correct files are hash-skipped during staging.
     fn prepare(install_dir: &Path) -> Result<Self> {
-        let root = install_dir.join(".installer_tmp");
+        let root = install_dir.join(TEMP_DIR_NAME);
 
         // Roll back a commit interrupted by a previous run before doing anything.
         recover_if_interrupted(&root, install_dir);
@@ -331,7 +333,7 @@ fn plan_deletions(ctx: &InstallCtx<'_>) -> Vec<String> {
             deleted.iter().map(String::as_str).collect();
         let mut orphans: Vec<String> = Vec::new();
         for rel in existing {
-            if rel.starts_with(".installer_tmp")
+            if rel.split('/').next() == Some(TEMP_DIR_NAME)
                 || manifest.files.contains_key(&rel)
                 || scheduled.contains(rel.as_str())
                 || safe_rel(&rel).is_err()
@@ -2215,6 +2217,45 @@ mod tests {
 
         // Manifest deletion first, then the orphan - and "old.txt" only once.
         assert_eq!(plan, vec!["old.txt".to_string(), "stray.txt".to_string()]);
+    }
+
+    // The purge skips our scratch directory by path component, not by string
+    // prefix: files under `.installer_tmp/` are ours and must survive, but an
+    // app file merely *named* `.installer_tmp_data.bin` is a real orphan.
+    #[test]
+    fn install_purge_skips_temp_dir_but_not_lookalike_names() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        fs::create_dir_all(app.join(TEMP_DIR_NAME).join("staged")).unwrap();
+        fs::write(app.join(TEMP_DIR_NAME).join("staged").join("abc"), b"S").unwrap();
+        fs::write(app.join(".installer_tmp_data.bin"), b"D").unwrap();
+        fs::write(app.join("stray.txt"), b"S").unwrap();
+
+        let files: &[(&str, &[u8])] = &[("keep.txt", b"K")];
+        let mut payload = full_payload(files);
+        payload.purge_unknown_files = true;
+
+        let plan = plan_deletions(&InstallCtx {
+            install_dir: app.clone(),
+            payload: &payload,
+            zip_bytes: &zip_with(files),
+            cancel: Arc::new(AtomicBool::new(false)),
+            on_progress: progress_recorder().1,
+            plugin_inputs: Default::default(),
+            requires_admin: false,
+            hwnd_parent: 0,
+            translator: common::i18n::Translator::for_lang("en"),
+        });
+
+        assert!(
+            plan.contains(&".installer_tmp_data.bin".to_string()),
+            "a lookalike name is an orphan, not our scratch dir: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|r| r.starts_with(".installer_tmp/")),
+            "our own staging must never be scheduled for deletion: {plan:?}"
+        );
+        assert!(plan.contains(&"stray.txt".to_string()), "{plan:?}");
     }
 
     // A manifest path that could escape the install dir aborts staging before
