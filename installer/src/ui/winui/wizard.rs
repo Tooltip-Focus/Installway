@@ -6,23 +6,72 @@
 //! One render function of one [`Model`]. Sizes are DIPs, so the Win32 wizard's
 //! 96-dpi numbers carry over unchanged and XAML handles per-monitor scaling.
 
+use super::compat::{
+    Element, button, check_box, grid, hstack, scroll_viewer, text_block, text_box, vstack,
+};
+#[cfg(debug_assertions)]
+use super::model::Progress;
 use super::model::{
-    Dialog, Model, PERM_ERROR, Phase, Progress, QUERIED_STEP, Signal, WIZARD, default_path,
-    has_plugin_pages, launch_option, restriction, skip_license, skip_path, tr, with_payload,
+    Dialog, Model, PERM_ERROR, Phase, QUERIED_STEP, Signal, WIZARD, default_path, has_plugin_pages,
+    launch_option, restriction, skip_license, skip_path, tr, with_payload,
 };
 use super::plugin_page;
 use super::wizard_state::Step;
 use super::worker::{self, Feed};
 use common::model::launch_option::LaunchOption;
 use common::model::payload_kind::PayloadKind;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::Duration;
 use windows_reactor::*;
 
 pub(super) const WIN_W: f64 = 700.0;
 pub(super) const WIN_H: f64 = 540.0;
 const BANNER_H: f64 = 72.0;
 const PAD: f64 = 24.0;
-const CARD_RADIUS: f64 = 8.0;
+
+fn card(child: impl Into<View>) -> Element {
+    Element::from(
+        Border::new()
+            .corner_radius(8.0)
+            .background(ThemeBrush::CardBackground)
+            .border_thickness(Thickness::uniform(1.0))
+            .border_brush(ThemeBrush::CardStroke)
+            .content(child),
+    )
+}
+
+pub(super) type HookRef<T> = Rc<RefCell<T>>;
+
+#[derive(Clone)]
+pub(super) struct SetState<T>(Callback<T>);
+impl<T> SetState<T> {
+    pub(super) fn call(&self, value: T) {
+        _ = self.0.call(value);
+    }
+}
+
+pub(super) enum Message {
+    Set(Model),
+    Poll,
+}
+
+pub(super) struct WizardApp {
+    model: Model,
+    feed: Feed,
+    seq: HookRef<u64>,
+    attached: bool,
+}
+
+impl WizardApp {
+    fn poll(context: &ComponentContext<Self>) {
+        _ = context.spawn_background(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            Message::Poll
+        });
+    }
+}
 
 /// Placeholder EULA, matching the Win32 wizard's so both previews agree.
 const LOREM: &str = "END USER LICENSE AGREEMENT - SAMPLE\r\n\r\n\
@@ -59,70 +108,70 @@ fn on(
     }
 }
 
-pub(super) fn app(cx: &mut RenderCx) -> Element {
-    let (model, set) = cx.use_state(Model::new(Path::new(&default_path())));
-    let (signal, set_signal) = cx.use_async_state(Signal::None);
-    let (progress, set_progress) = cx.use_async_state(Progress::default());
-    let feed = Feed {
-        signal: set_signal.clone(),
-        progress: set_progress.clone(),
-    };
-    // Two successive completions must never compare equal, or the second write
-    // is a no-op.
-    let seq = cx.use_ref(0_u64);
-
-    // The window exists by the time effects run, so the close guard goes in here.
-    {
-        let (model, set, feed) = (model.clone(), set.clone(), feed.clone());
-        let seq = seq.clone();
-        let sink = set_signal.clone();
-        cx.use_effect((), move || {
-            super::attach_window(sink);
-            let mut next = model.clone();
-            start_flow(&mut next, &feed, &seq);
-            set.call(next);
-        });
+impl Component for WizardApp {
+    type Input = ();
+    type Message = Message;
+    fn create(_: &(), context: &ComponentContext<Self>) -> Self {
+        let feed = Feed {
+            signal: Default::default(),
+            progress: Default::default(),
+        };
+        let seq = Rc::new(RefCell::new(0));
+        let mut model = Model::new(Path::new(&default_path()));
+        start_flow(&mut model, &feed, &seq);
+        super::attach_window(feed.signal.clone());
+        Self::poll(context);
+        Self {
+            model,
+            feed,
+            seq,
+            attached: false,
+        }
     }
-
-    // Apply whatever a background thread last reported.
-    {
-        let (model, set, feed) = (model.clone(), set.clone(), feed.clone());
-        let seq = seq.clone();
-        let signal = signal.clone();
-        cx.use_effect(signal.clone(), move || {
-            if signal == Signal::None {
-                return;
+    fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
+        match message {
+            Message::Set(m) => self.model = m,
+            Message::Poll => {
+                if !self.attached && super::active_hwnd() != 0 {
+                    super::attach_window(self.feed.signal.clone());
+                    self.attached = true;
+                }
+                self.model.progress = self.feed.progress.get();
+                let signal = self.feed.signal.take();
+                if signal != Signal::None {
+                    _ = apply_signal(&mut self.model, &signal, &self.feed, &self.seq);
+                }
+                Self::poll(context);
             }
-            let mut next = model.clone();
-            if apply_signal(&mut next, &signal, &feed, &seq) {
-                set.call(next);
-            }
-        });
+        }
     }
+    fn view(&self, _: &(), cx: &mut ViewContext<Self>) -> View {
+        cx.window_title(with_payload(|p| p.product.clone()));
+        cx.window_visuals(
+            WindowVisuals::new()
+                .backdrop(WindowBackdrop::Mica)
+                .client_size(WIN_W, WIN_H),
+        );
+        let model = self.model.clone();
+        let set = SetState(cx.callback(Message::Set));
+        let title_bar = TitleBar::new().title(with_payload(|p| p.product.clone()));
+        let children: Vec<Element> = vec![
+            Element::from(title_bar).grid_row(0),
+            banner(&model).grid_row(1),
+            content(&model, &set).grid_row(2),
+            buttons(&model, &set, &self.feed, &self.seq).grid_row(3),
+            dialog(&model, &set),
+        ];
 
-    // Progress has its own hook so a 60-per-second stream never round-trips
-    // through the whole model.
-    let mut model = model;
-    model.progress = progress;
-
-    // Nothing here paints an opaque background; Mica is the background.
-    let title_bar = TitleBar::new(with_payload(|p| p.product.clone()));
-    let children: Vec<Element> = vec![
-        Element::from(title_bar).grid_row(0),
-        banner(&model).grid_row(1),
-        content(&model, &set).grid_row(2),
-        buttons(&model, &set, &feed, &seq).grid_row(3),
-        dialog(&model, &set),
-    ];
-
-    grid(children)
-        .rows([
-            GridLength::Auto,
-            GridLength::Auto,
-            GridLength::STAR,
-            GridLength::Auto,
-        ])
-        .into()
+        grid(children)
+            .rows([
+                GridLength::Auto,
+                GridLength::Auto,
+                GridLength::STAR,
+                GridLength::Auto,
+            ])
+            .into()
+    }
 }
 
 // ---- Header --------------------------------------------------------------
@@ -145,14 +194,14 @@ fn banner(model: &Model) -> Element {
             ))
             .spacing(2.0)
             .vertical_alignment(VerticalAlignment::Center)
-            .padding(Thickness {
-                left: PAD,
-                top: 0.0,
-                right: PAD,
-                bottom: 0.0,
-            });
+            .padding(Thickness::new(PAD, 0.0, PAD, 0.0));
             grid(vec![
-                Element::from(Image::new_with_uri(uri).stretch(Stretch::UniformToFill)),
+                Element::from(
+                    Image::new()
+                        .source(uri)
+                        .unwrap()
+                        .stretch(Stretch::UniformToFill),
+                ),
                 Element::from(overlay),
             ])
             .height(BANNER_H)
@@ -162,15 +211,10 @@ fn banner(model: &Model) -> Element {
             text_block(header).font_size(28.0).semibold(),
             text_block(sub)
                 .font_size(14.0)
-                .foreground(ThemeRef::SecondaryText),
+                .foreground(ThemeBrush::PrimaryText),
         ))
         .spacing(4.0)
-        .padding(Thickness {
-            left: PAD,
-            top: 12.0,
-            right: PAD,
-            bottom: 4.0,
-        })
+        .padding(Thickness::new(PAD, 12.0, PAD, 4.0))
         .into(),
     }
 }
@@ -211,27 +255,14 @@ fn banner_text(model: &Model) -> (String, String) {
 fn content(model: &Model, set: &SetState<Model>) -> Element {
     let body: Element = match model.phase {
         Phase::License => license_view(model, set),
-        Phase::Choose => choose_view(model, set).into(),
+        Phase::Choose => choose_view(model, set),
         Phase::Plugin => plugin_view(model, set),
-        Phase::Progress | Phase::Done => progress_view(model, set).into(),
+        Phase::Progress | Phase::Done => progress_view(model, set),
         Phase::Error => error_view(model),
     };
     // Margin, not padding: on a `Border` padding sits inside the stroke, which
     // would stretch the card edge to edge.
-    body.margin(Thickness {
-        left: PAD,
-        top: 12.0,
-        right: PAD,
-        bottom: 12.0,
-    })
-}
-
-fn card(child: impl Into<Element>) -> Border {
-    border(child)
-        .corner_radius(CARD_RADIUS)
-        .background(ThemeRef::CardBackground)
-        .border_thickness(Thickness::uniform(1.0))
-        .border_brush(ThemeRef::CardStroke)
+    body.margin(Thickness::new(PAD, 12.0, PAD, 12.0))
 }
 
 /// A grid, not a stack: the EULA must absorb the leftover height, or the scroll
@@ -256,12 +287,7 @@ fn license_view(model: &Model, set: &SetState<Model>) -> Element {
             check_box(accepted)
                 .content(tr().get("install.license_accept"))
                 .on_checked(on_bool(model, set, |m, v| m.license_accepted = v))
-                .margin(Thickness {
-                    left: 4.0,
-                    top: 12.0,
-                    right: 0.0,
-                    bottom: 0.0,
-                }),
+                .margin(Thickness::new(4.0, 12.0, 0.0, 0.0)),
         )
         .grid_row(1),
     ])
@@ -269,7 +295,7 @@ fn license_view(model: &Model, set: &SetState<Model>) -> Element {
     .into()
 }
 
-fn choose_view(model: &Model, set: &SetState<Model>) -> Border {
+fn choose_view(model: &Model, set: &SetState<Model>) -> Element {
     let picker = {
         let model = model.clone();
         let set = set.clone();
@@ -295,12 +321,7 @@ fn choose_view(model: &Model, set: &SetState<Model>) -> Border {
                 button(tr().get("install.browse"))
                     .on_click(picker)
                     .width(110.0)
-                    .margin(Thickness {
-                        left: 10.0,
-                        top: 0.0,
-                        right: 0.0,
-                        bottom: 0.0,
-                    }),
+                    .margin(Thickness::new(10.0, 0.0, 0.0, 0.0)),
             )
             .grid_column(1),
         ])
@@ -308,13 +329,13 @@ fn choose_view(model: &Model, set: &SetState<Model>) -> Border {
         .into(),
     ];
     if blocks_install(&model.path) {
-        rows.push(
-            InfoBar::new(tr().get("install.path_not_empty"))
-                .warning()
+        rows.push(Element::from(
+            InfoBar::new()
+                .title(tr().get("install.path_not_empty"))
+                .severity(InfoBarSeverity::Warning)
                 .is_open(true)
-                .is_closable(false)
-                .into(),
-        );
+                .is_closable(false),
+        ));
     }
     card(vstack(rows).spacing(12.0).padding(Thickness::uniform(16.0)))
         .vertical_alignment(VerticalAlignment::Top)
@@ -337,11 +358,10 @@ fn plugin_view(model: &Model, set: &SetState<Model>) -> Element {
         )
         .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto),
     )
-    .into()
 }
 
 /// Progress and Done share the bar and status line; Done adds "run now".
-fn progress_view(model: &Model, set: &SetState<Model>) -> Border {
+fn progress_view(model: &Model, set: &SetState<Model>) -> Element {
     let p = &model.progress;
     let done = model.phase == Phase::Done;
     let fraction = if p.total > 0 {
@@ -365,13 +385,16 @@ fn progress_view(model: &Model, set: &SetState<Model>) -> Border {
     };
 
     let mut rows: Vec<Element> = vec![
-        ProgressBar::new(fraction)
-            .range(0.0, 100.0)
-            .horizontal_alignment(HorizontalAlignment::Stretch)
-            .into(),
+        Element::from(
+            ProgressBar::new()
+                .value(fraction)
+                .minimum(0.0)
+                .maximum(100.0)
+                .horizontal_alignment(HorizontalAlignment::Stretch),
+        ),
         text_block(status)
             .wrap()
-            .foreground(ThemeRef::SecondaryText)
+            .foreground(ThemeBrush::PrimaryText)
             .height(48.0)
             .into(),
     ];
@@ -390,17 +413,13 @@ fn progress_view(model: &Model, set: &SetState<Model>) -> Border {
 fn error_view(model: &Model) -> Element {
     grid(vec![
         Element::from(
-            InfoBar::new(tr().get("install.err_title"))
+            InfoBar::new()
+                .title(tr().get("install.err_title"))
                 .message(tr().get("install.err_sub"))
-                .error()
+                .severity(InfoBarSeverity::Error)
                 .is_open(true)
                 .is_closable(false)
-                .margin(Thickness {
-                    left: 0.0,
-                    top: 0.0,
-                    right: 0.0,
-                    bottom: 12.0,
-                }),
+                .margin(Thickness::new(0.0, 0.0, 0.0, 12.0)),
         )
         .grid_row(0),
         Element::from(card(
@@ -527,12 +546,7 @@ fn buttons(model: &Model, set: &SetState<Model>, feed: &Feed, seq: &HookRef<u64>
 
     grid(cells)
         .columns([GridLength::Auto, GridLength::STAR])
-        .padding(Thickness {
-            left: PAD,
-            top: 8.0,
-            right: PAD,
-            bottom: PAD,
-        })
+        .padding(Thickness::new(PAD, 8.0, PAD, PAD))
         .into()
 }
 
@@ -877,22 +891,24 @@ fn dialog(model: &Model, set: &SetState<Model>) -> Element {
             set.call(next);
         }
     };
-    ContentDialog::new(t.get("install.msg_caption"))
-        .content(soft_wrap(&text, DIALOG_WRAP_COLS))
-        // An empty label hides the button, so Yes/No is confirm-only.
-        .primary_button_text(if confirm {
-            t.get("install.yes")
-        } else {
-            String::new()
-        })
-        .close_button_text(if confirm {
-            t.get("install.no")
-        } else {
-            t.get("install.ok")
-        })
-        .is_open(open)
-        .on_closed(dismiss)
-        .into()
+    Element::from(
+        ContentDialog::new()
+            .title(t.get("install.msg_caption"))
+            // An empty label hides the button, so Yes/No is confirm-only.
+            .primary_button_text(if confirm {
+                t.get("install.yes")
+            } else {
+                String::new()
+            })
+            .close_button_text(if confirm {
+                t.get("install.no")
+            } else {
+                t.get("install.ok")
+            })
+            .is_open(open)
+            .on_closed(dismiss)
+            .content(soft_wrap(&text, DIALOG_WRAP_COLS)),
+    )
 }
 
 // ---- Shared predicates ---------------------------------------------------

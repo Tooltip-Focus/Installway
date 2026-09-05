@@ -8,7 +8,9 @@
 //! map read rather than the HWND walk the Win32 backend needs. Keys are
 //! `"<page_id>.<widget_id>"`, matching Win32 and the `--silent` path.
 
+use super::compat::{Element, text_block, vstack};
 use super::model::{Model, tr};
+use super::wizard::SetState;
 use common::model::choice_style::ChoiceStyle;
 use common::model::plugin_page::{PluginInputs, PluginPage};
 use common::model::plugin_widget::PluginWidget;
@@ -112,45 +114,41 @@ fn widget(page: &PluginPage, w: &PluginWidget, model: &Model, set: &SetState<Mod
             let write = answer_setter(model, set, k);
             if *password {
                 // PasswordBox has no multiline or number variant; masking wins.
-                let mut b = PasswordBox::new().value(value).on_password_changed(write);
-                if !label.is_empty() {
-                    b = b.header(label.clone());
-                }
+                let mut b = PasswordBox::new()
+                    .password(value)
+                    .on_password_changed(write);
                 if !placeholder.is_empty() {
                     b = b.placeholder_text(placeholder.clone());
                 }
-                b.into()
+                labeled(label, b)
             } else if *number {
                 // NumberBox round-trips f64, but the plugin expects the same
                 // string shape the Win32 ES_NUMBER edit produced. NaN renders
                 // blank, which stands in for the placeholder it lacks.
                 let parsed = value.trim().parse::<f64>().unwrap_or(f64::NAN);
-                let mut b = NumberBox::new(parsed).on_value_changed(move |v: f64| {
-                    let s = if v.is_nan() {
-                        String::new()
-                    } else if v.fract() == 0.0 {
-                        format!("{}", v as i64)
-                    } else {
-                        v.to_string()
-                    };
-                    write(s);
-                });
-                if !label.is_empty() {
-                    b = b.header(label.clone());
-                }
-                b.into()
+                let b = NumberBox::new()
+                    .value((!parsed.is_nan()).then_some(parsed))
+                    .on_value_changed(move |v: Option<f64>| {
+                        let s = match v {
+                            None => String::new(),
+                            Some(v) if v.fract() == 0.0 => format!("{}", v as i64),
+                            Some(v) => v.to_string(),
+                        };
+                        write(s);
+                    });
+                labeled(label, b)
             } else {
-                let mut b = text_box(value).on_text_changed(write);
-                if !label.is_empty() {
-                    b = b.header(label.clone());
-                }
+                let mut b = TextBox::new().text(value).on_text_changed(write);
                 if !placeholder.is_empty() {
                     b = b.placeholder_text(placeholder.clone());
                 }
                 if *multiline {
-                    b = b.multiline().accepts_return(true).height(96.0);
+                    b = b
+                        .text_wrapping(TextWrapping::Wrap)
+                        .accepts_return(true)
+                        .height(96.0);
                 }
-                b.into()
+                labeled(label, b)
             }
         }
 
@@ -158,10 +156,14 @@ fn widget(page: &PluginPage, w: &PluginWidget, model: &Model, set: &SetState<Mod
             let k = key(&page.id, id);
             let checked = model.answers.get(&k).map(|v| v == "true").unwrap_or(false);
             let write = answer_setter(model, set, k);
-            check_box(checked)
-                .content(label.clone())
-                .on_checked(move |v: bool| write(if v { "true".into() } else { "false".into() }))
-                .into()
+            Element::from(
+                CheckBox::new()
+                    .is_checked(checked)
+                    .on_is_checked_changed(move |v: bool| {
+                        write(if v { "true".into() } else { "false".into() })
+                    })
+                    .content(label.clone()),
+            )
         }
 
         PluginWidget::SingleChoice {
@@ -173,37 +175,29 @@ fn widget(page: &PluginPage, w: &PluginWidget, model: &Model, set: &SetState<Mod
         } => {
             let k = key(&page.id, id);
             let current = model.answers.get(&k).cloned().unwrap_or_default();
-            let selected = options
-                .iter()
-                .position(|o| o.value == current)
-                .map(|i| i as i32)
-                .unwrap_or(-1);
+            let selected = options.iter().position(|o| o.value == current);
             let labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
             let values: Vec<String> = options.iter().map(|o| o.value.clone()).collect();
             let write = answer_setter(model, set, k);
-            let on_pick = move |i: i32| {
-                if let Some(v) = usize::try_from(i).ok().and_then(|i| values.get(i)) {
+            let on_pick = move |i: Option<usize>| {
+                if let Some(v) = i.and_then(|i| values.get(i)) {
                     write(v.clone());
                 }
             };
             match style {
                 ChoiceStyle::Combo => {
-                    let mut b = ComboBox::new(labels)
+                    let b = ComboBox::new()
+                        .items_source(labels)
                         .selected_index(selected)
                         .on_selection_changed(on_pick);
-                    if !label.is_empty() {
-                        b = b.header(label.clone());
-                    }
-                    b.into()
+                    labeled(label, b)
                 }
                 ChoiceStyle::Radio => {
-                    let mut b = RadioButtons::new(labels)
+                    let b = RadioButtons::new()
+                        .items_source(labels)
                         .selected_index(selected)
                         .on_selection_changed(on_pick);
-                    if !label.is_empty() {
-                        b = b.header(label.clone());
-                    }
-                    b.into()
+                    labeled(label, b)
                 }
             }
         }
@@ -226,10 +220,10 @@ fn widget(page: &PluginPage, w: &PluginWidget, model: &Model, set: &SetState<Mod
                 let current = current.clone();
                 let this = opt.value.clone();
                 let write = answer_setter(model, set, k.clone());
-                rows.push(
-                    check_box(checked)
-                        .content(opt.label.clone())
-                        .on_checked(move |on: bool| {
+                rows.push(Element::from(
+                    CheckBox::new()
+                        .is_checked(checked)
+                        .on_is_checked_changed(move |on: bool| {
                             let mut set: Vec<&str> =
                                 current.split(',').filter(|s| !s.is_empty()).collect();
                             if on {
@@ -246,24 +240,39 @@ fn widget(page: &PluginPage, w: &PluginWidget, model: &Model, set: &SetState<Mod
                                 .collect();
                             write(ordered.join(","));
                         })
-                        .into(),
-                );
+                        .content(opt.label.clone()),
+                ));
             }
             vstack(rows).spacing(6.0).into()
         }
 
         PluginWidget::Progress { marquee } => {
             if *marquee {
-                ProgressBar::indeterminate()
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .into()
+                Element::from(
+                    ProgressBar::new()
+                        .is_indeterminate(true)
+                        .horizontal_alignment(HorizontalAlignment::Stretch),
+                )
             } else {
-                ProgressBar::new(model.plugin_progress as f64)
-                    .range(0.0, 100.0)
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .into()
+                Element::from(
+                    ProgressBar::new()
+                        .value(model.plugin_progress as f64)
+                        .minimum(0.0)
+                        .maximum(100.0)
+                        .horizontal_alignment(HorizontalAlignment::Stretch),
+                )
             }
         }
+    }
+}
+
+fn labeled(label: &str, control: impl Into<View>) -> Element {
+    if label.is_empty() {
+        Element::from(control)
+    } else {
+        vstack((text_block(label.to_string()), control.into()))
+            .spacing(4.0)
+            .into()
     }
 }
 

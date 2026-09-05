@@ -4,6 +4,7 @@
 //! WinUI 3 needs the Windows App SDK runtime. If not present, fallback to win32.
 
 mod banner;
+mod compat;
 mod icon;
 mod minimal;
 mod model;
@@ -43,13 +44,8 @@ static CLOSE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 const SUBCLASS_ID: usize = 0x1_5A11;
 
-/// Whether the WinUI stack is usable in this process.
-///
-/// A missing `resources.pri` is not fatal on its own: a runtime carrying the MRM
-/// fix starts XAML without one. Older runtimes die with an uncatchable stowed
-/// exception instead, so the file's absence raises the required runtime version
-/// rather than failing outright. Today nothing reaches that floor, so a bare exe
-/// still lands on Win32; see [`runtime::MIN_VERSION_WITHOUT_PRI`].
+/// Whether the WinUI stack is usable in this process. Dynamic dependency APIs
+/// are resolved by name so Windows 10 1703 can still reach the Win32 fallback.
 pub fn available() -> bool {
     static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *READY.get_or_init(|| {
@@ -116,7 +112,8 @@ pub fn run(
         tmp
     });
 
-    launch_app(&title, wizard::WIN_W, wizard::WIN_H, wizard::app)
+    let _ = title;
+    launch_app::<wizard::WizardApp>(())
 }
 
 /// Run the compact auto-update UI. `Ok(false)` = fall back to Win32.
@@ -130,7 +127,8 @@ pub fn run_minimal(
     seed_config(&loaded, &install_dir, launch, true, true, translator);
     stage_product_icon();
     minimal::set_job(loaded, install_dir, launch);
-    launch_app(&title, minimal::WIN_W, minimal::WIN_H, minimal::app)
+    let _ = title;
+    launch_app::<minimal::Minimal>(())
 }
 
 /// Reactor runs on the calling thread, so these thread-locals are the ones the
@@ -174,36 +172,20 @@ pub(super) fn staged_icon_uri() -> Option<String> {
     ICON_URI.with(|i| i.borrow().clone())
 }
 
-/// Runs the message loop until the window closes.
-fn launch_app(
-    title: &str,
-    width: f64,
-    height: f64,
-    render: fn(&mut windows_reactor::RenderCx) -> windows_reactor::Element,
-) -> Result<bool> {
+/// Bind WinUI and run one Reactor component. `Ok(false)` selects Win32.
+fn launch_app<C>(input: C::Input) -> Result<bool>
+where
+    C: windows_reactor::Component,
+{
     if !available() {
         return Ok(false);
     }
-
-    let app = windows_reactor::App::new()
-        .title(title.to_string())
-        .inner_size(width, height)
-        // The render tree paints no opaque background, so Mica shows through.
-        .backdrop(windows_reactor::Backdrop::Mica)
-        .on_fault(|fault| {
-            common::log::warn(format!(
-                "winui fault in {}: {}",
-                fault.context, fault.message
-            ))
-        });
-
-    app.render(render)
-        .map_err(|e| anyhow::anyhow!("winui: {e}"))?;
+    windows_reactor::App::run_component::<C>(input).map_err(|e| anyhow::anyhow!("winui: {e}"))?;
     Ok(true)
 }
 
 /// Called from the first render, by which point the window exists.
-pub(in crate::ui::winui) fn attach_window(sink: windows_reactor::AsyncSetState<Signal>) {
+pub(in crate::ui::winui) fn attach_window(sink: model::AsyncValue<Signal>) {
     if let Ok(mut slot) = SIGNAL_SINK.lock() {
         *slot = Some(sink);
     }
@@ -244,7 +226,6 @@ pub(super) fn active_hwnd() -> isize {
     if cached != 0 {
         return cached;
     }
-    // Per-thread, so it only resolves on the UI thread; workers read the cache.
     let raw = unsafe { GetActiveWindow() }.0 as isize;
     if raw != 0 {
         MAIN_HWND.store(raw, Ordering::Relaxed);
@@ -319,7 +300,8 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<bool>
 
     if view == "minimal" {
         stage_product_icon();
-        return launch_app(&title, minimal::WIN_W, minimal::WIN_H, minimal::app);
+        let _ = title;
+        return launch_app::<minimal::Minimal>(());
     }
 
     // A canned page exercises the dynamic renderer with no real plugin.
@@ -328,7 +310,8 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<bool>
     }
 
     wizard::set_preview_phase(view);
-    launch_app(&title, wizard::WIN_W, wizard::WIN_H, wizard::app)
+    let _ = title;
+    launch_app::<wizard::WizardApp>(())
 }
 
 #[cfg(debug_assertions)]
