@@ -225,64 +225,22 @@ fn check_preconditions(ctx: &InstallCtx<'_>) -> Result<()> {
     )
 }
 
-/// Returns the per-install-dir lock so callers keep holding it across
-/// `install::finalize`; dropping it earlier would let a second installer
-/// start staging while this one still writes metadata/registry state.
-pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
-    let manifest = &ctx.payload.manifest;
-
-    // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
-    // Named by product_id (filesystem-safe, stable across versions).
-    common::log::init(common::log::log_path_installer_temp(
-        &ctx.payload.product_id,
-        std::process::id(),
-    ));
-    common::log::prune_temp_logs(&ctx.payload.product_id, 14);
-    let started = std::time::Instant::now();
-    common::log::info(format!(
-        "install start: product={} version={} kind={:?} install_dir={}",
-        ctx.payload.product,
-        ctx.payload.to_version,
-        ctx.payload.kind,
-        ctx.install_dir.display()
-    ));
-    common::log::info(format!(
-        "payload {} bytes, {} files, deleted {}",
-        ctx.zip_bytes.len(),
-        manifest.files.len(),
-        manifest.deleted_files.len()
-    ));
-
-    // Single-instance lock per install dir, so two runs can't race on the temp
-    // dirs. OS frees it on exit or crash.
-    let install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
-
-    check_preconditions(&ctx)?;
-
-    // Pre-install plugins run before any file is staged, so a required failure
-    // aborts cleanly (live install untouched).
-    run_zip_plugins(&ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
-
-    let temp = TempAreas::prepare(&ctx.install_dir)?;
-
-    let total_bytes: u64 = manifest.files.values().map(|e| e.size).sum();
+/// PHASE 1: build every new/changed file under `temp.staged`, verified by hash.
+/// The live install is not touched, so cancelling or crashing here leaves it
+/// intact. Returns the sorted set of relative paths that need committing; files
+/// already correct on disk are hash-skipped and left out of it.
+///
+/// Files are independent, so staging fans out across cores; `map_init` gives
+/// each worker its own `ZipArchive` view over the shared mmap slice (one
+/// central-directory parse per core, not per file).
+fn stage_all(ctx: &InstallCtx<'_>, temp: &TempAreas, total_bytes: u64) -> Result<Vec<String>> {
     let done = Arc::new(AtomicU64::new(0));
-
-    // Validate the embedded zip up front (clean error if corrupt) before the
-    // parallel workers each open their own view of it.
-    ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
 
     // Deterministic order - easier UX and reproducible.
     let mut entries: Vec<(&String, &common::model::file_entry::FileEntry)> =
-        manifest.files.iter().collect();
+        ctx.payload.manifest.files.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
 
-    // ---- PHASE 1: STAGE (parallel) ------------------------------------
-    // Build every new/changed file in `staged/`, verified by hash. The live
-    // install is not touched, so cancelling/crashing here leaves it intact.
-    // Files are independent, so staging fans out across cores; `map_init` gives
-    // each worker its own `ZipArchive` view over the shared mmap slice (one
-    // central-directory parse per core, not per file).
     let staged: Vec<Result<Option<String>>> = entries
         .par_iter()
         .map_init(
@@ -332,12 +290,69 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
             Ok(None) => {}
             Err(e) => {
                 common::log::warn(format!("staging failed/cancelled: {e:#}"));
-                cleanup(&temp.root);
                 return Err(e);
             }
         }
     }
     to_commit.sort(); // parallel completion order is nondeterministic
+    Ok(to_commit)
+}
+
+/// Returns the per-install-dir lock so callers keep holding it across
+/// `install::finalize`; dropping it earlier would let a second installer
+/// start staging while this one still writes metadata/registry state.
+pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
+    let manifest = &ctx.payload.manifest;
+
+    // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
+    // Named by product_id (filesystem-safe, stable across versions).
+    common::log::init(common::log::log_path_installer_temp(
+        &ctx.payload.product_id,
+        std::process::id(),
+    ));
+    common::log::prune_temp_logs(&ctx.payload.product_id, 14);
+    let started = std::time::Instant::now();
+    common::log::info(format!(
+        "install start: product={} version={} kind={:?} install_dir={}",
+        ctx.payload.product,
+        ctx.payload.to_version,
+        ctx.payload.kind,
+        ctx.install_dir.display()
+    ));
+    common::log::info(format!(
+        "payload {} bytes, {} files, deleted {}",
+        ctx.zip_bytes.len(),
+        manifest.files.len(),
+        manifest.deleted_files.len()
+    ));
+
+    // Single-instance lock per install dir, so two runs can't race on the temp
+    // dirs. OS frees it on exit or crash.
+    let install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
+
+    check_preconditions(&ctx)?;
+
+    // Pre-install plugins run before any file is staged, so a required failure
+    // aborts cleanly (live install untouched).
+    run_zip_plugins(&ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
+
+    let temp = TempAreas::prepare(&ctx.install_dir)?;
+
+    let total_bytes: u64 = manifest.files.values().map(|e| e.size).sum();
+
+    // Validate the embedded zip up front (clean error if corrupt) before the
+    // parallel workers each open their own view of it. Deliberately outside the
+    // staging call below: a corrupt zip returns without clearing the temp dir,
+    // as it always has.
+    ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
+
+    let to_commit = match stage_all(&ctx, &temp, total_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            cleanup(&temp.root);
+            return Err(e);
+        }
+    };
 
     // ---- PHASE 2: COMMIT ----------------------------------------------
     // Swap staged files into place. A journal records every touched path so an
