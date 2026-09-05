@@ -7,6 +7,7 @@
 
 use crate::extract::TempDirGuard;
 use crate::ui::wizard_engine::{StepArgs, StepOutcome};
+#[cfg(debug_assertions)]
 use common::model::page_step::PageStep;
 use common::model::plugin_ctx::PluginContext;
 use common::model::plugin_entry::PluginEntry;
@@ -47,6 +48,7 @@ pub(super) struct Wizard {
     stack: Vec<Frame>,
     finished: InputsByPlugin,
     /// Preview: replay these steps instead of spawning a plugin.
+    #[cfg(debug_assertions)]
     canned: Option<std::collections::VecDeque<PageStep>>,
 }
 
@@ -66,6 +68,7 @@ impl Wizard {
             answers: PluginInputs::new(),
             stack: Vec::new(),
             finished: InputsByPlugin::new(),
+            #[cfg(debug_assertions)]
             canned: None,
         }
     }
@@ -85,6 +88,7 @@ impl Wizard {
         }
     }
 
+    #[cfg(debug_assertions)]
     pub(super) fn is_canned(&self) -> bool {
         self.canned.is_some()
     }
