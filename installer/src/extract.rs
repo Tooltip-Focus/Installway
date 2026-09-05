@@ -1889,4 +1889,349 @@ mod tests {
         assert_eq!(m.files.len(), 1);
         assert!(m.deleted_files.is_empty());
     }
+
+    // ---- install() characterisation ------------------------------------
+    //
+    // These pin the observable behaviour of the `install` orchestrator itself
+    // (files on disk, error text, progress callbacks, temp-dir cleanup) so it
+    // can be restructured without changing what callers see. They deliberately
+    // use `PayloadKind::Full`, which skips the installed-version lookup and so
+    // never reads the real per-user data dir.
+
+    type ProgressLog = Arc<std::sync::Mutex<Vec<(u64, u64, String)>>>;
+
+    fn progress_recorder() -> (ProgressLog, common::ProgressFn) {
+        let log: ProgressLog = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = log.clone();
+        let f: common::ProgressFn = Arc::new(move |done, total, msg: &str| {
+            sink.lock().unwrap().push((done, total, msg.to_string()));
+        });
+        (log, f)
+    }
+
+    fn messages(log: &ProgressLog) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .map(|(_, _, m)| m.clone())
+            .collect()
+    }
+
+    /// Payload zip holding `full/<rel>` for each file, the way `stage_file`
+    /// reads it back.
+    fn zip_with(files: &[(&str, &[u8])]) -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (rel, content) in files {
+            zip.start_file(
+                format!("{}{}", FULL_PREFIX, rel),
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            std::io::Write::write_all(&mut zip, content).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// A minimal Full payload whose manifest matches `files` exactly: no
+    /// plugins, no purge, no force-reinstall.
+    fn full_payload(files: &[(&str, &[u8])]) -> InstallerPayload {
+        let mut m = feat_manifest(&[], &[]);
+        for (rel, content) in files {
+            m.files.insert(
+                (*rel).to_string(),
+                FileEntry {
+                    hash: bytes_hash(content),
+                    size: content.len() as u64,
+                    patch: None,
+                    feature: None,
+                },
+            );
+        }
+        m.full_size = files.iter().map(|(_, c)| c.len() as u64).sum();
+        InstallerPayload {
+            kind: PayloadKind::Full,
+            from_version: None,
+            manifest: m,
+            force_reinstall: false,
+            purge_unknown_files: false,
+            associations: Vec::new(),
+            shortcuts: Vec::new(),
+            registry: Vec::new(),
+            plugins: Vec::new(),
+            ..Default::default()
+        }
+    }
+
+    fn run_install(
+        dir: &Path,
+        payload: &InstallerPayload,
+        zip: &[u8],
+        cancel: Arc<AtomicBool>,
+        on_progress: common::ProgressFn,
+    ) -> Result<InstallLock> {
+        install(InstallCtx {
+            install_dir: dir.to_path_buf(),
+            payload,
+            zip_bytes: zip,
+            cancel,
+            on_progress,
+            plugin_inputs: Default::default(),
+            requires_admin: false,
+            hwnd_parent: 0,
+            translator: common::i18n::Translator::for_lang("en"),
+        })
+    }
+
+    /// `Result::unwrap_err` needs `T: Debug`, and `InstallLock` wraps a raw
+    /// Win32 `HANDLE`; unwrap the error side by hand instead.
+    fn expect_err(r: Result<InstallLock>) -> anyhow::Error {
+        match r {
+            Ok(_) => panic!("expected the install to fail, but it succeeded"),
+            Err(e) => e,
+        }
+    }
+
+    /// Run with a throwaway recorder, for tests that do not assert on progress.
+    fn install_quiet(dir: &Path, payload: &InstallerPayload, zip: &[u8]) -> Result<InstallLock> {
+        let (_log, prog) = progress_recorder();
+        run_install(dir, payload, zip, Arc::new(AtomicBool::new(false)), prog)
+    }
+
+    // A fresh full install writes every manifest file with the exact payload
+    // bytes, removes the staging dir, and ends on a full-progress "Done".
+    #[test]
+    fn install_fresh_writes_files_and_cleans_temp() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("bin/app.exe", b"EXE-BYTES"), ("data/readme.txt", b"HI")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        let (log, prog) = progress_recorder();
+        let lock =
+            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        drop(lock);
+
+        assert_eq!(fs::read(app.join("bin/app.exe")).unwrap(), b"EXE-BYTES");
+        assert_eq!(fs::read(app.join("data/readme.txt")).unwrap(), b"HI");
+        assert!(!app.join(".installer_tmp").exists());
+
+        let total: u64 = payload.manifest.files.values().map(|e| e.size).sum();
+        assert_eq!(
+            log.lock().unwrap().last().unwrap(),
+            &(total, total, "Done".to_string())
+        );
+    }
+
+    // Re-running over an identical install hash-skips every file, so the commit
+    // phase is never entered: no "Finalizing..." / "Verifying..." progress.
+    #[test]
+    fn install_up_to_date_skips_commit_phase() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("a.txt", b"SAME")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        drop(install_quiet(&app, &payload, &zip).unwrap());
+
+        let (log, prog) = progress_recorder();
+        let lock =
+            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        drop(lock);
+
+        let msgs = messages(&log);
+        assert!(!msgs.iter().any(|m| m == "Finalizing..."));
+        assert!(!msgs.iter().any(|m| m == "Verifying..."));
+        assert_eq!(fs::read(app.join("a.txt")).unwrap(), b"SAME");
+    }
+
+    // `deleted_files` entries present on disk are removed; unsafe entries are
+    // skipped rather than failing the install.
+    #[test]
+    fn install_removes_deleted_files_and_skips_unsafe_ones() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("old.txt"), b"OLD").unwrap();
+
+        let files: &[(&str, &[u8])] = &[("new.txt", b"NEW")];
+        let mut payload = full_payload(files);
+        payload.manifest.deleted_files = vec!["old.txt".into(), "../escape.txt".into()];
+        let zip = zip_with(files);
+
+        drop(install_quiet(&app, &payload, &zip).unwrap());
+
+        assert!(!app.join("old.txt").exists());
+        assert_eq!(fs::read(app.join("new.txt")).unwrap(), b"NEW");
+    }
+
+    // An unknown leftover file survives by default and is purged only when the
+    // Full payload opts in via `purge_unknown_files`.
+    #[test]
+    fn install_purges_unknown_files_only_when_opted_in() {
+        let files: &[(&str, &[u8])] = &[("keep.txt", b"K")];
+        let zip = zip_with(files);
+
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("stray.txt"), b"S").unwrap();
+        drop(install_quiet(&app, &full_payload(files), &zip).unwrap());
+        assert!(app.join("stray.txt").exists(), "not purged by default");
+
+        let d2 = tempfile::tempdir().unwrap();
+        let app2 = d2.path().join("app");
+        fs::create_dir_all(&app2).unwrap();
+        fs::write(app2.join("stray.txt"), b"S").unwrap();
+        let mut purging = full_payload(files);
+        purging.purge_unknown_files = true;
+        drop(install_quiet(&app2, &purging, &zip).unwrap());
+        assert!(!app2.join("stray.txt").exists(), "purged when opted in");
+    }
+
+    // A manifest path that could escape the install dir aborts staging before
+    // anything is committed, and the staging dir is cleaned up.
+    #[test]
+    fn install_rejects_unsafe_manifest_path() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("../escape.txt", b"BAD")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+        assert!(format!("{err:#}").contains("unsafe path component in manifest"));
+        assert!(!app.join(".installer_tmp").exists());
+    }
+
+    // Zip content that does not match the manifest hash fails the install and
+    // leaves nothing committed.
+    #[test]
+    fn install_fails_on_zip_manifest_hash_mismatch() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let payload = full_payload(&[("a.txt", b"EXPECTED")]);
+        let zip = zip_with(&[("a.txt", b"DIFFERENT")]);
+
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+        assert!(format!("{err:#}").contains("hash mismatch for a.txt"));
+        assert!(!app.join("a.txt").exists());
+        assert!(!app.join(".installer_tmp").exists());
+    }
+
+    // A patch payload with no `from_version` is refused up front.
+    #[test]
+    fn install_patch_without_from_version_errors() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let mut payload = full_payload(&[("a.txt", b"A")]);
+        payload.kind = PayloadKind::Patch;
+        payload.from_version = None;
+        let zip = zip_with(&[("a.txt", b"A")]);
+
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+        assert!(format!("{err:#}").contains("patch payload missing from_version"));
+    }
+
+    // A cancel that is already set when `install` is entered is noticed by the
+    // close-running-processes step, which words it "Installation cancelled." -
+    // NOT the "cancelled by user" the staging and commit loops use. Nothing is
+    // written and no staging dir is left behind.
+    #[test]
+    fn install_cancelled_before_staging_reports_process_stage_message() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("a.txt", b"NEW")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        let (_log, prog) = progress_recorder();
+        let err = expect_err(run_install(
+            &app,
+            &payload,
+            &zip,
+            Arc::new(AtomicBool::new(true)),
+            prog,
+        ));
+
+        assert!(format!("{err:#}").contains("Installation cancelled."));
+        assert!(!app.join("a.txt").exists());
+        assert!(!app.join(".installer_tmp").exists());
+    }
+
+    // Cancelling once staging is underway (tripped from the progress callback)
+    // aborts in the commit loop: the error is "cancelled by user" wrapped in the
+    // rollback context, the previous file content survives, and temp is cleared.
+    #[test]
+    fn install_cancelled_during_commit_rolls_back() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("a.txt"), b"OLD").unwrap();
+
+        let files: &[(&str, &[u8])] = &[("a.txt", b"NEW")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        // One manifest entry, so tripping the flag on the first progress tick
+        // lands deterministically in the commit loop's cancel check.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let trip = cancel.clone();
+        let prog: common::ProgressFn = Arc::new(move |_, _, _: &str| {
+            trip.store(true, Ordering::Relaxed);
+        });
+
+        let err = expect_err(run_install(&app, &payload, &zip, cancel, prog));
+
+        let text = format!("{err:#}");
+        assert!(text.contains("cancelled by user"), "{text}");
+        assert!(
+            text.contains("install failed and was rolled back"),
+            "{text}"
+        );
+        assert_eq!(fs::read(app.join("a.txt")).unwrap(), b"OLD");
+        assert!(!app.join(".installer_tmp").exists());
+    }
+
+    // The per-install-dir lock is single-instance: a second concurrent install
+    // for the same folder is refused while the first lock is alive.
+    #[test]
+    fn install_refuses_second_concurrent_run() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let files: &[(&str, &[u8])] = &[("a.txt", b"A")];
+        let payload = full_payload(files);
+        let zip = zip_with(files);
+
+        let held = install_quiet(&app, &payload, &zip).unwrap();
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+        assert!(format!("{err:#}").contains("already in progress"));
+        drop(held);
+
+        // Released: a later run succeeds again.
+        drop(install_quiet(&app, &payload, &zip).unwrap());
+    }
+
+    // An empty manifest is a valid no-op install: it still succeeds and reports
+    // a final "Done" at zero bytes.
+    #[test]
+    fn install_empty_manifest_is_a_successful_noop() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let payload = full_payload(&[]);
+        let zip = zip_with(&[]);
+
+        let (log, prog) = progress_recorder();
+        let lock =
+            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        drop(lock);
+
+        assert_eq!(
+            log.lock().unwrap().last().unwrap(),
+            &(0, 0, "Done".to_string())
+        );
+        assert!(!app.join(".installer_tmp").exists());
+    }
 }
