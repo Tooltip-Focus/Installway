@@ -43,7 +43,7 @@ pub fn run(
         title: tr.fmt("uninstall.finalize_title", &[("product", &product)]),
         subtitle: tr.get("uninstall.finalize_subtitle"),
         confirm_text: String::new(),
-        worker: Box::new(move |progress: ui::Progress| {
+        worker: ui::Worker::new(move |progress: ui::Progress| {
             let counter = StepCounter::new(4, progress);
             counter.step(&tr.get("uninstall.waiting"));
             // Wait for the uninstall step to exit so file locks release.

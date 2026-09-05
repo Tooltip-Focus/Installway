@@ -199,8 +199,10 @@ pub(crate) fn set_default(hkey: HKEY, value: &str) {
 pub(crate) fn read_default(root: HKEY, sub: &str) -> Option<String> {
     let (_, bytes) = read_value(root, sub, "")?;
     let u: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .collect();
     let end = u.iter().position(|&c| c == 0).unwrap_or(u.len());
     Some(String::from_utf16_lossy(&u[..end]))

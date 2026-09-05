@@ -37,6 +37,21 @@ pub fn run(silent: bool) -> Result<()> {
     ));
     common::log::prune_temp_logs(&product_hint, 14);
 
+    // Windows 11's Settings app runs `UninstallString` inside its own package,
+    // and this process inherited that identity - WinUI cannot start there. Hand
+    // the uninstall to Explorer, which starts it as a plain desktop process.
+    if !silent && winui_support::inherited_package_identity() {
+        match crate::relaunch::via_explorer() {
+            Ok(()) => {
+                common::log::info("launched from a packaged app; relaunched via Explorer");
+                return Ok(());
+            }
+            Err(e) => common::log::warn(format!(
+                "Explorer relaunch failed ({e:#}) - continuing here with the Win32 UI"
+            )),
+        }
+    }
+
     // If the metadata is gone, just remove leftovers quietly (no error dialog).
     let info = match cleanup::read_info(&data_dir) {
         Ok(i) => i,
@@ -96,7 +111,7 @@ pub fn run(silent: bool) -> Result<()> {
                 ("path", &info.install_dir),
             ],
         ),
-        worker: Box::new(move |progress: ui::Progress| {
+        worker: ui::Worker::new(move |progress: ui::Progress| {
             if needs_elevation {
                 if let Err(e) = run_elevated(progress) {
                     ui::fatal(&format!("{e:#}"));

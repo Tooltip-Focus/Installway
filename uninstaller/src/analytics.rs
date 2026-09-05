@@ -11,7 +11,7 @@ const URL: &str = "https://in.hintway.app";
 /// Initialize analytics for one uninstaller run.
 ///
 /// Identity is a random UUID generated here.
-pub fn init(tenant_id: Option<&str>, mode: &str, privilege: &str) {
+pub fn init(tenant_id: Option<&str>, mode: &str, privilege: &str, ui: &str) {
     let Some(tenant_id) = tenant_id else { return };
 
     let mgr = AnalyticsManager::instance();
@@ -20,6 +20,7 @@ pub fn init(tenant_id: Option<&str>, mode: &str, privilege: &str) {
     custom.insert("operation".to_string(), json!("uninstall"));
     custom.insert("mode".to_string(), json!(mode));
     custom.insert("privilege".to_string(), json!(privilege));
+    custom.insert("ui".to_string(), json!(ui));
     mgr.set_custom_data(Some(custom));
 
     let identity = Uuid::new_v4().to_string();

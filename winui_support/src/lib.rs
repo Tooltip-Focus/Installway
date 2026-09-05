@@ -19,12 +19,26 @@ pub mod widgets;
 #[cfg(windows)]
 pub mod window;
 
+/// Whether this process runs with a package identity inherited from a packaged
+/// launcher. Nothing here is ever shipped packaged, so an identity always comes
+/// from the parent - see [`runtime::is_packaged`] for why XAML cannot survive it.
+#[cfg(windows)]
+pub fn inherited_package_identity() -> bool {
+    runtime::is_packaged()
+}
+
 /// Whether a compatible Windows App Runtime (2.4 or newer) is available and
 /// bound to this process for the no-PRI deployment.
 #[cfg(windows)]
 pub fn available() -> bool {
     static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *READY.get_or_init(|| {
+        // Last line of defence: a caller that could not shed an inherited
+        // package identity still gets a working window instead of a crash.
+        if inherited_package_identity() {
+            common::log::info("running inside a launcher's package; using the Win32 UI");
+            return false;
+        }
         if !runtime::bind() {
             common::log::info("no suitable Windows App Runtime; using the Win32 UI");
             return false;

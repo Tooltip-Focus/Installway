@@ -6,6 +6,7 @@
 #[cfg(feature = "hintway")]
 mod analytics;
 mod cleanup;
+mod relaunch;
 mod stages;
 mod ui;
 mod worker;
@@ -162,7 +163,12 @@ fn run() -> Result<()> {
                 let tenant_id = cleanup::read_info(&data_dir)
                     .ok()
                     .and_then(|info| info.hintway_tenant_id);
-                analytics::init(tenant_id.as_deref(), mode, privilege);
+                let backend = if cli.silent {
+                    "none"
+                } else {
+                    ui::backend_name()
+                };
+                analytics::init(tenant_id.as_deref(), mode, privilege, backend);
             }
             stages::uninstall::run(cli.silent)
         }
