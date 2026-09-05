@@ -298,6 +298,51 @@ fn stage_all(ctx: &InstallCtx<'_>, temp: &TempAreas, total_bytes: u64) -> Result
     Ok(to_commit)
 }
 
+/// Which live files this run should remove: the manifest's `deleted_files` that
+/// actually exist, plus - when purging is on - anything in the install dir this
+/// build does not know about. Unsafe paths are skipped, not fatal.
+///
+/// Order matters to the caller: manifest deletions first, then purged orphans
+/// in `collect_files` order.
+fn plan_deletions(ctx: &InstallCtx<'_>) -> Vec<String> {
+    let manifest = &ctx.payload.manifest;
+
+    let mut deleted: Vec<String> = Vec::new();
+    for rel in &manifest.deleted_files {
+        if safe_rel(rel).is_err() {
+            common::log::warn(format!("skipping unsafe deleted_files entry: {}", rel));
+            continue;
+        }
+        if long_path(&ctx.install_dir.join(rel)).exists() {
+            deleted.push(rel.clone());
+        }
+    }
+
+    // Clean slate: also remove existing files not in this build. Two triggers:
+    //   - `force_reinstall` (dev flag), or
+    //   - `purge_unknown_files` on a Full payload (opt-in at build time, so an
+    //     upgrade/reinstall from a full version drops leftover unknown files).
+    // Patches never purge: their manifest is incremental, so "unknown" files are
+    // expected. Removals are backed up like any delete, so still rollback-safe.
+    let purge_orphans = ctx.payload.force_reinstall
+        || (ctx.payload.purge_unknown_files && ctx.payload.kind == PayloadKind::Full);
+    if purge_orphans && let Ok(existing) = common::utils::collect_files(&ctx.install_dir) {
+        for rel in existing {
+            if rel.starts_with(".installer_tmp")
+                || manifest.files.contains_key(&rel)
+                || deleted.contains(&rel)
+                || safe_rel(&rel).is_err()
+            {
+                continue;
+            }
+            common::log::info(format!("purge: removing unknown file {}", rel));
+            deleted.push(rel);
+        }
+    }
+
+    deleted
+}
+
 /// Returns the per-install-dir lock so callers keep holding it across
 /// `install::finalize`; dropping it earlier would let a second installer
 /// start staging while this one still writes metadata/registry state.
@@ -357,38 +402,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
     // ---- PHASE 2: COMMIT ----------------------------------------------
     // Swap staged files into place. A journal records every touched path so an
     // interruption can be rolled back.
-    let mut deleted: Vec<String> = Vec::new();
-    for rel in &manifest.deleted_files {
-        if safe_rel(rel).is_err() {
-            common::log::warn(format!("skipping unsafe deleted_files entry: {}", rel));
-            continue;
-        }
-        if long_path(&ctx.install_dir.join(rel)).exists() {
-            deleted.push(rel.clone());
-        }
-    }
-
-    // Clean slate: also remove existing files not in this build. Two triggers:
-    //   - `force_reinstall` (dev flag), or
-    //   - `purge_unknown_files` on a Full payload (opt-in at build time, so an
-    //     upgrade/reinstall from a full version drops leftover unknown files).
-    // Patches never purge: their manifest is incremental, so "unknown" files are
-    // expected. Removals are backed up like any delete, so still rollback-safe.
-    let purge_orphans = ctx.payload.force_reinstall
-        || (ctx.payload.purge_unknown_files && ctx.payload.kind == PayloadKind::Full);
-    if purge_orphans && let Ok(existing) = common::utils::collect_files(&ctx.install_dir) {
-        for rel in existing {
-            if rel.starts_with(".installer_tmp")
-                || manifest.files.contains_key(&rel)
-                || deleted.contains(&rel)
-                || safe_rel(&rel).is_err()
-            {
-                continue;
-            }
-            common::log::info(format!("purge: removing unknown file {}", rel));
-            deleted.push(rel);
-        }
-    }
+    let deleted = plan_deletions(&ctx);
 
     if to_commit.is_empty() && deleted.is_empty() {
         common::log::info("nothing to commit (already up to date)");
