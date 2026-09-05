@@ -2251,6 +2251,33 @@ mod tests {
         assert!(!app.join(".installer_tmp").exists());
     }
 
+    // A patch aimed at a version that is not installed is refused before
+    // anything is touched, and must surface as a *downcastable* VersionMismatch
+    // - `main` and `analytics` both key off the concrete type for their exit
+    // code, so no wrapping context may be added on the way out of `install`.
+    #[test]
+    fn install_patch_version_mismatch_stays_downcastable() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        let mut payload = full_payload(&[("a.txt", b"A")]);
+        payload.kind = PayloadKind::Patch;
+        payload.from_version = Some("1.0".into());
+        // A product id that is not installed, so the lookup finds no version.
+        payload.product_id = format!("installway-not-installed-{}", std::process::id());
+        let zip = zip_with(&[("a.txt", b"A")]);
+
+        let err = expect_err(install_quiet(&app, &payload, &zip));
+
+        let mismatch = err
+            .downcast_ref::<VersionMismatch>()
+            .expect("VersionMismatch must survive as a typed error");
+        assert_eq!(mismatch.expected_from, "1.0");
+        assert_eq!(mismatch.found, "");
+        assert_eq!(mismatch.to_version, payload.to_version);
+        // "no version" wording for an absent install.
+        assert!(err.to_string().contains("no version"), "{err}");
+    }
+
     // Cancelling once staging is underway (tripped from the progress callback)
     // aborts in the commit loop: the error is "cancelled by user" wrapped in the
     // rollback context, the previous file content survives, and temp is cleared.
