@@ -139,6 +139,56 @@ pub struct InstallCtx<'a> {
     pub translator: common::i18n::Translator,
 }
 
+/// Pre-flight gates, in the order the install depends on them: refuse a patch
+/// aimed at the wrong installed version (nothing touched yet), then confirm the
+/// destination is writable and roomy, then close anything running from it.
+///
+/// Every failure here leaves the live install untouched.
+fn check_preconditions(ctx: &InstallCtx<'_>) -> Result<()> {
+    if ctx.payload.force_reinstall {
+        common::log::info("force_reinstall set: skipping version check, reinstalling from scratch");
+    }
+
+    if ctx.payload.kind == PayloadKind::Patch && !ctx.payload.force_reinstall {
+        let expected_from = ctx
+            .payload
+            .from_version
+            .as_deref()
+            .context("patch payload missing from_version")?;
+        // Current version lives in the data dir (not the app folder), which is
+        // machine-wide or per-user depending on how it was installed.
+        let current = installed_version(ctx.payload);
+        let current_ref = current.as_deref().unwrap_or("");
+        if current_ref != expected_from {
+            common::log::error(format!(
+                "patch refused: expected from_version={} found={}",
+                expected_from, current_ref
+            ));
+            // Pre-flight refusal, nothing touched. Typed error so the caller
+            // can return a distinct exit code.
+            return Err(anyhow::Error::new(VersionMismatch {
+                expected_from: expected_from.to_string(),
+                found: current_ref.to_string(),
+                to_version: ctx.payload.to_version.clone(),
+            }));
+        }
+    }
+
+    check_writable(&ctx.install_dir)?;
+
+    check_disk_space(&ctx.install_dir, &ctx.payload.manifest, ctx.payload.kind)?;
+
+    // Close any process running from the install dir before writing files.
+    let pcb = ctx.on_progress.clone();
+    crate::proc::ensure_closed(
+        &ctx.install_dir,
+        ctx.hwnd_parent,
+        ctx.translator,
+        &ctx.cancel,
+        &move |msg| pcb(0, 0, msg),
+    )
+}
+
 /// Returns the per-install-dir lock so callers keep holding it across
 /// `install::finalize`; dropping it earlier would let a second installer
 /// start staging while this one still writes metadata/registry state.
@@ -171,50 +221,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
     // dirs. OS frees it on exit or crash.
     let install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
 
-    if ctx.payload.force_reinstall {
-        common::log::info("force_reinstall set: skipping version check, reinstalling from scratch");
-    }
-
-    if ctx.payload.kind == PayloadKind::Patch && !ctx.payload.force_reinstall {
-        let expected_from = ctx
-            .payload
-            .from_version
-            .as_deref()
-            .context("patch payload missing from_version")?;
-        // Current version lives in the data dir (not the app folder), which is
-        // machine-wide or per-user depending on how it was installed.
-        let current = installed_version(ctx.payload);
-        let current_ref = current.as_deref().unwrap_or("");
-        if current_ref != expected_from {
-            common::log::error(format!(
-                "patch refused: expected from_version={} found={}",
-                expected_from, current_ref
-            ));
-            // Pre-flight refusal, nothing touched. Typed error so the caller
-            // can return a distinct exit code.
-            return Err(anyhow::Error::new(VersionMismatch {
-                expected_from: expected_from.to_string(),
-                found: current_ref.to_string(),
-                to_version: ctx.payload.to_version.clone(),
-            }));
-        }
-    }
-
-    check_writable(&ctx.install_dir)?;
-
-    check_disk_space(&ctx.install_dir, manifest, ctx.payload.kind)?;
-
-    // Close any process running from the install dir before writing files.
-    {
-        let pcb = ctx.on_progress.clone();
-        crate::proc::ensure_closed(
-            &ctx.install_dir,
-            ctx.hwnd_parent,
-            ctx.translator,
-            &ctx.cancel,
-            &move |msg| pcb(0, 0, msg),
-        )?;
-    }
+    check_preconditions(&ctx)?;
 
     // Pre-install plugins run before any file is staged, so a required failure
     // aborts cleanly (live install untouched).
