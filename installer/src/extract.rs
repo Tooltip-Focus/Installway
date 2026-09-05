@@ -343,6 +343,144 @@ fn plan_deletions(ctx: &InstallCtx<'_>) -> Vec<String> {
     deleted
 }
 
+/// PHASE 2: swap staged content into place and prove it landed intact.
+///
+/// Runs inside the journalled transaction the caller opened with
+/// `write_journal`: every failure path rolls the install back to its previous
+/// state before returning, leaving the caller to clear the temp dir. On success
+/// the journal is dropped so recovery won't fire on the next launch.
+fn commit_and_verify(
+    ctx: &InstallCtx<'_>,
+    temp: &TempAreas,
+    to_commit: &[String],
+    deleted: &[String],
+    total_bytes: u64,
+) -> Result<()> {
+    let commit_result = (|| -> Result<()> {
+        for rel in to_commit {
+            if ctx.cancel.load(Ordering::Relaxed) {
+                bail!("cancelled by user");
+            }
+            commit_one(&ctx.install_dir, &temp.staged, &temp.backup, rel)?;
+        }
+        for rel in deleted {
+            if ctx.cancel.load(Ordering::Relaxed) {
+                bail!("cancelled by user");
+            }
+            backup_then_remove(&ctx.install_dir, &temp.backup, rel)?;
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = commit_result {
+        common::log::error(format!("commit failed: {e:#} - rolling back"));
+        rollback(&temp.root, &ctx.install_dir, to_commit, deleted);
+        return Err(e).context("install failed and was rolled back");
+    }
+
+    if let Err(e) = verify_and_repair(ctx, temp, to_commit, total_bytes) {
+        rollback(&temp.root, &ctx.install_dir, to_commit, deleted);
+        return Err(e);
+    }
+
+    // Verified - drop the journal so recovery won't fire.
+    let _ = fs::remove_file(journal_path(&temp.root));
+
+    if !deleted.is_empty() {
+        common::utils::prune_empty_dirs(&long_path(&ctx.install_dir));
+    }
+    Ok(())
+}
+
+/// Re-read each committed file from disk to catch corruption from the
+/// write/rename itself (bad sector, FS glitch). Still inside the transaction,
+/// backups intact, so the caller can still roll back on any error from here.
+fn verify_and_repair(
+    ctx: &InstallCtx<'_>,
+    temp: &TempAreas,
+    to_commit: &[String],
+    total_bytes: u64,
+) -> Result<()> {
+    let manifest = &ctx.payload.manifest;
+
+    (ctx.on_progress)(
+        total_bytes,
+        total_bytes,
+        &ctx.translator.get("install.progress_verifying"),
+    );
+    common::log::info(format!("verifying {} committed file(s)", to_commit.len()));
+    let verify_started = Instant::now();
+    let mut corrupt = find_corrupt(&ctx.install_dir, manifest, to_commit, &ctx.cancel);
+    common::log::info(format!(
+        "verification finished in {:.1}s",
+        verify_started.elapsed().as_secs_f64()
+    ));
+
+    // A cancel during the (potentially long) re-hash short-circuits the
+    // remaining files inside `find_corrupt`; the caller rolls back so the live
+    // install returns to its previous version rather than half-committed.
+    if ctx.cancel.load(Ordering::Relaxed) {
+        common::log::warn("cancelled by user during verification - rolling back");
+        bail!("cancelled by user");
+    }
+
+    // Repair before a full rollback: corrupt content is reproducible from
+    // the payload, and rewriting to a fresh location dodges transient
+    // glitches. Backups stay untouched so rollback remains possible.
+    if !corrupt.is_empty() {
+        common::log::warn(format!(
+            "{} file(s) failed post-install verification - attempting repair from payload",
+            corrupt.len()
+        ));
+        for attempt in 1..=VERIFY_REPAIR_ATTEMPTS {
+            (ctx.on_progress)(
+                total_bytes,
+                total_bytes,
+                &ctx.translator.get("install.progress_repairing"),
+            );
+            let repair = repair_corrupt(
+                ctx.zip_bytes,
+                ctx.payload.kind,
+                manifest,
+                &temp.staged,
+                &temp.backup,
+                &ctx.install_dir,
+                &corrupt,
+            );
+            if let Err(e) = repair {
+                common::log::error(format!("repair attempt {} failed: {e:#}", attempt));
+                break;
+            }
+            corrupt = find_corrupt(&ctx.install_dir, manifest, &corrupt, &ctx.cancel);
+            if corrupt.is_empty() {
+                common::log::info(format!("repair succeeded on attempt {}", attempt));
+                break;
+            }
+            common::log::warn(format!(
+                "{} file(s) still corrupt after repair attempt {}",
+                corrupt.len(),
+                attempt
+            ));
+        }
+    }
+
+    // Repair exhausted and still corrupt - the caller rolls back to the
+    // previous version.
+    if !corrupt.is_empty() {
+        common::log::error(format!(
+            "post-install verification failed for {} file(s) after repair - rolling back",
+            corrupt.len()
+        ));
+        bail!(
+            "{} installed file(s) failed verification and could not be repaired; \
+             the install was rolled back to the previous version",
+            corrupt.len()
+        );
+    }
+    common::log::info(format!("verified {} committed file(s)", to_commit.len()));
+    Ok(())
+}
+
 /// Returns the per-install-dir lock so callers keep holding it across
 /// `install::finalize`; dropping it earlier would let a second installer
 /// start staging while this one still writes metadata/registry state.
@@ -417,118 +555,13 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
             total_bytes,
             &ctx.translator.get("install.progress_finalizing"),
         );
+        // Outside the transaction below: a journal that cannot be written
+        // returns without clearing the temp dir, as it always has.
         write_journal(&temp.root, &to_commit, &deleted)?;
 
-        let commit_result = (|| -> Result<()> {
-            for rel in &to_commit {
-                if ctx.cancel.load(Ordering::Relaxed) {
-                    bail!("cancelled by user");
-                }
-                commit_one(&ctx.install_dir, &temp.staged, &temp.backup, rel)?;
-            }
-            for rel in &deleted {
-                if ctx.cancel.load(Ordering::Relaxed) {
-                    bail!("cancelled by user");
-                }
-                backup_then_remove(&ctx.install_dir, &temp.backup, rel)?;
-            }
-            Ok(())
-        })();
-
-        if let Err(e) = commit_result {
-            common::log::error(format!("commit failed: {e:#} - rolling back"));
-            rollback(&temp.root, &ctx.install_dir, &to_commit, &deleted);
+        if let Err(e) = commit_and_verify(&ctx, &temp, &to_commit, &deleted, total_bytes) {
             cleanup(&temp.root);
-            return Err(e).context("install failed and was rolled back");
-        }
-
-        // Re-read each committed file from disk to catch corruption from the
-        // write/rename itself (bad sector, FS glitch). Still inside the
-        // transaction, backups intact.
-        (ctx.on_progress)(
-            total_bytes,
-            total_bytes,
-            &ctx.translator.get("install.progress_verifying"),
-        );
-        common::log::info(format!("verifying {} committed file(s)", to_commit.len()));
-        let verify_started = Instant::now();
-        let mut corrupt = find_corrupt(&ctx.install_dir, manifest, &to_commit, &ctx.cancel);
-        common::log::info(format!(
-            "verification finished in {:.1}s",
-            verify_started.elapsed().as_secs_f64()
-        ));
-
-        // A cancel during the (potentially long) re-hash short-circuits the
-        // remaining files inside `find_corrupt`; here we roll back so the live
-        // install returns to its previous version rather than half-committed.
-        if ctx.cancel.load(Ordering::Relaxed) {
-            common::log::warn("cancelled by user during verification - rolling back");
-            rollback(&temp.root, &ctx.install_dir, &to_commit, &deleted);
-            cleanup(&temp.root);
-            bail!("cancelled by user");
-        }
-
-        // Repair before a full rollback: corrupt content is reproducible from
-        // the payload, and rewriting to a fresh location dodges transient
-        // glitches. Backups stay untouched so rollback remains possible.
-        if !corrupt.is_empty() {
-            common::log::warn(format!(
-                "{} file(s) failed post-install verification - attempting repair from payload",
-                corrupt.len()
-            ));
-            for attempt in 1..=VERIFY_REPAIR_ATTEMPTS {
-                (ctx.on_progress)(
-                    total_bytes,
-                    total_bytes,
-                    &ctx.translator.get("install.progress_repairing"),
-                );
-                let repair = repair_corrupt(
-                    ctx.zip_bytes,
-                    ctx.payload.kind,
-                    manifest,
-                    &temp.staged,
-                    &temp.backup,
-                    &ctx.install_dir,
-                    &corrupt,
-                );
-                if let Err(e) = repair {
-                    common::log::error(format!("repair attempt {} failed: {e:#}", attempt));
-                    break;
-                }
-                corrupt = find_corrupt(&ctx.install_dir, manifest, &corrupt, &ctx.cancel);
-                if corrupt.is_empty() {
-                    common::log::info(format!("repair succeeded on attempt {}", attempt));
-                    break;
-                }
-                common::log::warn(format!(
-                    "{} file(s) still corrupt after repair attempt {}",
-                    corrupt.len(),
-                    attempt
-                ));
-            }
-        }
-
-        // Repair exhausted and still corrupt - roll back to the previous version.
-        if !corrupt.is_empty() {
-            common::log::error(format!(
-                "post-install verification failed for {} file(s) after repair - rolling back",
-                corrupt.len()
-            ));
-            rollback(&temp.root, &ctx.install_dir, &to_commit, &deleted);
-            cleanup(&temp.root);
-            bail!(
-                "{} installed file(s) failed verification and could not be repaired; \
-                 the install was rolled back to the previous version",
-                corrupt.len()
-            );
-        }
-        common::log::info(format!("verified {} committed file(s)", to_commit.len()));
-
-        // Verified - drop the journal so recovery won't fire.
-        let _ = fs::remove_file(journal_path(&temp.root));
-
-        if !deleted.is_empty() {
-            common::utils::prune_empty_dirs(&long_path(&ctx.install_dir));
+            return Err(e);
         }
     }
 
