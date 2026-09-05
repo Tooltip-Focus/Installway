@@ -327,17 +327,21 @@ fn plan_deletions(ctx: &InstallCtx<'_>) -> Vec<String> {
     let purge_orphans = ctx.payload.force_reinstall
         || (ctx.payload.purge_unknown_files && ctx.payload.kind == PayloadKind::Full);
     if purge_orphans && let Ok(existing) = common::utils::collect_files(&ctx.install_dir) {
+        let scheduled: std::collections::HashSet<&str> =
+            deleted.iter().map(String::as_str).collect();
+        let mut orphans: Vec<String> = Vec::new();
         for rel in existing {
             if rel.starts_with(".installer_tmp")
                 || manifest.files.contains_key(&rel)
-                || deleted.contains(&rel)
+                || scheduled.contains(rel.as_str())
                 || safe_rel(&rel).is_err()
             {
                 continue;
             }
             common::log::info(format!("purge: removing unknown file {}", rel));
-            deleted.push(rel);
+            orphans.push(rel);
         }
+        deleted.extend(orphans);
     }
 
     deleted
@@ -2179,6 +2183,38 @@ mod tests {
         purging.purge_unknown_files = true;
         drop(install_quiet(&app2, &purging, &zip).unwrap());
         assert!(!app2.join("stray.txt").exists(), "purged when opted in");
+    }
+
+    // A manifest deletion is still on disk when the purge scan runs, so the
+    // scan sees it too. It must be scheduled once, and manifest deletions must
+    // still come before purged orphans.
+    #[test]
+    fn install_purge_does_not_double_schedule_manifest_deletions() {
+        let d = tempfile::tempdir().unwrap();
+        let app = d.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("old.txt"), b"OLD").unwrap();
+        fs::write(app.join("stray.txt"), b"S").unwrap();
+
+        let files: &[(&str, &[u8])] = &[("keep.txt", b"K")];
+        let mut payload = full_payload(files);
+        payload.purge_unknown_files = true;
+        payload.manifest.deleted_files = vec!["old.txt".into()];
+
+        let plan = plan_deletions(&InstallCtx {
+            install_dir: app.clone(),
+            payload: &payload,
+            zip_bytes: &zip_with(files),
+            cancel: Arc::new(AtomicBool::new(false)),
+            on_progress: progress_recorder().1,
+            plugin_inputs: Default::default(),
+            requires_admin: false,
+            hwnd_parent: 0,
+            translator: common::i18n::Translator::for_lang("en"),
+        });
+
+        // Manifest deletion first, then the orphan - and "old.txt" only once.
+        assert_eq!(plan, vec!["old.txt".to_string(), "stray.txt".to_string()]);
     }
 
     // A manifest path that could escape the install dir aborts staging before
