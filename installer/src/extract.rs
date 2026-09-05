@@ -139,6 +139,42 @@ pub struct InstallCtx<'a> {
     pub translator: common::i18n::Translator,
 }
 
+/// The scratch areas under `<install_dir>/.installer_tmp`: `staged/` holds
+/// rebuilt file content before it is committed, `backup/` holds the previous
+/// version of anything the commit overwrites or removes, and the journal at
+/// `root` records what to undo if the commit is interrupted.
+struct TempAreas {
+    root: PathBuf,
+    staged: PathBuf,
+    backup: PathBuf,
+}
+
+impl TempAreas {
+    /// Roll back a commit an earlier run left half-applied, then start from
+    /// empty scratch areas. A leftover temp with no journal means a previous
+    /// run was interrupted during staging (live install untouched), so discard
+    /// it and start over; correct files are hash-skipped during staging.
+    fn prepare(install_dir: &Path) -> Result<Self> {
+        let root = install_dir.join(".installer_tmp");
+
+        // Roll back a commit interrupted by a previous run before doing anything.
+        recover_if_interrupted(&root, install_dir);
+
+        let areas = Self {
+            staged: root.join("staged"),
+            backup: root.join("backup"),
+            root,
+        };
+        if areas.root.exists() {
+            common::log::warn("discarding leftover staging from a previous incomplete run");
+        }
+        let _ = fs::remove_dir_all(&areas.root);
+        fs::create_dir_all(&areas.staged).context("create staging dir")?;
+        fs::create_dir_all(&areas.backup).context("create backup dir")?;
+        Ok(areas)
+    }
+}
+
 /// Pre-flight gates, in the order the install depends on them: refuse a patch
 /// aimed at the wrong installed version (nothing touched yet), then confirm the
 /// destination is writable and roomy, then close anything running from it.
@@ -227,22 +263,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
     // aborts cleanly (live install untouched).
     run_zip_plugins(&ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
 
-    let temp_dir = ctx.install_dir.join(".installer_tmp");
-
-    // Roll back a commit interrupted by a previous run before doing anything.
-    recover_if_interrupted(&temp_dir, &ctx.install_dir);
-
-    // Fresh staging + backup areas. A leftover temp with no journal means a
-    // previous run was interrupted during staging (live install untouched), so
-    // discard it and start over; correct files are hash-skipped below.
-    let staged_dir = temp_dir.join("staged");
-    let backup_dir = temp_dir.join("backup");
-    if temp_dir.exists() {
-        common::log::warn("discarding leftover staging from a previous incomplete run");
-    }
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&staged_dir).context("create staging dir")?;
-    fs::create_dir_all(&backup_dir).context("create backup dir")?;
+    let temp = TempAreas::prepare(&ctx.install_dir)?;
 
     let total_bytes: u64 = manifest.files.values().map(|e| e.size).sum();
     let done = Arc::new(AtomicU64::new(0));
@@ -293,7 +314,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
                 let archive = archive
                     .as_mut()
                     .map_err(|e| anyhow::anyhow!("open embedded zip: {e}"))?;
-                let staged_path = staged_dir.join(staged_name(rel));
+                let staged_path = temp.staged.join(staged_name(rel));
                 stage_file(archive, ctx.payload.kind, rel, entry, &dest, &staged_path)?;
 
                 done.fetch_add(entry.size, Ordering::Relaxed);
@@ -311,7 +332,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
             Ok(None) => {}
             Err(e) => {
                 common::log::warn(format!("staging failed/cancelled: {e:#}"));
-                cleanup(&temp_dir);
+                cleanup(&temp.root);
                 return Err(e);
             }
         }
@@ -367,28 +388,28 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
             total_bytes,
             &ctx.translator.get("install.progress_finalizing"),
         );
-        write_journal(&temp_dir, &to_commit, &deleted)?;
+        write_journal(&temp.root, &to_commit, &deleted)?;
 
         let commit_result = (|| -> Result<()> {
             for rel in &to_commit {
                 if ctx.cancel.load(Ordering::Relaxed) {
                     bail!("cancelled by user");
                 }
-                commit_one(&ctx.install_dir, &staged_dir, &backup_dir, rel)?;
+                commit_one(&ctx.install_dir, &temp.staged, &temp.backup, rel)?;
             }
             for rel in &deleted {
                 if ctx.cancel.load(Ordering::Relaxed) {
                     bail!("cancelled by user");
                 }
-                backup_then_remove(&ctx.install_dir, &backup_dir, rel)?;
+                backup_then_remove(&ctx.install_dir, &temp.backup, rel)?;
             }
             Ok(())
         })();
 
         if let Err(e) = commit_result {
             common::log::error(format!("commit failed: {e:#} - rolling back"));
-            rollback(&temp_dir, &ctx.install_dir, &to_commit, &deleted);
-            cleanup(&temp_dir);
+            rollback(&temp.root, &ctx.install_dir, &to_commit, &deleted);
+            cleanup(&temp.root);
             return Err(e).context("install failed and was rolled back");
         }
 
@@ -413,8 +434,8 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
         // install returns to its previous version rather than half-committed.
         if ctx.cancel.load(Ordering::Relaxed) {
             common::log::warn("cancelled by user during verification - rolling back");
-            rollback(&temp_dir, &ctx.install_dir, &to_commit, &deleted);
-            cleanup(&temp_dir);
+            rollback(&temp.root, &ctx.install_dir, &to_commit, &deleted);
+            cleanup(&temp.root);
             bail!("cancelled by user");
         }
 
@@ -436,8 +457,8 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
                     ctx.zip_bytes,
                     ctx.payload.kind,
                     manifest,
-                    &staged_dir,
-                    &backup_dir,
+                    &temp.staged,
+                    &temp.backup,
                     &ctx.install_dir,
                     &corrupt,
                 );
@@ -464,8 +485,8 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
                 "post-install verification failed for {} file(s) after repair - rolling back",
                 corrupt.len()
             ));
-            rollback(&temp_dir, &ctx.install_dir, &to_commit, &deleted);
-            cleanup(&temp_dir);
+            rollback(&temp.root, &ctx.install_dir, &to_commit, &deleted);
+            cleanup(&temp.root);
             bail!(
                 "{} installed file(s) failed verification and could not be repaired; \
                  the install was rolled back to the previous version",
@@ -475,7 +496,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
         common::log::info(format!("verified {} committed file(s)", to_commit.len()));
 
         // Verified - drop the journal so recovery won't fire.
-        let _ = fs::remove_file(journal_path(&temp_dir));
+        let _ = fs::remove_file(journal_path(&temp.root));
 
         if !deleted.is_empty() {
             common::utils::prune_empty_dirs(&long_path(&ctx.install_dir));
@@ -484,7 +505,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
 
     // Installer metadata is written to the per-user data dir by
     // `install::finalize`, not into the app folder.
-    cleanup(&temp_dir);
+    cleanup(&temp.root);
 
     common::log::info(format!(
         "install complete in {}ms",
