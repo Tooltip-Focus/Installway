@@ -14,6 +14,7 @@ hintway = ["dep:hintway_analytics", "dep:uuid"]
 
 [dependencies]
 common = { path = "../common" }
+winui_support = { path = "../winui_support" }
 hintway_analytics = { git = "https://github.com/hintwayapp/Rust-SDK.git", optional = true }
 uuid = { version = "1.3", features = ["v4"], optional = true }
 serde = { version = "1", features = ["derive"] }
