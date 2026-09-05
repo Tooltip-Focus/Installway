@@ -39,6 +39,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_Security",
 ] }
+windows-reactor = { git = "https://github.com/microsoft/windows-rs.git", rev = "317646c941aa18916ffa5daeb4ffd5ffa4cd26f3" }
 
 [build-dependencies]
 embed-manifest = "1.4"

@@ -4,10 +4,10 @@
 //! Binds the process to an installed Windows App Runtime 2.x, version 2.4 or
 //! newer.
 
-use windows::Win32::Foundation::HMODULE;
+use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, HMODULE};
 use windows::Win32::Security::PSID;
 use windows::Win32::Storage::Packaging::Appx::{
-    GetPackagesByPackageFamily, PACKAGEDEPENDENCY_CONTEXT,
+    GetCurrentPackageFullName, GetPackagesByPackageFamily, PACKAGEDEPENDENCY_CONTEXT,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::core::{HRESULT, PCSTR, PCWSTR, PWSTR, s, w};
@@ -53,6 +53,22 @@ const fn version(major: u16, minor: u16, build: u16, revision: u16) -> u64 {
 /// beside the executable. The dependency resolver may select any newer
 /// compatible runtime from the same 2.x family.
 const MIN_VERSION: u64 = version(2, 4, 0, 0);
+
+/// Whether this process carries a package identity.
+///
+/// Installway ships plain desktop binaries, so any identity here is inherited
+/// from a packaged launcher: Windows 11's Settings app runs `UninstallString`
+/// inside `windows.immersivecontrolpanel` and its children inherit that
+/// identity. XAML then resolves against the launcher's package graph and dies
+/// with an unhandled WinRT exception (`0xc000027b` in `Microsoft.UI.Xaml.dll`)
+/// before any window exists - a hard crash, not an error a frontend can fall
+/// back from, so the choice has to be made before XAML starts.
+pub(crate) fn is_packaged() -> bool {
+    let mut length = 0u32;
+    // Sizing call: a real identity answers ERROR_INSUFFICIENT_BUFFER.
+    let rc = unsafe { GetCurrentPackageFullName(&mut length, None) };
+    rc != APPMODEL_ERROR_NO_PACKAGE
+}
 
 pub(crate) fn bind() -> bool {
     for family in candidate_families() {
