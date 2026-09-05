@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Binds the process to the Windows App Runtime installed on the machine.
+//! Binds the process to an installed Windows App Runtime 2.x, version 2.4 or
+//! newer.
 
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Security::PSID;
@@ -48,20 +49,17 @@ const fn version(major: u16, minor: u16, build: u16, revision: u16) -> u64 {
     ((major as u64) << 48) | ((minor as u64) << 32) | ((build as u64) << 16) | revision as u64
 }
 
-/// Minimum runtime when `resources.pri` ships beside the exe, mirroring
-/// reactor's `WINDOWSAPPSDK_RUNTIME_VERSION_UINT64`.
-pub(super) const MIN_VERSION: u64 = version(2, 0, 1, 0);
+/// Lower bound for a runtime that can start XAML without a `resources.pri`
+/// beside the executable. The dependency resolver may select any newer
+/// compatible runtime from the same 2.x family.
+const MIN_VERSION: u64 = version(2, 4, 0, 0);
 
-/// Minimum runtime that can start XAML with **no** `resources.pri` beside the
-/// exe.
-pub(super) const MIN_VERSION_WITHOUT_PRI: u64 = version(2, 4, 0, 0);
-
-pub(super) fn bind(min_version: u64) -> bool {
+pub(crate) fn bind() -> bool {
     for family in candidate_families() {
         if !family_is_installed(&family) {
             continue;
         }
-        if add_dependency(&family, min_version) {
+        if add_dependency(&family, MIN_VERSION) {
             common::log::info(format!("bound to Windows App Runtime '{family}'"));
             return true;
         }
@@ -152,22 +150,15 @@ fn add_dependency(family: &str, min_version: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_VERSION, MIN_VERSION_WITHOUT_PRI, candidate_families, version};
+    use super::{MIN_VERSION, candidate_families, version};
 
     /// The packing must match reactor's `WINDOWSAPPSDK_RUNTIME_VERSION_UINT64`,
     /// which is the literal this mirrors.
     #[test]
     fn version_packing_matches_reactor() {
-        assert_eq!(version(2, 0, 1, 0), 0x0002_0000_0001_0000);
-        assert_eq!(MIN_VERSION, 562_949_953_486_848);
+        assert_eq!(MIN_VERSION, 0x0002_0004_0000_0000);
         assert_eq!(version(0, 0, 0, 1), 1);
         assert_eq!(version(1, 8, 0, 0), 0x0001_0008_0000_0000);
-    }
-
-    #[test]
-    #[allow(clippy::absurd_extreme_comparisons, clippy::assertions_on_constants)]
-    fn no_pri_floor_is_not_below_the_base_floor() {
-        assert!(MIN_VERSION_WITHOUT_PRI >= MIN_VERSION);
     }
 
     /// 2.x dropped the minor from the family name; the installed package here is

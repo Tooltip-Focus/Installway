@@ -8,13 +8,13 @@
 //! map read rather than the HWND walk the Win32 backend needs. Keys are
 //! `"<page_id>.<widget_id>"`, matching Win32 and the `--silent` path.
 
-use super::compat::{Element, text_block, vstack};
 use super::model::{Model, tr};
 use super::wizard::SetState;
 use common::model::choice_style::ChoiceStyle;
 use common::model::plugin_page::{PluginInputs, PluginPage};
 use common::model::plugin_widget::PluginWidget;
 use windows_reactor::*;
+use winui_support::compat::{Element, text_block, vstack};
 
 const ROW_GAP: f64 = 10.0;
 

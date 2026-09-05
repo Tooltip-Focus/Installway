@@ -991,6 +991,7 @@ dependencies = [
  "uuid",
  "windows",
  "windows-reactor",
+ "winui_support",
  "zip",
 ]
 
@@ -2549,6 +2550,16 @@ checksum = "524e57b2c537c0f9b1e69f1965311ec12182b4122e45035b1508cd24d2adadb1"
 dependencies = [
  "cfg-if",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "winui_support"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "common",
+ "windows",
+ "windows-reactor",
 ]
 
 [[package]]

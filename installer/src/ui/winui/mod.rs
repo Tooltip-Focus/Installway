@@ -4,12 +4,10 @@
 //! WinUI 3 needs the Windows App SDK runtime. If not present, fallback to win32.
 
 mod banner;
-mod compat;
 mod icon;
 mod minimal;
 mod model;
 mod plugin_page;
-mod runtime;
 mod wizard;
 mod wizard_state;
 mod worker;
@@ -22,11 +20,11 @@ use model::{
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SW_HIDE, ShowWindow, WM_CLOSE};
+use windows::Win32::UI::WindowsAndMessaging::WM_CLOSE;
+use winui_support::window::WindowHandle;
 
 thread_local! {
     /// Holds staged temp files (banner, icon) for the whole run.
@@ -35,7 +33,7 @@ thread_local! {
 }
 
 /// Published once the window is up, for UAC parenting and the close guard.
-static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
+static MAIN_HWND: WindowHandle = WindowHandle::new();
 
 static INSTALL_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -44,28 +42,8 @@ static CLOSE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 const SUBCLASS_ID: usize = 0x1_5A11;
 
-/// Whether the WinUI stack is usable in this process. Dynamic dependency APIs
-/// are resolved by name so Windows 10 1703 can still reach the Win32 fallback.
-pub fn available() -> bool {
-    static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *READY.get_or_init(|| {
-        let has_pri = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("resources.pri").is_file()))
-            .unwrap_or(false);
-        let min = if has_pri {
-            runtime::MIN_VERSION
-        } else {
-            common::log::info("no resources.pri beside the exe; a fixed runtime is required");
-            runtime::MIN_VERSION_WITHOUT_PRI
-        };
-        if !runtime::bind(min) {
-            common::log::info("no suitable Windows App Runtime; using the Win32 UI");
-            return false;
-        }
-        true
-    })
-}
+pub use winui_support::available;
+use winui_support::launch_app;
 
 /// `Ok(false)` means no Windows App SDK runtime; run the Win32 wizard instead.
 pub fn run(
@@ -172,18 +150,6 @@ pub(super) fn staged_icon_uri() -> Option<String> {
     ICON_URI.with(|i| i.borrow().clone())
 }
 
-/// Bind WinUI and run one Reactor component. `Ok(false)` selects Win32.
-fn launch_app<C>(input: C::Input) -> Result<bool>
-where
-    C: windows_reactor::Component,
-{
-    if !available() {
-        return Ok(false);
-    }
-    windows_reactor::App::run_component::<C>(input).map_err(|e| anyhow::anyhow!("winui: {e}"))?;
-    Ok(true)
-}
-
 /// Called from the first render, by which point the window exists.
 pub(in crate::ui::winui) fn attach_window(sink: model::AsyncValue<Signal>) {
     if let Ok(mut slot) = SIGNAL_SINK.lock() {
@@ -222,28 +188,13 @@ pub(super) fn set_install_running(on: bool) {
 
 /// Parent for the UAC prompt and the folder picker; `0` before the window exists.
 pub(super) fn active_hwnd() -> isize {
-    let cached = MAIN_HWND.load(Ordering::Relaxed);
-    if cached != 0 {
-        return cached;
-    }
-    let raw = unsafe { GetActiveWindow() }.0 as isize;
-    if raw != 0 {
-        MAIN_HWND.store(raw, Ordering::Relaxed);
-    }
-    raw
+    MAIN_HWND.active()
 }
 
 /// Clears the guard first, so a deliberate close is never swallowed.
 pub(super) fn close_window() {
     set_install_running(false);
-    let raw = active_hwnd();
-    if raw != 0 {
-        let hwnd = HWND(raw as *mut _);
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_HIDE);
-            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
-        }
-    }
+    MAIN_HWND.close();
 }
 
 pub(super) fn pick_folder() -> Option<String> {

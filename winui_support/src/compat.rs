@@ -3,6 +3,8 @@
 
 #![allow(non_snake_case)] // tuple type parameters are also destructured below
 
+//! Compatibility builders shared by the WinUI frontends.
+
 use windows_reactor::*;
 
 pub struct Element(View);

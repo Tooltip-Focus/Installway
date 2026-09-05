@@ -6,9 +6,6 @@
 //! One render function of one [`Model`]. Sizes are DIPs, so the Win32 wizard's
 //! 96-dpi numbers carry over unchanged and XAML handles per-monitor scaling.
 
-use super::compat::{
-    Element, button, check_box, grid, hstack, scroll_viewer, text_block, text_box, vstack,
-};
 #[cfg(debug_assertions)]
 use super::model::Progress;
 use super::model::{
@@ -25,22 +22,15 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 use windows_reactor::*;
+use winui_support::compat::{
+    Element, button, check_box, grid, hstack, scroll_viewer, text_block, text_box, vstack,
+};
+use winui_support::widgets::card;
 
 pub(super) const WIN_W: f64 = 700.0;
 pub(super) const WIN_H: f64 = 540.0;
 const BANNER_H: f64 = 72.0;
 const PAD: f64 = 24.0;
-
-fn card(child: impl Into<View>) -> Element {
-    Element::from(
-        Border::new()
-            .corner_radius(8.0)
-            .background(ThemeBrush::CardBackground)
-            .border_thickness(Thickness::uniform(1.0))
-            .border_brush(ThemeBrush::CardStroke)
-            .content(child),
-    )
-}
 
 pub(super) type HookRef<T> = Rc<RefCell<T>>;
 

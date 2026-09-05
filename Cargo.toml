@@ -4,6 +4,7 @@ members = [
     "installer",
     "installer_builder",
     "uninstaller",
+    "winui_support",
 ]
 resolver = "2"
 
