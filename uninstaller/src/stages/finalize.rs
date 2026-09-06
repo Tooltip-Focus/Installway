@@ -9,7 +9,7 @@
 use crate::ui::{self, StepCounter, UninstallParams};
 use anyhow::Result;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
@@ -54,25 +54,9 @@ pub fn run(
             counter.step(&tr.get("uninstall.removing_install_dir"));
             // Remove the application dir; absent when metadata was unreadable.
             if let Some(ref dir) = app_dir {
-                if crate::cleanup::safe_app_dir(dir) {
-                    common::utils::remove_dir_retry(dir);
-                } else {
-                    common::log::warn(format!(
-                        "refusing to remove suspicious app dir: {}",
-                        dir.display()
-                    ));
-                }
+                remove_app_dir(dir);
             }
-
-            // Remove the data dir we launched from (we run from the %TEMP% copy).
-            common::utils::remove_dir_retry(&data_dir);
-            // Prune now-empty parent folders (Uninstall, publisher).
-            if let Some(parent) = data_dir.parent() {
-                let _ = fs::remove_dir(parent); // "Uninstall"
-                if let Some(grand) = parent.parent() {
-                    let _ = fs::remove_dir(grand); // "<publisher>"
-                }
-            }
+            remove_data_dir(&data_dir);
 
             counter.step(&tr.get("uninstall.schedule_deletion"));
             // Schedule self for deletion on next reboot.
@@ -97,6 +81,33 @@ pub fn run(
         );
     }
     Ok(())
+}
+
+/// Remove the recorded application dir, unless the recorded path fails the
+/// tamper check - a corrupted `installer_info.json` must not turn this into a
+/// profile-folder wipe.
+fn remove_app_dir(dir: &Path) {
+    if crate::cleanup::safe_app_dir(dir) {
+        common::utils::remove_dir_retry(dir);
+    } else {
+        common::log::warn(format!(
+            "refusing to remove suspicious app dir: {}",
+            dir.display()
+        ));
+    }
+}
+
+/// Remove the data dir we launched from (we run from the %TEMP% copy), then
+/// prune the now-empty parents: "Uninstall", then "<publisher>". Both prunes
+/// are non-recursive, so a parent still holding another product is left alone.
+fn remove_data_dir(data_dir: &Path) {
+    common::utils::remove_dir_retry(data_dir);
+    if let Some(parent) = data_dir.parent() {
+        let _ = fs::remove_dir(parent); // "Uninstall"
+        if let Some(grand) = parent.parent() {
+            let _ = fs::remove_dir(grand); // "<publisher>"
+        }
+    }
 }
 
 fn wait_for_pid(pid: u32, timeout: Duration) {
