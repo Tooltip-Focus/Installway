@@ -68,11 +68,14 @@ pub(crate) fn schedule_delete_on_reboot(path: &Path) -> bool {
 /// Remove a file, surviving transient AV/indexer locks via the shared retry
 /// policy; if still locked, fall back to a reboot-time delete.
 fn remove_file_robust(path: &Path) -> Removal {
-    for _ in 0..FS_RETRIES {
+    for attempt in 0..FS_RETRIES {
         match fs::remove_file(path) {
             Ok(()) => return Removal::Removed,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Removal::Absent,
-            Err(_) => std::thread::sleep(FS_RETRY_DELAY),
+            // Nothing follows the last attempt but the reboot-time fallback,
+            // so don't pay for a delay that no retry will use.
+            Err(_) if attempt + 1 < FS_RETRIES => std::thread::sleep(FS_RETRY_DELAY),
+            Err(_) => {}
         }
     }
     // Exhausted retries.
@@ -217,25 +220,6 @@ pub fn unregister(key: &str, machine: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::model::file_entry::FileEntry;
-    use common::model::manifest::Manifest;
-
-    /// Remove every payload file from `manifest`. Returns the count handled
-    /// (removed now or queued for reboot); stuck files are logged.
-    pub fn remove_payload_files(install_dir: &Path, manifest: &Manifest) -> usize {
-        let mut count = 0;
-        for rel in manifest.files.keys() {
-            let p = install_dir.join(rel);
-            match remove_file_robust(&p) {
-                Removal::Removed | Removal::Pending => count += 1,
-                Removal::Stuck => {
-                    common::log::warn(format!("could not remove (locked): {}", p.display()));
-                }
-                Removal::Absent => {}
-            }
-        }
-        count
-    }
 
     #[test]
     fn remove_empty_subdirs_keeps_nonempty_and_root() {
@@ -269,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_payload_and_state_files() {
+    fn remove_one_payload_and_state_files() {
         let d = tempfile::tempdir().unwrap();
         let app = d.path();
         fs::create_dir_all(app.join("bin")).unwrap();
@@ -277,32 +261,16 @@ mod tests {
         fs::write(app.join("version.json"), b"{}").unwrap();
         fs::write(app.join("installer_manifest.json"), b"{}").unwrap();
 
-        let mut files = std::collections::HashMap::new();
-        files.insert(
-            "bin/a.exe".to_string(),
-            FileEntry {
-                hash: "h".into(),
-                size: 1,
-                patch: None,
-                feature: None,
-            },
-        );
-        let m = Manifest {
-            version: "1.0".into(),
-            exe: Some("bin/a.exe".into()),
-            files,
-            deleted_files: vec![],
-            full_size: 0,
-            total_patch_size: 0,
-            features: Vec::new(),
-            default_features: Vec::new(),
-            feature_mode: Default::default(),
-        };
-
-        assert_eq!(remove_payload_files(app, &m), 1);
+        // One call per manifest entry, the way `do_cleanup` drives it.
+        remove_one_payload(&app.join("bin").join("a.exe"));
         assert!(!app.join("bin").join("a.exe").exists());
+        // A payload the user already deleted is a no-op, not a failure.
+        remove_one_payload(&app.join("bin").join("gone.exe"));
+
         assert_eq!(remove_app_state_files(app), 2);
         assert!(!app.join("version.json").exists());
         assert!(!app.join("installer_manifest.json").exists());
+        // Re-running over an already-clean dir handles nothing.
+        assert_eq!(remove_app_state_files(app), 0);
     }
 }

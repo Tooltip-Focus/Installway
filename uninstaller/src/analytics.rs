@@ -64,7 +64,55 @@ pub fn error(category: &str) {
     );
 }
 
+/// Record an uninstall failure, bucketed by [`category`].
+pub fn error_from(err: &anyhow::Error) {
+    error(category(err));
+}
+
+/// Coarse bucket for a failure: enough to tell a permission wall from a missing
+/// file or corrupt metadata, without shipping the message itself (it carries
+/// user paths).
+fn category(err: &anyhow::Error) -> &'static str {
+    if let Some(io) = err.chain().find_map(|c| c.downcast_ref::<std::io::Error>()) {
+        return match io.kind() {
+            std::io::ErrorKind::NotFound => "not_found",
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "io",
+        };
+    }
+    if err.chain().any(|c| c.is::<serde_json::Error>()) {
+        return "parse";
+    }
+    "unknown"
+}
+
 /// Flush all queued events (blocking, ≤ 5 s). Fires `app_exit` automatically.
 pub fn shutdown() {
     AnalyticsManager::instance().shutdown();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::category;
+    use anyhow::Context;
+
+    /// The bucket comes from the root cause, through the `anyhow` context the
+    /// call sites add.
+    #[test]
+    fn category_buckets_by_root_cause() {
+        let missing = std::fs::read_to_string(r"Z:\nope\installer_info.json")
+            .context("read installer_info.json")
+            .unwrap_err();
+        assert_eq!(category(&missing), "not_found");
+
+        let parse = serde_json::from_str::<serde_json::Value>("{ nope")
+            .context("parse installer_info.json")
+            .unwrap_err();
+        assert_eq!(category(&parse), "parse");
+
+        assert_eq!(
+            category(&anyhow::anyhow!("locate uninstaller parent dir")),
+            "unknown"
+        );
+    }
 }
