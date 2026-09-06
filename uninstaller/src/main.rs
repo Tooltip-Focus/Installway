@@ -153,23 +153,7 @@ fn run() -> Result<()> {
         ),
         None => {
             #[cfg(feature = "hintway")]
-            {
-                let mode = if cli.silent { "silent" } else { "interactive" };
-                let data_dir = cleanup::self_dir().unwrap_or_default();
-                let privilege = match std::env::var("ProgramData") {
-                    Ok(pd) if !pd.is_empty() && data_dir.starts_with(&pd) => "admin",
-                    _ => "user",
-                };
-                let tenant_id = cleanup::read_info(&data_dir)
-                    .ok()
-                    .and_then(|info| info.hintway_tenant_id);
-                let backend = if cli.silent {
-                    "none"
-                } else {
-                    ui::backend_name()
-                };
-                analytics::init(tenant_id.as_deref(), mode, privilege, backend);
-            }
+            analytics::init_for_run(cli.silent);
             stages::uninstall::run(cli.silent)
         }
     }

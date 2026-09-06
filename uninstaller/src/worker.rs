@@ -4,6 +4,7 @@
 use anyhow::Result;
 use common::elevation::{WorkerEvent, send};
 use common::model::manifest::Manifest;
+use std::fs::File;
 
 pub fn run(pipe_name: &str) -> Result<()> {
     common::i18n::Translator::detect(&[]).set_global();
@@ -11,8 +12,13 @@ pub fn run(pipe_name: &str) -> Result<()> {
     let handle = common::elevation::connect_pipe_client(pipe_name)?;
     let mut pipe = common::elevation::open_pipe_handle(handle);
 
-    let data_dir = match crate::cleanup::self_dir() {
-        Ok(d) => d,
+    match uninstall(&mut pipe) {
+        Ok(()) => {
+            let _ = send(&mut pipe, &WorkerEvent::Done);
+        }
+        // A failure is terminal for the worker: the parent surfaces the message
+        // and no `Done` is sent. The process still exits 0 - the parent learns
+        // about the failure from the event, not from the exit code.
         Err(e) => {
             let _ = send(
                 &mut pipe,
@@ -20,23 +26,18 @@ pub fn run(pipe_name: &str) -> Result<()> {
                     msg: format!("{e:#}"),
                 },
             );
-            return Ok(());
         }
-    };
+    }
+    Ok(())
+}
 
-    let info = match crate::cleanup::read_info(&data_dir) {
-        Ok(i) => i,
-        Err(e) => {
-            let _ = send(
-                &mut pipe,
-                &WorkerEvent::Error {
-                    msg: format!("{e:#}"),
-                },
-            );
-            return Ok(());
-        }
-    };
+/// The uninstall itself, streaming progress over `pipe` as it runs. The first
+/// failure aborts; the caller turns it into a `WorkerEvent::Error`.
+fn uninstall(pipe: &mut File) -> Result<()> {
+    let data_dir = crate::cleanup::self_dir()?;
+    let info = crate::cleanup::read_info(&data_dir)?;
 
+    // Manifest may be missing (partial delete); fall back to an empty one.
     let manifest = crate::cleanup::read_manifest(&data_dir)
         .unwrap_or_else(|_| Manifest::fallback(&info.version, info.exe.as_deref()));
 
@@ -49,7 +50,7 @@ pub fn run(pipe_name: &str) -> Result<()> {
         &data_dir,
         |done, total, name| {
             let _ = send(
-                &mut pipe,
+                pipe,
                 &WorkerEvent::Progress {
                     done,
                     total,
@@ -59,21 +60,10 @@ pub fn run(pipe_name: &str) -> Result<()> {
         },
     );
 
-    if let Err(e) = crate::stages::uninstall::spawn_finalize(
+    crate::stages::uninstall::spawn_finalize(
         Some(&app_dir),
         &data_dir,
         Some(&info.product),
         info.show_uninstall_complete,
-    ) {
-        let _ = send(
-            &mut pipe,
-            &WorkerEvent::Error {
-                msg: format!("{e:#}"),
-            },
-        );
-        return Ok(());
-    }
-
-    let _ = send(&mut pipe, &WorkerEvent::Done);
-    Ok(())
+    )
 }
