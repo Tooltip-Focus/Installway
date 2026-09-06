@@ -86,7 +86,7 @@ fn main() {
     if let Err(e) = run() {
         #[cfg(feature = "hintway")]
         {
-            analytics::error("unknown");
+            analytics::error_from(&e);
             analytics::shutdown();
         }
         ui::fatal(&format!("{e:#}"));

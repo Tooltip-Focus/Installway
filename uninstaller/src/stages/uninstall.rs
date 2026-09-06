@@ -35,8 +35,9 @@ fn data_dir_key(data_dir: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Log in %TEMP% so it survives the rmdir of both the app and data dirs.
-fn init_temp_log(data_dir: &Path) {
+/// Log in %TEMP% so it survives the rmdir of both the app and data dirs. Keyed
+/// by PID, so the elevated worker gets its own file next to its parent's.
+pub(crate) fn init_temp_log(data_dir: &Path) {
     let product_hint = data_dir_key(data_dir);
     common::log::init(common::log::log_path_uninstall_temp(
         &product_hint,
@@ -79,7 +80,9 @@ pub fn run(silent: bool) -> Result<()> {
         return Ok(());
     }
 
-    // If the metadata is gone, just remove leftovers quietly (no error dialog).
+    // If the metadata is gone, remove the leftovers instead of reporting the
+    // unreadable file: that warning goes to the log only. Failing to spawn the
+    // finalize step is still surfaced, as a dialog raised by `main`.
     let info = match cleanup::read_info(&data_dir) {
         Ok(i) => i,
         Err(e) => {
