@@ -162,10 +162,8 @@ fn interactive_params(
     }
 }
 
-/// Worker body for the unelevated interactive path.
-///
-/// Runs on the UI's background thread, so `ui::tr()` reads *that* thread's
-/// translator, which `main` never set.
+/// Worker body for the unelevated interactive path. Runs on the UI's background
+/// thread, where `ui::tr()` resolves to the process-wide language.
 fn run_here(
     info: &InstallInfo,
     manifest: &Manifest,

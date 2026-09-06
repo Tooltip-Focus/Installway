@@ -17,7 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::PCWSTR;
 
 thread_local! {
-    static T: RefCell<common::i18n::Translator> = RefCell::new(common::i18n::Translator::default());
+    static T: RefCell<common::i18n::Translator> =
+        RefCell::new(common::i18n::Translator::for_lang(common::i18n::current_lang()));
 }
 
 pub fn set_translator(translator: common::i18n::Translator) {
@@ -150,5 +151,17 @@ impl StepCounter {
     pub fn step(&self, label: &str) {
         let done = self.done.fetch_add(1, Ordering::Relaxed) + 1;
         (self.cb)(done, self.total, label);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn worker_thread_inherits_the_process_language() {
+        common::i18n::Translator::for_lang("fr").set_global();
+        assert_eq!(common::i18n::current_lang(), "fr");
+
+        let lang = std::thread::spawn(|| super::tr().lang()).join().unwrap();
+        assert_eq!(lang, "fr");
     }
 }
