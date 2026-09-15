@@ -663,54 +663,19 @@ fn stage_file(
     Ok(())
 }
 
-/// RAII single-instance lock for one install dir, backed by a named mutex. The
-/// OS destroys it when the last handle closes (exit or crash), so it can never
-/// go stale.
-pub struct InstallLock(windows::Win32::Foundation::HANDLE);
-
-// The mutex handle is only closed on drop; safe to move across threads.
-unsafe impl Send for InstallLock {}
-
-impl Drop for InstallLock {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = windows::Win32::Foundation::CloseHandle(self.0);
-        }
-    }
-}
+/// Single-instance lock for one install dir; see [`common::lock`].
+pub type InstallLock = common::lock::NamedLock;
 
 fn acquire_install_lock(install_dir: &Path, machine: bool) -> Result<InstallLock> {
-    use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
-    use windows::Win32::System::Threading::CreateMutexW;
-    use windows::core::PCWSTR;
+    use common::lock::{NamedLock, Scope};
 
-    // Normalize the path so different spellings of the same dir collide.
-    let key = install_dir
-        .to_string_lossy()
-        .to_lowercase()
-        .replace('/', "\\");
-    let hash = blake3::hash(key.as_bytes()).to_hex();
     // Machine-wide installs use the Global\ namespace so two users can't race on
     // the same shared folder; per-user installs stay in the per-session Local\.
-    let scope = if machine { "Global" } else { "Local" };
-    let name = format!("{}\\Installway-Install-{}", scope, &hash.as_str()[..32]);
-    let wide = common::utils::wide(&name);
-
-    unsafe {
-        let handle = CreateMutexW(None, false, PCWSTR(wide.as_ptr()))
-            .context("create install lock mutex")?;
-        // Read last error immediately, before any other Win32 call clobbers it.
-        let already = GetLastError() == ERROR_ALREADY_EXISTS;
-        if handle.is_invalid() {
-            bail!("could not create install lock");
-        }
-        if already {
-            let _ = CloseHandle(handle);
-            common::log::warn("refused: another installer is already running for this folder");
-            bail!("Another installation for this folder is already in progress.");
-        }
-        Ok(InstallLock(handle))
-    }
+    let scope = if machine { Scope::Global } else { Scope::Local };
+    NamedLock::acquire(scope, "Install", install_dir).ok_or_else(|| {
+        common::log::warn("refused: another installer is already running for this folder");
+        anyhow::anyhow!("Another installation for this folder is already in progress.")
+    })
 }
 
 /// Pre-flight: make sure we can create the install dir and write into it.

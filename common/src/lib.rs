@@ -4,6 +4,7 @@
 pub mod assoc;
 pub mod elevation;
 pub mod i18n;
+pub mod lock;
 pub mod log;
 pub mod model;
 pub mod paths;

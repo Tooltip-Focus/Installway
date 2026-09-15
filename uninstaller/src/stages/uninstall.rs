@@ -5,6 +5,7 @@ use crate::cleanup;
 use crate::ui::{self, UninstallParams};
 use anyhow::{Context, Result};
 use common::i18n::Translator;
+use common::lock::{NamedLock, Scope};
 use common::model::install_info::InstallInfo;
 use common::model::manifest::Manifest;
 use common::model::plugin_ctx::PluginContext;
@@ -70,6 +71,17 @@ fn relaunched_via_explorer(silent: bool) -> bool {
     }
 }
 
+/// One uninstall per data dir. `Global\` so a machine-wide uninstall started by
+/// two users, or once elevated and once not, still collides.
+pub(crate) fn acquire_instance_lock(data_dir: &Path) -> Option<NamedLock> {
+    NamedLock::acquire(Scope::Global, "Uninstall", data_dir)
+}
+
+/// Join the uninstall lock from the finalize step, before the uninstall step exits.
+pub(crate) fn join_instance_lock(data_dir: &Path) -> Option<NamedLock> {
+    NamedLock::join(Scope::Global, "Uninstall", data_dir)
+}
+
 pub fn run(silent: bool) -> Result<()> {
     // Runs from the data dir, not the app dir; the real app dir comes from
     // installer_info.json.
@@ -79,6 +91,14 @@ pub fn run(silent: bool) -> Result<()> {
     if relaunched_via_explorer(silent) {
         return Ok(());
     }
+
+    let Some(_instance) = acquire_instance_lock(&data_dir) else {
+        common::log::warn("refused: another uninstall is already running for this product");
+        if !silent && let Ok(info) = cleanup::read_info(&data_dir) {
+            ui::focus_existing(&ui::tr().fmt("uninstall.title", &[("product", &info.product)]));
+        }
+        return Ok(());
+    };
 
     // If the metadata is gone, remove the leftovers instead of reporting the
     // unreadable file: that warning goes to the log only. Failing to spawn the

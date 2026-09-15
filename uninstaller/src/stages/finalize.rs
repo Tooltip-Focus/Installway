@@ -38,6 +38,10 @@ pub fn run(
         parent_pid
     ));
 
+    // Join the uninstall step's lock before it exits, so no new uninstall
+    // starts while its dirs are being removed.
+    let _instance = super::uninstall::join_instance_lock(&data_dir);
+
     let tr = crate::ui::tr();
     let params = UninstallParams {
         title: tr.fmt("uninstall.finalize_title", &[("product", &product)]),
