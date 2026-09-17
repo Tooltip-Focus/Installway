@@ -69,7 +69,7 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
         zip_bytes: loaded.zip(),
         cancel,
         on_progress: progress_fn,
-        plugin_inputs: cmd.plugin_inputs.clone(),
+        plugin_inputs: cmd.plugin_inputs,
         // This worker only runs after the main process needed elevation, i.e. a
         // machine-wide install.
         requires_admin: true,
@@ -77,44 +77,14 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
         translator,
     };
 
-    // Lock held across finalize so a concurrent run can't interleave.
-    let installed = match crate::extract::install(ctx) {
-        Ok(installed) => installed,
-        Err(e) => {
-            if let Ok(mut p) = pipe_shared.lock() {
-                let _ = send(
-                    &mut *p,
-                    &WorkerEvent::Error {
-                        msg: format!("{e:#}"),
-                    },
-                );
-            }
-            return Ok(());
-        }
+    let event = match crate::install::run(&ctx, &loaded.uninstaller_bytes) {
+        Ok(()) => WorkerEvent::Done,
+        Err(e) => WorkerEvent::Error {
+            msg: format!("{e:#}"),
+        },
     };
-
-    if let Err(e) = crate::install::finalize(
-        &cmd.install_dir,
-        &loaded.payload,
-        &loaded.uninstaller_bytes,
-        loaded.zip(),
-        &cmd.plugin_inputs,
-        true,
-        &installed.created_dirs,
-    ) {
-        if let Ok(mut p) = pipe_shared.lock() {
-            let _ = send(
-                &mut *p,
-                &WorkerEvent::Error {
-                    msg: format!("finalize: {e:#}"),
-                },
-            );
-        }
-        return Ok(());
-    }
-
     if let Ok(mut p) = pipe_shared.lock() {
-        let _ = send(&mut *p, &WorkerEvent::Done);
+        let _ = send(&mut *p, &event);
     }
     Ok(())
 }

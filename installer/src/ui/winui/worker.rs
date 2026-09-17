@@ -9,7 +9,7 @@
 use super::model::{
     AsyncValue, CANCEL, PERM_ERROR, PermError, Progress, QUERIED_STEP, Signal, tr, with_payload,
 };
-use crate::extract::{InstallCtx, install};
+use crate::extract::InstallCtx;
 use crate::install as install_mod;
 use crate::ui::wizard_engine::{StepArgs, run_plugin_then_step, run_step_query};
 use common::plugin::InputsByPlugin;
@@ -62,68 +62,40 @@ pub(super) fn start_install(feed: Feed, path: PathBuf, plugin_inputs: InputsByPl
             })
         };
         let ctx = InstallCtx {
-            install_dir: path.clone(),
+            install_dir: path,
             payload: &loaded.payload,
             zip_bytes: loaded.zip(),
             cancel: cancel.clone(),
             on_progress: progress_cb,
-            plugin_inputs: plugin_inputs.clone(),
+            plugin_inputs,
             requires_admin,
             hwnd_parent: super::active_hwnd(),
             translator,
         };
-        #[cfg(feature = "hintway")]
-        crate::analytics::stage("extract");
-        // Lock held across finalize so a concurrent run can't interleave.
-        let installed = match install(ctx) {
-            Ok(installed) => installed,
-            Err(e) => {
-                // A confirmed cancel rolled back; close cleanly rather than
-                // reporting it as an install failure.
-                if cancel.load(Ordering::Relaxed) {
-                    common::log::info("install cancelled by user");
-                    feed.signal.call(Signal::Cancelled);
-                    return;
-                }
-                if e.downcast_ref::<crate::extract::PermissionDeniedError>()
-                    .is_some()
-                {
-                    #[cfg(feature = "hintway")]
-                    crate::analytics::error("permission_denied");
-                    if let Ok(mut slot) = PERM_ERROR.lock() {
-                        *slot = Some(PermError {
-                            path: path.clone(),
-                            plugin_inputs: plugin_inputs.clone(),
-                        });
-                    }
-                    feed.signal.call(Signal::PermError);
-                } else {
-                    #[cfg(feature = "hintway")]
-                    crate::analytics::error(crate::analytics::classify_error(&e));
-                    feed.signal.call(Signal::Error(format!("{e}")));
-                }
-                return;
-            }
+        let Err(e) = install_mod::run(&ctx, &loaded.uninstaller_bytes) else {
+            feed.signal.call(Signal::Done);
+            return;
         };
-        #[cfg(feature = "hintway")]
-        crate::analytics::stage("finalize");
-        if let Err(e) = install_mod::finalize(
-            &path,
-            &loaded.payload,
-            &loaded.uninstaller_bytes,
-            loaded.zip(),
-            &plugin_inputs,
-            requires_admin,
-            &installed.created_dirs,
-        ) {
+        // A confirmed cancel rolled back; close cleanly rather than reporting it
+        // as an install failure.
+        if cancel.load(Ordering::Relaxed) && !e.is::<install_mod::FinalizeFailed>() {
+            common::log::info("install cancelled by user");
+            feed.signal.call(Signal::Cancelled);
+        } else if e.is::<crate::extract::PermissionDeniedError>() {
+            #[cfg(feature = "hintway")]
+            crate::analytics::error("permission_denied");
+            if let Ok(mut slot) = PERM_ERROR.lock() {
+                *slot = Some(PermError {
+                    path: ctx.install_dir,
+                    plugin_inputs: ctx.plugin_inputs,
+                });
+            }
+            feed.signal.call(Signal::PermError);
+        } else {
             #[cfg(feature = "hintway")]
             crate::analytics::error(crate::analytics::classify_error(&e));
-            feed.signal.call(Signal::Error(format!("finalize: {e}")));
-            return;
+            feed.signal.call(Signal::Error(format!("{e:#}")));
         }
-        #[cfg(feature = "hintway")]
-        crate::analytics::stage("done");
-        feed.signal.call(Signal::Done);
     });
 }
 

@@ -487,16 +487,16 @@ fn verify_and_repair(
     Ok(())
 }
 
-/// A completed [`install`]. Callers keep it alive across `install::finalize`:
-/// dropping the lock earlier would let a second installer start staging while
-/// this one still writes metadata/registry state.
+/// A completed [`install`]. `install::run` keeps it alive across its metadata
+/// step: dropping the lock earlier would let a second installer start staging
+/// while this one still writes metadata/registry state.
 pub struct Installed {
     _lock: InstallLock,
     /// Directories this run created, recorded for the uninstaller.
     pub created_dirs: Vec<PathBuf>,
 }
 
-pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
+pub fn install(ctx: &InstallCtx<'_>) -> Result<Installed> {
     let manifest = &ctx.payload.manifest;
 
     // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
@@ -529,11 +529,11 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
     // creates, so the uninstaller never removes a folder that was already there.
     let created_dirs = dirs_to_create(&ctx.install_dir, manifest);
 
-    check_preconditions(&ctx)?;
+    check_preconditions(ctx)?;
 
     // Pre-install plugins run before any file is staged, so a required failure
     // aborts cleanly (live install untouched).
-    run_zip_plugins(&ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
+    run_zip_plugins(ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
 
     let temp = TempAreas::prepare(&ctx.install_dir)?;
 
@@ -545,7 +545,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
     // as it always has.
     ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
 
-    let to_commit = match stage_all(&ctx, &temp, total_bytes) {
+    let to_commit = match stage_all(ctx, &temp, total_bytes) {
         Ok(v) => v,
         Err(e) => {
             cleanup(&temp.root);
@@ -556,7 +556,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
     // ---- PHASE 2: COMMIT ----------------------------------------------
     // Swap staged files into place. A journal records every touched path so an
     // interruption can be rolled back.
-    let deleted = plan_deletions(&ctx);
+    let deleted = plan_deletions(ctx);
 
     if to_commit.is_empty() && deleted.is_empty() {
         common::log::info("nothing to commit (already up to date)");
@@ -575,7 +575,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
         // returns without clearing the temp dir, as it always has.
         write_journal(&temp.root, &to_commit, &deleted)?;
 
-        if let Err(e) = commit_and_verify(&ctx, &temp, &to_commit, &deleted, total_bytes) {
+        if let Err(e) = commit_and_verify(ctx, &temp, &to_commit, &deleted, total_bytes) {
             cleanup(&temp.root);
             return Err(e);
         }
@@ -2122,7 +2122,7 @@ mod tests {
         cancel: Arc<AtomicBool>,
         on_progress: common::ProgressFn,
     ) -> Result<Installed> {
-        install(InstallCtx {
+        install(&InstallCtx {
             install_dir: dir.to_path_buf(),
             payload,
             zip_bytes: zip,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
+use crate::extract::InstallCtx;
 use anyhow::{Context, Result};
 use common::model::file_assoc::FileAssoc;
 use common::model::install_info::InstallInfo;
@@ -42,6 +43,41 @@ pub(crate) fn shortcut_options() -> ShortcutOptions {
     SHORTCUT_OPTIONS.get().copied().unwrap_or_default()
 }
 
+/// Context on an error raised by [`finalize`]: the payload was already
+/// committed, so the error is never a cancelled or rolled-back install.
+#[derive(Debug)]
+pub struct FinalizeFailed;
+
+impl std::fmt::Display for FinalizeFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("finalize")
+    }
+}
+
+/// Install `ctx`: stage and commit the payload, then write the uninstaller and
+/// metadata. The per-folder lock is held across both, so a concurrent run
+/// cannot interleave. A metadata error carries [`FinalizeFailed`].
+pub fn run(ctx: &InstallCtx<'_>, uninstaller_bytes: &[u8]) -> Result<()> {
+    #[cfg(feature = "hintway")]
+    crate::analytics::stage("extract");
+    let installed = crate::extract::install(ctx)?;
+    #[cfg(feature = "hintway")]
+    crate::analytics::stage("finalize");
+    finalize(
+        &ctx.install_dir,
+        ctx.payload,
+        uninstaller_bytes,
+        ctx.zip_bytes,
+        &ctx.plugin_inputs,
+        ctx.requires_admin,
+        &installed.created_dirs,
+    )
+    .context(FinalizeFailed)?;
+    #[cfg(feature = "hintway")]
+    crate::analytics::stage("done");
+    Ok(())
+}
+
 /// Write the uninstaller + metadata to a data folder outside the app directory
 /// and register the product in Add/Remove Programs.
 ///
@@ -50,7 +86,7 @@ pub(crate) fn shortcut_options() -> ShortcutOptions {
 /// `%LOCALAPPDATA%\..` and `HKCU`. This lets any user see and run the
 /// uninstaller for machine-wide installs, while keeping per-user installs
 /// invisible to other accounts.
-pub fn finalize(
+fn finalize(
     install_dir: &Path,
     payload: &InstallerPayload,
     uninstaller_bytes: &[u8],
@@ -677,6 +713,16 @@ pub fn launch_product(install_dir: &Path, exe: Option<&str>) -> Result<()> {
 mod tests {
     use super::*;
     use common::model::shortcut_entry::ShortcutEntry;
+
+    /// The wizards tell a metadata failure from a cancelled install by this
+    /// marker, and still show the cause after the `finalize` prefix.
+    #[test]
+    fn finalize_failed_marks_the_error_and_keeps_its_cause() {
+        let e = anyhow::anyhow!("write installer_info.json").context(FinalizeFailed);
+        assert!(e.is::<FinalizeFailed>());
+        assert_eq!(format!("{e:#}"), "finalize: write installer_info.json");
+        assert!(!anyhow::anyhow!("cancelled by user").is::<FinalizeFailed>());
+    }
 
     fn payload_with(shortcuts: Vec<ShortcutEntry>) -> InstallerPayload {
         InstallerPayload {

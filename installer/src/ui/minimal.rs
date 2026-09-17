@@ -3,7 +3,7 @@
 
 //! Compact, auto-starting update UI for app-triggered self-updates.
 
-use crate::extract::{InstallCtx, install};
+use crate::extract::InstallCtx;
 use crate::payload::LoadedPayload;
 use crate::ui::helpers::{
     self, WM_APP_DONE, WM_APP_ERROR, create_font, own_icon, post, scale_progress, set_dlg_text,
@@ -298,26 +298,13 @@ fn spawn_worker(
             zip_bytes: loaded.zip(),
             cancel,
             on_progress: prog_cb,
-            plugin_inputs: plugin_inputs.clone(),
+            plugin_inputs,
             requires_admin,
             hwnd_parent: hwnd_isize,
             translator: tr(),
         };
-        // Lock held across finalize so a concurrent run can't interleave.
-        let installed = match install(ctx) {
-            Ok(installed) => installed,
-            Err(e) => return post_err(hwnd_isize, &format!("{e}")),
-        };
-        if let Err(e) = crate::install::finalize(
-            &install_dir,
-            &loaded.payload,
-            &loaded.uninstaller_bytes,
-            loaded.zip(),
-            &plugin_inputs,
-            requires_admin,
-            &installed.created_dirs,
-        ) {
-            return post_err(hwnd_isize, &format!("finalize: {e}"));
+        if let Err(e) = crate::install::run(&ctx, &loaded.uninstaller_bytes) {
+            return post_err(hwnd_isize, &format!("{e:#}"));
         }
         if launch_flag {
             let _ = crate::install::launch_product(

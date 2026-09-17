@@ -365,28 +365,12 @@ fn run_silent(
         zip_bytes: loaded.zip(),
         cancel: Arc::new(AtomicBool::new(false)),
         on_progress: progress,
-        plugin_inputs: plugin_inputs.clone(),
+        plugin_inputs,
         requires_admin,
         hwnd_parent: 0,
         translator,
     };
-    #[cfg(feature = "hintway")]
-    analytics::stage("extract");
-    // Lock held across finalize so a concurrent run can't interleave.
-    let installed = extract::install(ctx)?;
-    #[cfg(feature = "hintway")]
-    analytics::stage("finalize");
-    install::finalize(
-        &install_dir,
-        &loaded.payload,
-        &loaded.uninstaller_bytes,
-        loaded.zip(),
-        &plugin_inputs,
-        requires_admin,
-        &installed.created_dirs,
-    )?;
-    #[cfg(feature = "hintway")]
-    analytics::stage("done");
+    install::run(&ctx, &loaded.uninstaller_bytes)?;
 
     if launch && let Some(exe_name) = loaded.payload.manifest.exe.as_deref() {
         install::launch_product(&install_dir, Some(exe_name))?;
