@@ -11,7 +11,7 @@ use common::model::registry_value::RegistryValue;
 use common::model::shortcut_entry::ShortcutEntry;
 use common::utils::{days_to_ymd, wide};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -56,6 +56,7 @@ pub fn finalize(
     zip_bytes: &[u8],
     plugin_inputs: &common::plugin::InputsByPlugin,
     requires_admin: bool,
+    created_dirs: &[PathBuf],
 ) -> Result<()> {
     let data_dir =
         common::paths::uninstall_dir_for(&payload.publisher, &payload.product_id, requires_admin)
@@ -79,6 +80,7 @@ pub fn finalize(
         .as_ref()
         .map(|i| i.shortcuts.clone())
         .unwrap_or_default();
+    let created_dirs = merge_created_dirs(prior.as_ref(), install_dir, created_dirs);
     let prior_reg = prior.map(|i| i.registry).unwrap_or_default();
 
     // Resolve the registry token templates against this install.
@@ -131,6 +133,8 @@ pub fn finalize(
         show_uninstall_complete: payload.show_uninstall_complete,
         requires_admin,
         features: payload.active_features.clone(),
+        uninstall_dir_policy: payload.uninstall_dir_policy,
+        created_dirs,
     };
 
     // Extract the plugin DLLs into the data dir so the uninstaller (and the
@@ -229,6 +233,26 @@ pub fn finalize(
     }
 
     Ok(())
+}
+
+/// The directories to record as created by the installer: this run's, plus
+/// those an earlier install into the same folder recorded, since an upgrade
+/// finds them on disk and would otherwise lose track of them.
+fn merge_created_dirs(
+    prior: Option<&InstallInfo>,
+    install_dir: &Path,
+    created_now: &[PathBuf],
+) -> Vec<String> {
+    let key = |p: &str| p.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let same_dir = |i: &&InstallInfo| key(&i.install_dir) == key(&install_dir.to_string_lossy());
+    let mut dirs: Vec<String> = prior
+        .filter(same_dir)
+        .map(|i| i.created_dirs.clone())
+        .unwrap_or_default();
+    dirs.extend(created_now.iter().map(|d| d.to_string_lossy().into_owned()));
+    dirs.sort_by_key(|d| key(d));
+    dirs.dedup_by_key(|d| key(d));
+    dirs
 }
 
 /// Extract every plugin DLL from the payload zip into `<data_dir>/plugins/`.
@@ -659,6 +683,36 @@ mod tests {
             shortcuts,
             ..Default::default()
         }
+    }
+
+    fn prior_info(install_dir: &str, created_dirs: &[&str]) -> InstallInfo {
+        serde_json::from_value(serde_json::json!({
+            "product": "P", "version": "1.0", "install_dir": install_dir,
+            "installed_at_unix": 0, "registry_key": "P",
+            "created_dirs": created_dirs,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn merge_created_dirs_keeps_prior_dirs_of_the_same_folder() {
+        let dir = Path::new(r"C:\Apps\MyApp");
+        let prior = prior_info(r"c:\apps\myapp\", &[r"C:\Apps\MyApp", r"C:\Apps\MyApp\bin"]);
+        let now = [
+            PathBuf::from(r"C:\Apps\MyApp\BIN"),
+            PathBuf::from(r"C:\Apps\MyApp\new"),
+        ];
+        assert_eq!(
+            merge_created_dirs(Some(&prior), dir, &now),
+            vec![r"C:\Apps\MyApp", r"C:\Apps\MyApp\bin", r"C:\Apps\MyApp\new"]
+        );
+        // A prior install elsewhere says nothing about this folder.
+        let elsewhere = prior_info(r"D:\Other", &[r"D:\Other"]);
+        assert_eq!(
+            merge_created_dirs(Some(&elsewhere), dir, &now[1..]),
+            vec![r"C:\Apps\MyApp\new"]
+        );
+        assert!(merge_created_dirs(None, dir, &[]).is_empty());
     }
 
     #[test]

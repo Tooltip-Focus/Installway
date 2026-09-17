@@ -229,6 +229,7 @@ fn sign_payload(
         skip_license: args.skip_license,
         skip_path: args.skip_path,
         install_dir_restriction: args.install_dir_restriction,
+        uninstall_dir_policy: args.uninstall_dir_policy,
         default_install_dir: args.default_install_dir.clone(),
         upgrade_minimal_ui: args.upgrade_minimal_ui,
         show_uninstall_complete: args.show_uninstall_complete,

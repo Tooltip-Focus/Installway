@@ -428,8 +428,8 @@ unsafe fn commit_install(hwnd: HWND) {
         #[cfg(feature = "hintway")]
         crate::analytics::stage("extract");
         // Lock held across finalize so a concurrent run can't interleave.
-        let _install_lock = match install(ctx) {
-            Ok(lock) => lock,
+        let installed = match install(ctx) {
+            Ok(installed) => installed,
             Err(e) => {
                 // A user-confirmed cancel rolled the install back: close cleanly
                 // instead of surfacing it as an installation error.
@@ -461,6 +461,7 @@ unsafe fn commit_install(hwnd: HWND) {
             loaded.zip(),
             &plugin_inputs,
             requires_admin,
+            &installed.created_dirs,
         ) {
             #[cfg(feature = "hintway")]
             crate::analytics::error(crate::analytics::classify_error(&e));

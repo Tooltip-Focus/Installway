@@ -36,16 +36,43 @@ Uninstalling runs `uninstall.exe`, which:
    [file associations](../packaging/associations.md) that still point at our
    ProgID, and the [registry entries](../packaging/registry.md) it wrote
    (anti-stomp; empty created keys are pruned).
-5. Removes `version.json`, `installer_manifest.json`, and empty
-   subdirectories.
+5. Removes `version.json` and `installer_manifest.json`, then the folders
+   the [install folder policy](#the-install-folder) allows.
 6. Deletes the Uninstall registry entry, in `HKCU` or `HKLM` to match the
    install.
-7. Spawns a second-stage copy of itself from `%TEMP%` that deletes the app
-   directory and the data directory (including `uninstall.exe` itself), then
-   schedules its own removal at reboot. No `cmd.exe`, no console flash.
+7. Spawns a second-stage copy of itself from `%TEMP%` that applies the
+   [install folder policy](#the-install-folder) once the first stage has
+   exited, deletes the data directory (including `uninstall.exe` itself),
+   then schedules its own removal at reboot. No `cmd.exe`, no console flash.
 
 If the app folder was already deleted by hand, the file steps do nothing and
 the registry entry and data directory are still cleaned.
+
+## The install folder
+
+The install folder can hold files the installer never wrote: files the
+application or the user added, or files that were there before the install.
+`--uninstall-dir-policy` (config key `uninstall_dir_policy`) sets what the
+uninstaller does with it:
+
+| Value | Effect |
+|---|---|
+| `tracked` | Default. Removes only the tracked files, then each folder the installer created once it is empty. A folder that existed before the install is never removed, even when empty. |
+| `purge` | Removes the whole install folder, whatever it contains. |
+
+The installer records the folders it creates in `installer_info.json`
+(`created_dirs`): the install folder and any missing parent folder, plus the
+payload's sub-folders. An upgrade into the same folder adds its own to the
+list. Folder removal is never recursive under `tracked`, so a folder that
+still holds anything stays in place and is noted in the uninstall log.
+
+Every install, upgrade, reinstall or patch rewrites `uninstall.exe`, so the
+policy of the most recent build applies. A product first installed by a
+build predating `created_dirs` has no record of the folders it created:
+under `tracked`, those folders are kept.
+
+`purge` refuses a recorded path that is a drive root, a
+profile or system folder, or a parent of one.
 
 ## Silent uninstall
 

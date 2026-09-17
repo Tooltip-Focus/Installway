@@ -235,7 +235,12 @@ pub(crate) fn do_cleanup(
 
     step("state");
     cleanup::remove_app_state_files(app_dir);
-    cleanup::remove_empty_subdirs(app_dir);
+    if cleanup::purge_app_dir(info) {
+        // The finalize step removes the whole dir; tidy up in case it never runs.
+        cleanup::remove_empty_subdirs(app_dir);
+    } else {
+        cleanup::remove_created_dirs(info);
+    }
 
     step("registry");
     cleanup::unregister(&info.registry_key, info.requires_admin);

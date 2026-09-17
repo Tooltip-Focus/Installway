@@ -2,9 +2,9 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 //! Finalize step: runs from `%TEMP%` after the uninstall step spawned us. Waits for
-//! the uninstall step to exit (releasing the `uninstall.exe` lock), removes the app
-//! dir and data dir, then schedules its own removal via
-//! `MoveFileExW(MOVEFILE_DELAY_UNTIL_REBOOT)`.
+//! the uninstall step to exit (releasing the `uninstall.exe` lock), clears the app
+//! dir as its uninstall dir policy says, removes the data dir, then schedules its
+//! own removal via `MoveFileExW(MOVEFILE_DELAY_UNTIL_REBOOT)`.
 
 use crate::ui::{self, StepCounter, UninstallParams};
 use anyhow::Result;
@@ -54,7 +54,7 @@ pub fn run(
             counter.step(&tr.get("uninstall.removing_install_dir"));
             // Remove the application dir; absent when metadata was unreadable.
             if let Some(ref dir) = app_dir {
-                remove_app_dir(dir);
+                remove_app_dir(dir, &data_dir);
             }
             remove_data_dir(&data_dir);
 
@@ -83,11 +83,26 @@ pub fn run(
     Ok(())
 }
 
-/// Remove the recorded application dir, unless the recorded path fails the
-/// tamper check - a corrupted `installer_info.json` must not turn this into a
-/// profile-folder wipe.
-fn remove_app_dir(dir: &Path) {
-    if crate::cleanup::safe_app_dir(dir) {
+/// Clear the application dir as its uninstall dir policy says, read from the
+/// data dir before that is removed. Only `purge` deletes it recursively, and
+/// only past the tamper check:
+/// a corrupted `installer_info.json` must not turn this into a profile-folder
+/// wipe. Otherwise the installer-created dirs left empty go, now that the
+/// uninstall step's locks are released.
+fn remove_app_dir(dir: &Path, data_dir: &Path) {
+    let info = match crate::cleanup::read_info(data_dir) {
+        Ok(info) => info,
+        Err(e) => {
+            common::log::warn(format!(
+                "installer_info.json unreadable ({e:#}) - leaving {} in place",
+                dir.display()
+            ));
+            return;
+        }
+    };
+    if !crate::cleanup::purge_app_dir(&info) {
+        crate::cleanup::remove_created_dirs(&info);
+    } else if crate::cleanup::safe_app_dir(dir) {
         common::utils::remove_dir_retry(dir);
     } else {
         common::log::warn(format!(

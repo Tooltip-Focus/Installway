@@ -78,8 +78,8 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
     };
 
     // Lock held across finalize so a concurrent run can't interleave.
-    let _install_lock = match crate::extract::install(ctx) {
-        Ok(lock) => lock,
+    let installed = match crate::extract::install(ctx) {
+        Ok(installed) => installed,
         Err(e) => {
             if let Ok(mut p) = pipe_shared.lock() {
                 let _ = send(
@@ -100,6 +100,7 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
         loaded.zip(),
         &cmd.plugin_inputs,
         true,
+        &installed.created_dirs,
     ) {
         if let Ok(mut p) = pipe_shared.lock() {
             let _ = send(

@@ -2,6 +2,7 @@ use crate::model::file_assoc::FileAssoc;
 use crate::model::plugin_entry::PluginEntry;
 use crate::model::registry_entry::RegistryEntry;
 use crate::model::shortcut_entry::ShortcutEntry;
+use crate::model::uninstall_dir_policy::UninstallDirPolicy;
 use serde::{Deserialize, Serialize};
 
 /// Persisted to `<install_dir>/installer_info.json` by the installer.
@@ -51,4 +52,13 @@ pub struct InstallInfo {
     /// this set instead of the new build's defaults.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
+    /// What the uninstaller removes from the install directory.
+    #[serde(default)]
+    pub uninstall_dir_policy: UninstallDirPolicy,
+    /// Absolute paths of the directories the installer created: the install
+    /// dir and its missing ancestors, plus the payload's sub-directories. Merged
+    /// across upgrades. A directory absent from this list existed before the
+    /// install and is never removed under [`UninstallDirPolicy::Tracked`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created_dirs: Vec<String>,
 }

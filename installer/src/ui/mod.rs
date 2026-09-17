@@ -248,6 +248,7 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
         skip_license: false,
         skip_path: false,
         install_dir_restriction: InstallDirRestriction::Enforce,
+        uninstall_dir_policy: Default::default(),
         default_install_dir: None,
         upgrade_minimal_ui: false,
         show_uninstall_complete: false,

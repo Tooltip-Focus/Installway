@@ -12,6 +12,7 @@ use common::model::registry_entry::RegistryEntry;
 use common::model::registry_kind::RegistryKind;
 use common::model::registry_value::RegistryValue;
 use common::model::shortcut_entry::ShortcutEntry;
+use common::model::uninstall_dir_policy::UninstallDirPolicy;
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -126,6 +127,12 @@ pub struct PackCli {
     /// Default `enforce`.
     #[arg(long, value_name = "enforce|default-dir-only|bypass")]
     pub install_dir_restriction: Option<String>,
+
+    /// What the uninstaller removes from the install folder: `tracked` (the
+    /// tracked files, then the folders the installer created once empty) or
+    /// `purge` (the whole folder). Default `tracked`.
+    #[arg(long, value_name = "tracked|purge")]
+    pub uninstall_dir_policy: Option<String>,
 
     /// Use the compact minimal UI for upgrades. Optional.
     #[arg(long)]
@@ -291,6 +298,7 @@ pub struct PackFile {
     #[serde(default)]
     pub skip_path: bool,
     pub install_dir_restriction: Option<String>,
+    pub uninstall_dir_policy: Option<String>,
     #[serde(default)]
     pub upgrade_minimal_ui: bool,
     #[serde(default)]
@@ -345,6 +353,7 @@ pub struct PackArgs {
     pub skip_license: bool,
     pub skip_path: bool,
     pub install_dir_restriction: InstallDirRestriction,
+    pub uninstall_dir_policy: UninstallDirPolicy,
     pub upgrade_minimal_ui: bool,
     pub show_uninstall_complete: bool,
     pub launch_option: LaunchOption,
@@ -455,6 +464,9 @@ impl PackArgs {
             install_dir_restriction: parse_install_dir_restriction(
                 cli.install_dir_restriction.or(file.install_dir_restriction),
             )?,
+            uninstall_dir_policy: parse_uninstall_dir_policy(
+                cli.uninstall_dir_policy.or(file.uninstall_dir_policy),
+            )?,
             upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
             show_uninstall_complete: cli.show_uninstall_complete || file.show_uninstall_complete,
             launch_option: parse_launch_option(cli.launch_option.or(file.launch_option))?,
@@ -533,6 +545,20 @@ fn parse_install_dir_restriction(v: Option<String>) -> Result<InstallDirRestrict
         other => {
             bail!("unknown install-dir-restriction '{other}' (enforce | default-dir-only | bypass)")
         }
+    }
+}
+
+/// Parse the optional `uninstall_dir_policy` value (CLI or config).
+/// Accepts `tracked` / `purge` (case-insensitive).
+/// Absent → [`UninstallDirPolicy::Tracked`].
+fn parse_uninstall_dir_policy(v: Option<String>) -> Result<UninstallDirPolicy> {
+    let Some(s) = v else {
+        return Ok(UninstallDirPolicy::Tracked);
+    };
+    match s.trim().to_ascii_lowercase().as_str() {
+        "tracked" => Ok(UninstallDirPolicy::Tracked),
+        "purge" => Ok(UninstallDirPolicy::Purge),
+        other => bail!("unknown uninstall-dir-policy '{other}' (tracked | purge)"),
     }
 }
 
@@ -793,6 +819,7 @@ mod tests {
             skip_license: false,
             skip_path: false,
             install_dir_restriction: None,
+            uninstall_dir_policy: None,
             upgrade_minimal_ui: false,
             show_uninstall_complete: false,
             launch_option: None,
@@ -1137,6 +1164,24 @@ force_reinstall = true
         );
         // Unknown value errors.
         assert!(resolve_with("\ninstall_dir_restriction = 'nope'\n").is_err());
+    }
+
+    #[test]
+    fn uninstall_dir_policy_defaults_and_parses() {
+        // Absent → Tracked.
+        assert_eq!(
+            resolve_with("").unwrap().uninstall_dir_policy,
+            UninstallDirPolicy::Tracked
+        );
+        // From file, case-insensitive.
+        assert_eq!(
+            resolve_with("\nuninstall_dir_policy = 'PURGE'\n")
+                .unwrap()
+                .uninstall_dir_policy,
+            UninstallDirPolicy::Purge
+        );
+        // Unknown value errors.
+        assert!(resolve_with("\nuninstall_dir_policy = 'nope'\n").is_err());
     }
 
     #[test]
