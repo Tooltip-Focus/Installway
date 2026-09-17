@@ -228,7 +228,7 @@ pub fn set_static_icon(ctrl: HWND, icon: HICON) {
 /// The DPI of the monitor `hwnd` is on (96 = 100% scale). Falls back to 96 if
 /// the query fails. Scales the fixed-pixel layout per monitor so a move between
 /// screens of different scale stays crisp (no bitmap stretch).
-pub fn dpi_for(hwnd: HWND) -> i32 {
+fn dpi_for(hwnd: HWND) -> i32 {
     let d = unsafe { GetDpiForWindow(hwnd) };
     if d == 0 { 96 } else { d as i32 }
 }
@@ -284,7 +284,7 @@ pub fn own_icon() -> HICON {
 /// area and leaves the client too short — clipping the bottom controls
 /// (progress bar, status, buttons). Pass the monitor DPI so the frame is sized
 /// for the scale the layout is built at. At 96 dpi this matches the old result.
-pub fn window_size_for_client(
+fn window_size_for_client(
     client_w: i32,
     client_h: i32,
     style: WINDOW_STYLE,
@@ -302,7 +302,7 @@ pub fn window_size_for_client(
 }
 
 /// Center a top-level window on the primary monitor.
-pub fn center(hwnd: HWND) {
+fn center(hwnd: HWND) {
     let mut rect = RECT::default();
     unsafe {
         let _ = GetWindowRect(hwnd, &mut rect);
@@ -340,7 +340,7 @@ pub fn set_font(parent: HWND, id: usize, font: HFONT) {
 }
 
 /// Set the text of a control by its own `HWND`.
-pub fn set_window_text(ctrl: HWND, s: &str) {
+fn set_window_text(ctrl: HWND, s: &str) {
     let w = wide(s);
     unsafe {
         let _ = SetWindowTextW(ctrl, PCWSTR(w.as_ptr()));
