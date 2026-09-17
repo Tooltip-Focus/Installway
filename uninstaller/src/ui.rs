@@ -12,7 +12,8 @@ use common::utils::wide;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows::Win32::UI::WindowsAndMessaging::{
-    MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    FindWindowW, IsIconic, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
 use windows::core::PCWSTR;
 
@@ -80,6 +81,20 @@ pub fn fatal(msg: &str) {
             PCWSTR(caption.as_ptr()),
             MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
         );
+    }
+}
+
+/// Bring an already-running uninstaller window to the front, found by its title.
+pub fn focus_existing(title: &str) {
+    let title = wide(title);
+    unsafe {
+        let Ok(hwnd) = FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) else {
+            return;
+        };
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        let _ = SetForegroundWindow(hwnd);
     }
 }
 
