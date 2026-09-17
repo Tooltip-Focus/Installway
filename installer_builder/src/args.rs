@@ -461,36 +461,88 @@ impl PackArgs {
             purge_unknown_files: cli.purge_unknown_files || file.purge_unknown_files,
             skip_license: cli.skip_license || file.skip_license,
             skip_path: cli.skip_path || file.skip_path,
-            install_dir_restriction: parse_install_dir_restriction(
+            install_dir_restriction: parse_choice(
                 cli.install_dir_restriction.or(file.install_dir_restriction),
             )?,
-            uninstall_dir_policy: parse_uninstall_dir_policy(
+            uninstall_dir_policy: parse_choice(
                 cli.uninstall_dir_policy.or(file.uninstall_dir_policy),
             )?,
             upgrade_minimal_ui: cli.upgrade_minimal_ui || file.upgrade_minimal_ui,
             show_uninstall_complete: cli.show_uninstall_complete || file.show_uninstall_complete,
-            launch_option: parse_launch_option(cli.launch_option.or(file.launch_option))?,
+            launch_option: parse_choice(cli.launch_option.or(file.launch_option))?,
             reuse_stub: cli.reuse_stub || file.reuse_stub,
             registry: build_registry(file.registry)?,
             plugins: build_plugins(file.plugins)?,
             shortcuts: build_shortcuts(file.shortcuts, &features)?,
             features,
-            feature_mode: parse_feature_mode(file.feature_mode)?,
+            feature_mode: parse_choice(file.feature_mode)?,
         })
     }
 }
 
-/// Parse the optional `feature_mode` value (config-file only). Accepts `sticky`
-/// / `override` (case-insensitive). Absent → [`FeatureMode::Sticky`].
-fn parse_feature_mode(v: Option<String>) -> Result<FeatureMode> {
-    let Some(s) = v else {
-        return Ok(FeatureMode::Sticky);
-    };
-    match s.trim().to_ascii_lowercase().as_str() {
-        "sticky" => Ok(FeatureMode::Sticky),
-        "override" => Ok(FeatureMode::Override),
-        other => bail!("unknown feature-mode '{other}' (sticky | override)"),
+/// A setting written as one of a fixed set of words, in the CLI or `pack.toml`.
+trait Choice: Copy + Default + 'static {
+    /// The setting's name, for error messages.
+    const NAME: &'static str;
+    /// Each accepted word, `-`-separated, with its value.
+    const WORDS: &'static [(&'static str, Self)];
+
+    /// The value `word` names: case-insensitive, `_` and `-` interchangeable.
+    fn from_word(word: &str) -> Result<Self> {
+        let word = word.trim().to_ascii_lowercase().replace('_', "-");
+        Self::WORDS
+            .iter()
+            .find(|(w, _)| *w == word)
+            .map(|&(_, value)| value)
+            .ok_or_else(|| {
+                let words: Vec<&str> = Self::WORDS.iter().map(|(w, _)| *w).collect();
+                anyhow!("unknown {} '{word}' ({})", Self::NAME, words.join(" | "))
+            })
     }
+}
+
+impl Choice for FeatureMode {
+    const NAME: &'static str = "feature-mode";
+    const WORDS: &'static [(&'static str, Self)] =
+        &[("sticky", Self::Sticky), ("override", Self::Override)];
+}
+
+impl Choice for InstallDirRestriction {
+    const NAME: &'static str = "install-dir-restriction";
+    const WORDS: &'static [(&'static str, Self)] = &[
+        ("enforce", Self::Enforce),
+        ("default-dir-only", Self::DefaultDirOnly),
+        ("bypass", Self::Bypass),
+    ];
+}
+
+impl Choice for UninstallDirPolicy {
+    const NAME: &'static str = "uninstall-dir-policy";
+    const WORDS: &'static [(&'static str, Self)] =
+        &[("purge", Self::Purge), ("tracked", Self::Tracked)];
+}
+
+impl Choice for LaunchOption {
+    const NAME: &'static str = "launch-option";
+    const WORDS: &'static [(&'static str, Self)] = &[
+        ("checked", Self::Checked),
+        ("unchecked", Self::Unchecked),
+        ("hidden", Self::Hidden),
+    ];
+}
+
+impl Choice for PluginPhase {
+    const NAME: &'static str = "phase";
+    const WORDS: &'static [(&'static str, Self)] = &[
+        ("pre-install", Self::PreInstall),
+        ("post-install", Self::PostInstall),
+    ];
+}
+
+/// Parse an optional [`Choice`]. Absent → the type's default, the same value
+/// the payload falls back to when the field is missing.
+fn parse_choice<T: Choice>(v: Option<String>) -> Result<T> {
+    v.map_or_else(|| Ok(T::default()), |word| T::from_word(&word))
 }
 
 /// Convert + validate `[[feature]]` entries. Ids must be non-empty, unique
@@ -531,52 +583,6 @@ fn build_features(raw: Vec<FeatureFileEntry>) -> Result<Vec<ResolvedFeature>> {
     Ok(out)
 }
 
-/// Parse the optional `install_dir_restriction` value (CLI or config).
-/// Accepts `enforce` / `default-dir-only` / `bypass` (case- and
-/// `_`/`-`-insensitive). Absent → [`InstallDirRestriction::Enforce`].
-fn parse_install_dir_restriction(v: Option<String>) -> Result<InstallDirRestriction> {
-    let Some(s) = v else {
-        return Ok(InstallDirRestriction::Enforce);
-    };
-    match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
-        "enforce" => Ok(InstallDirRestriction::Enforce),
-        "default-dir-only" => Ok(InstallDirRestriction::DefaultDirOnly),
-        "bypass" => Ok(InstallDirRestriction::Bypass),
-        other => {
-            bail!("unknown install-dir-restriction '{other}' (enforce | default-dir-only | bypass)")
-        }
-    }
-}
-
-/// Parse the optional `uninstall_dir_policy` value (CLI or config).
-/// Accepts `purge` / `tracked` (case-insensitive).
-/// Absent → [`UninstallDirPolicy::Purge`].
-fn parse_uninstall_dir_policy(v: Option<String>) -> Result<UninstallDirPolicy> {
-    let Some(s) = v else {
-        return Ok(UninstallDirPolicy::Purge);
-    };
-    match s.trim().to_ascii_lowercase().as_str() {
-        "purge" => Ok(UninstallDirPolicy::Purge),
-        "tracked" => Ok(UninstallDirPolicy::Tracked),
-        other => bail!("unknown uninstall-dir-policy '{other}' (purge | tracked)"),
-    }
-}
-
-/// Parse the optional `launch_option` value (CLI or config). Accepts
-/// `checked` / `unchecked` / `hidden` (case-insensitive). Absent →
-/// [`LaunchOption::Checked`].
-fn parse_launch_option(v: Option<String>) -> Result<LaunchOption> {
-    let Some(s) = v else {
-        return Ok(LaunchOption::Checked);
-    };
-    match s.trim().to_ascii_lowercase().as_str() {
-        "checked" => Ok(LaunchOption::Checked),
-        "unchecked" => Ok(LaunchOption::Unchecked),
-        "hidden" => Ok(LaunchOption::Hidden),
-        other => bail!("unknown launch-option '{other}' (checked | unchecked | hidden)"),
-    }
-}
-
 /// Convert + validate `[[plugin]]` entries. Names must be safe filename
 /// components and unique; phase is `pre-install` or `post-install`.
 fn build_plugins(raw: Vec<PluginFileEntry>) -> Result<Vec<ResolvedPlugin>> {
@@ -597,13 +603,8 @@ fn build_plugins(raw: Vec<PluginFileEntry>) -> Result<Vec<ResolvedPlugin>> {
         if !seen.insert(name.to_ascii_lowercase()) {
             bail!("plugin #{n}: duplicate name '{name}'");
         }
-        let phase = match p.phase.to_ascii_lowercase().replace('_', "-").as_str() {
-            "pre-install" => PluginPhase::PreInstall,
-            "post-install" => PluginPhase::PostInstall,
-            other => bail!(
-                "plugin #{n} ('{name}'): unknown phase '{other}' (pre-install | post-install)"
-            ),
-        };
+        let phase =
+            PluginPhase::from_word(&p.phase).with_context(|| format!("plugin #{n} ('{name}')"))?;
         out.push(ResolvedPlugin {
             name,
             src: p.dll,
@@ -1203,6 +1204,23 @@ force_reinstall = true
         );
         // Unknown value errors.
         assert!(resolve_with("\nfeature_mode = 'nope'\n").is_err());
+    }
+
+    #[test]
+    fn choice_words_ignore_case_spaces_and_separator() {
+        assert_eq!(
+            InstallDirRestriction::from_word(" Default_Dir_Only ").unwrap(),
+            InstallDirRestriction::DefaultDirOnly
+        );
+        assert_eq!(
+            LaunchOption::from_word("Nope").unwrap_err().to_string(),
+            "unknown launch-option 'nope' (checked | unchecked | hidden)"
+        );
+        let err = resolve_with("\n[[plugin]]\nname='a'\ndll='a.dll'\nphase='nope'\n").unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "plugin #1 ('a'): unknown phase 'nope' (pre-install | post-install)"
+        );
     }
 
     #[test]

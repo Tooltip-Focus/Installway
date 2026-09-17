@@ -4,6 +4,7 @@
 //! Destination-folder policy shared by the installer UIs.
 
 use common::model::install_dir_restriction::InstallDirRestriction;
+use common::paths::same_path;
 use std::path::{Path, PathBuf};
 
 /// True when `path` is an existing directory holding at least one file at any
@@ -33,15 +34,9 @@ fn dir_has_files_recursive(path: &Path) -> bool {
     false
 }
 
-fn norm_dir(p: &str) -> String {
-    p.trim()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_ascii_lowercase()
-}
-
 pub(super) fn same_dir(path: &str, default_path: &str) -> bool {
-    !path.trim().is_empty() && norm_dir(path) == norm_dir(default_path)
+    let path = path.trim();
+    !path.is_empty() && same_path(Path::new(path), Path::new(default_path.trim()))
 }
 
 /// Whether a non-empty destination must be refused.
