@@ -9,6 +9,7 @@ use crate::model::registry_entry::RegistryEntry;
 use crate::model::registry_kind::RegistryKind;
 use crate::model::registry_value::RegistryValue;
 use crate::model::shortcut_entry::ShortcutEntry;
+use crate::model::uninstall_dir_policy::UninstallDirPolicy;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -63,6 +64,10 @@ pub struct InstallerPayload {
     /// Defaults to [`InstallDirRestriction::Enforce`]; see that type's docs.
     #[serde(default)]
     pub install_dir_restriction: InstallDirRestriction,
+    /// What the uninstaller removes from the install directory. Defaults to
+    /// [`UninstallDirPolicy::Tracked`]; see that type's docs.
+    #[serde(default)]
+    pub uninstall_dir_policy: UninstallDirPolicy,
     /// Default install directory the UI proposes.
     /// May contain `%VAR%` env tokens (e.g. `%LOCALAPPDATA%\Programs\MyApp`).
     /// `None` falls back to `%LOCALAPPDATA%\Programs\<product>`.
@@ -132,6 +137,7 @@ impl Default for InstallerPayload {
             skip_license: true,
             skip_path: false,
             install_dir_restriction: InstallDirRestriction::DefaultDirOnly,
+            uninstall_dir_policy: UninstallDirPolicy::Purge,
             default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),
             upgrade_minimal_ui: true,
             registry: vec![RegistryEntry {

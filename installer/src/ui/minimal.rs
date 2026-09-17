@@ -254,7 +254,7 @@ fn spawn_worker(
         // Pre-flight write test — same check as the interactive wizard.
         let needs_elevation = !common::elevation::is_already_elevated()
             && matches!(
-                crate::extract::check_writable(&install_dir),
+                crate::extract::probe_writable(&install_dir),
                 Err(ref e) if e.is::<crate::extract::PermissionDeniedError>()
             );
 
@@ -304,8 +304,8 @@ fn spawn_worker(
             translator: tr(),
         };
         // Lock held across finalize so a concurrent run can't interleave.
-        let _install_lock = match install(ctx) {
-            Ok(lock) => lock,
+        let installed = match install(ctx) {
+            Ok(installed) => installed,
             Err(e) => return post_err(hwnd_isize, &format!("{e}")),
         };
         if let Err(e) = crate::install::finalize(
@@ -315,6 +315,7 @@ fn spawn_worker(
             loaded.zip(),
             &plugin_inputs,
             requires_admin,
+            &installed.created_dirs,
         ) {
             return post_err(hwnd_isize, &format!("finalize: {e}"));
         }

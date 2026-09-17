@@ -233,8 +233,8 @@ fn spawn(job: Job, progress: AsyncValue<Progress>, signal: AsyncValue<Signal>) {
             hwnd_parent: super::active_hwnd(),
             translator: tr(),
         };
-        let _install_lock = match install(ctx) {
-            Ok(lock) => lock,
+        let installed = match install(ctx) {
+            Ok(installed) => installed,
             Err(e) => {
                 signal.call(Signal::Error(format!("{e:#}")));
                 return;
@@ -247,6 +247,7 @@ fn spawn(job: Job, progress: AsyncValue<Progress>, signal: AsyncValue<Signal>) {
             loaded.zip(),
             &plugin_inputs,
             requires_admin,
+            &installed.created_dirs,
         ) {
             signal.call(Signal::Error(format!("finalize: {e:#}")));
             return;

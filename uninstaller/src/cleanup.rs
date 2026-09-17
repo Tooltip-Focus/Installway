@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use common::model::install_info::InstallInfo;
 use common::model::manifest::Manifest;
+use common::model::uninstall_dir_policy::UninstallDirPolicy;
 use common::utils::{FS_RETRIES, FS_RETRY_DELAY, wide};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -163,21 +164,24 @@ const PROTECTED_DIR_VARS: &[&str] = &[
     "TEMP",
 ];
 
+/// Case-insensitive path components (prefix + normal parts), for comparing
+/// spellings of the same Windows path.
+fn norm(p: &Path) -> Vec<String> {
+    p.components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
+            std::path::Component::Prefix(pr) => {
+                Some(pr.as_os_str().to_string_lossy().to_lowercase())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Sanity check before recursively deleting the recorded app dir: a corrupted
 /// or tampered `installer_info.json` must not be able to point the uninstaller
 /// at a drive root, a profile folder, or an ancestor of one.
 pub fn safe_app_dir(dir: &Path) -> bool {
-    fn norm(p: &Path) -> Vec<String> {
-        p.components()
-            .filter_map(|c| match c {
-                std::path::Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
-                std::path::Component::Prefix(pr) => {
-                    Some(pr.as_os_str().to_string_lossy().to_lowercase())
-                }
-                _ => None,
-            })
-            .collect()
-    }
     if !dir.is_absolute() {
         return false;
     }
@@ -199,6 +203,37 @@ pub fn safe_app_dir(dir: &Path) -> bool {
         }
     }
     true
+}
+
+/// Whether the whole install dir is removed, content included (`purge`).
+pub fn purge_app_dir(info: &InstallInfo) -> bool {
+    info.uninstall_dir_policy == UninstallDirPolicy::Purge
+}
+
+/// Remove the directories the installer created that are now empty, deepest
+/// first so a chain unwinds. Non-recursive: a directory still holding anything
+/// stays. Only the install dir, its sub-directories and its ancestors are
+/// considered, and an ancestor must pass [`safe_app_dir`].
+pub fn remove_created_dirs(info: &InstallInfo) {
+    let app = norm(Path::new(&info.install_dir));
+    let mut dirs: Vec<(PathBuf, Vec<String>)> = info
+        .created_dirs
+        .iter()
+        .map(|d| (PathBuf::from(d), norm(Path::new(d))))
+        .filter(|(p, n)| {
+            let inside = n.len() >= app.len() && n[..app.len()] == app[..];
+            let ancestor = n.len() < app.len() && app[..n.len()] == n[..];
+            inside || (ancestor && safe_app_dir(p))
+        })
+        .collect();
+    dirs.sort_by_key(|(_, n)| std::cmp::Reverse(n.len()));
+    for (dir, _) in dirs {
+        match fs::remove_dir(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => common::log::info(format!("kept (not empty): {}", dir.display())),
+        }
+    }
 }
 
 pub fn unregister(key: &str, machine: bool) {
@@ -235,6 +270,56 @@ mod tests {
         assert!(!root.join("empty1").exists()); // empty tree removed
         assert!(root.join("keep").exists()); // non-empty kept
         assert!(root.join("keep").join("f.txt").exists());
+    }
+
+    fn info_for(app: &Path, policy: UninstallDirPolicy, created: &[&Path]) -> InstallInfo {
+        let mut info: InstallInfo = serde_json::from_value(serde_json::json!({
+            "product": "P", "version": "1.0",
+            "install_dir": app.to_string_lossy(),
+            "installed_at_unix": 0, "registry_key": "P",
+        }))
+        .unwrap();
+        info.uninstall_dir_policy = policy;
+        info.created_dirs = created
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        info
+    }
+
+    #[test]
+    fn remove_created_dirs_only_removes_our_empty_dirs() {
+        let d = tempfile::tempdir().unwrap();
+        let parent = d.path().join("Acme");
+        let app = parent.join("MyApp");
+        let ours_empty = app.join("bin");
+        let ours_full = app.join("plugins");
+        let theirs_empty = app.join("before");
+        for dir in [&ours_empty, &ours_full, &theirs_empty] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(ours_full.join("addin.dll"), b"x").unwrap();
+        let outside = d.path().join("elsewhere");
+        fs::create_dir_all(&outside).unwrap();
+
+        let info = info_for(
+            &app,
+            UninstallDirPolicy::Tracked,
+            &[&parent, &app, &ours_empty, &ours_full, &outside],
+        );
+        remove_created_dirs(&info);
+
+        assert!(!ours_empty.exists()); // created and empty
+        assert!(ours_full.join("addin.dll").exists()); // created but not empty
+        assert!(theirs_empty.exists()); // there before the install
+        assert!(app.exists() && parent.exists()); // still hold the kept dirs
+        assert!(outside.exists()); // not under or above the install dir
+
+        // Once the foreign content is gone, the created chain unwinds fully.
+        fs::remove_dir_all(&ours_full).unwrap();
+        fs::remove_dir(&theirs_empty).unwrap();
+        remove_created_dirs(&info);
+        assert!(!parent.exists());
     }
 
     #[test]

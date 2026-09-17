@@ -373,7 +373,7 @@ fn run_silent(
     #[cfg(feature = "hintway")]
     analytics::stage("extract");
     // Lock held across finalize so a concurrent run can't interleave.
-    let _install_lock = extract::install(ctx)?;
+    let installed = extract::install(ctx)?;
     #[cfg(feature = "hintway")]
     analytics::stage("finalize");
     install::finalize(
@@ -383,6 +383,7 @@ fn run_silent(
         loaded.zip(),
         &plugin_inputs,
         requires_admin,
+        &installed.created_dirs,
     )?;
     #[cfg(feature = "hintway")]
     analytics::stage("done");

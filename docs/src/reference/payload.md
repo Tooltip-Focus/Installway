@@ -52,6 +52,7 @@ serializer-determinism trap.
 | `purge_unknown_files` | `bool` | Full installs: remove unknown or leftover files. Ignored for patches. |
 | `skip_license`, `skip_path` | `bool` | Trim the wizard. |
 | `install_dir_restriction` | `Enforce`, `DefaultDirOnly`, or `Bypass` | Whether a fresh interactive install may target a non-empty folder. Default `Enforce`. |
+| `uninstall_dir_policy` | `Tracked` or `Purge` | What the uninstaller removes from the install folder. Default `Tracked`. |
 | `default_install_dir` | `Option<String>` | Proposed path; `%VAR%` tokens are expanded. |
 | `launch_option` | `Checked`, `Unchecked`, or `Hidden` | The final-page "launch now" checkbox. |
 | `upgrade_minimal_ui` | `bool` | Upgrades use the minimal UI; a first install always gets the wizard. |
@@ -99,10 +100,14 @@ the uninstaller. It holds `product`, `product_id`, `publisher`,
 `registry_key` (equal to `product_id`), `exe`, the `associations`, the
 resolved `shortcuts`, the resolved `registry` entries to remove,
 `requires_admin` (which drives the `HKLM` and
-`%ProgramData%` versus `HKCU` and `%LOCALAPPDATA%` choice), and `features`,
-the active feature packs. The next upgrade reads `features` to clean up
-dropped features and, under `feature_mode = "sticky"`, to seed its base. See
-[Feature packs](../packaging/features.md).
+`%ProgramData%` versus `HKCU` and `%LOCALAPPDATA%` choice), `features`,
+the active feature packs, `uninstall_dir_policy`, and `created_dirs`, the
+absolute paths of the folders the installer created. The next upgrade reads
+`features` to clean up dropped features and, under
+`feature_mode = "sticky"`, to seed its base. See
+[Feature packs](../packaging/features.md). `created_dirs` is kept across
+upgrades into the same folder; see
+[Uninstall](../running/uninstall.md#the-install-folder).
 
 In the payload, `registry` and `shortcuts` hold token templates. In
 `installer_info.json` they hold the resolved entries actually written, with

@@ -64,7 +64,8 @@ by accident. `--install-dir-restriction` tunes this:
 Use `default-dir-only` when replacing a legacy InstallShield or MSI install
 that lives in its own fixed directory. Pair it with `--purge-unknown-files`
 and a [plugin](plugins.md) that validates the old install before install and
-tears it down at uninstall.
+tears it down at uninstall. What the uninstaller then removes from that folder
+is set by the [install folder policy](../running/uninstall.md#the-install-folder).
 
 ## The "launch now" checkbox
 

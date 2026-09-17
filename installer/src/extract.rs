@@ -487,10 +487,16 @@ fn verify_and_repair(
     Ok(())
 }
 
-/// Returns the per-install-dir lock so callers keep holding it across
-/// `install::finalize`; dropping it earlier would let a second installer
-/// start staging while this one still writes metadata/registry state.
-pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
+/// A completed [`install`]. Callers keep it alive across `install::finalize`:
+/// dropping the lock earlier would let a second installer start staging while
+/// this one still writes metadata/registry state.
+pub struct Installed {
+    _lock: InstallLock,
+    /// Directories this run created, recorded for the uninstaller.
+    pub created_dirs: Vec<PathBuf>,
+}
+
+pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
     let manifest = &ctx.payload.manifest;
 
     // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
@@ -518,6 +524,10 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
     // Single-instance lock per install dir, so two runs can't race on the temp
     // dirs. OS frees it on exit or crash.
     let install_lock = acquire_install_lock(&ctx.install_dir, ctx.requires_admin)?;
+
+    // Before anything touches the disk: what is missing now is what this run
+    // creates, so the uninstaller never removes a folder that was already there.
+    let created_dirs = missing_dirs(&ctx.install_dir, manifest);
 
     check_preconditions(&ctx)?;
 
@@ -585,7 +595,28 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<InstallLock> {
         total_bytes,
         &ctx.translator.get("install.progress_done"),
     );
-    Ok(install_lock)
+    Ok(Installed {
+        _lock: install_lock,
+        created_dirs,
+    })
+}
+
+/// Directories an install of `manifest` into `install_dir` would create: the
+/// install dir and its missing ancestors, plus each payload sub-directory not
+/// on disk yet. Sorted, without duplicates.
+pub(crate) fn missing_dirs(install_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
+    let mut dirs = std::collections::BTreeSet::new();
+    dirs.extend(install_dir.ancestors().map(Path::to_path_buf));
+    for rel in manifest.files.keys() {
+        let rel = PathBuf::from(rel.replace('/', "\\"));
+        dirs.extend(
+            rel.ancestors()
+                .skip(1)
+                .filter(|a| !a.as_os_str().is_empty())
+                .map(|a| install_dir.join(a)),
+        );
+    }
+    dirs.into_iter().filter(|d| !d.exists()).collect()
 }
 
 /// Build the final content for `rel` into `staged_path`, verified by BLAKE3.
@@ -747,6 +778,22 @@ pub(crate) fn check_writable(dir: &Path) -> Result<()> {
             )
         }
     }
+}
+
+/// [`check_writable`] without side effects: removes again the folders the
+/// probe had to create, so a later [`install`] still sees them as its own.
+pub(crate) fn probe_writable(dir: &Path) -> Result<()> {
+    let created: Vec<PathBuf> = dir
+        .ancestors()
+        .filter(|a| !a.exists())
+        .map(Path::to_path_buf)
+        .collect();
+    let result = check_writable(dir);
+    // `ancestors` yields deepest first, the order an empty chain unwinds in.
+    for d in &created {
+        let _ = fs::remove_dir(d);
+    }
+    result
 }
 
 /// Safety margin on top of the estimated payload size.
@@ -1689,6 +1736,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn missing_dirs_lists_only_what_the_install_creates() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        let existing = root.join("existing");
+        fs::create_dir_all(existing.join("bin")).unwrap();
+        let mut m = Manifest::fallback("1.0", None);
+        for f in ["app.exe", "bin/a.dll", "data/x/y.txt"] {
+            m.files.insert(f.to_string(), feat_entry(None, 1));
+        }
+
+        // Pre-existing install dir: only the payload folders not on disk yet.
+        assert_eq!(
+            missing_dirs(&existing, &m),
+            vec![existing.join("data"), existing.join(r"data\x")]
+        );
+
+        // Fresh nested dir: every missing ancestor, and all payload folders.
+        let fresh = root.join("Acme").join("MyApp");
+        assert_eq!(
+            missing_dirs(&fresh, &m),
+            vec![
+                root.join("Acme"),
+                fresh.clone(),
+                fresh.join("bin"),
+                fresh.join("data"),
+                fresh.join(r"data\x"),
+            ]
+        );
+    }
+
+    #[test]
+    fn probe_writable_leaves_no_folder_behind() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("a").join("b");
+        probe_writable(&target).unwrap();
+        assert!(!d.path().join("a").exists());
+        // An existing folder is left in place.
+        probe_writable(d.path()).unwrap();
+        assert!(d.path().exists());
+    }
+
+    #[test]
     fn safe_rel_accepts_and_rejects() {
         assert!(safe_rel("bin/app.exe").is_ok());
         assert!(safe_rel("a/b/c.txt").is_ok());
@@ -2065,7 +2154,7 @@ mod tests {
         zip: &[u8],
         cancel: Arc<AtomicBool>,
         on_progress: common::ProgressFn,
-    ) -> Result<InstallLock> {
+    ) -> Result<Installed> {
         install(InstallCtx {
             install_dir: dir.to_path_buf(),
             payload,
@@ -2079,9 +2168,9 @@ mod tests {
         })
     }
 
-    /// `Result::unwrap_err` needs `T: Debug`, and `InstallLock` wraps a raw
+    /// `Result::unwrap_err` needs `T: Debug`, and `Installed` holds a raw
     /// Win32 `HANDLE`; unwrap the error side by hand instead.
-    fn expect_err(r: Result<InstallLock>) -> anyhow::Error {
+    fn expect_err(r: Result<Installed>) -> anyhow::Error {
         match r {
             Ok(_) => panic!("expected the install to fail, but it succeeded"),
             Err(e) => e,
@@ -2089,7 +2178,7 @@ mod tests {
     }
 
     /// Run with a throwaway recorder, for tests that do not assert on progress.
-    fn install_quiet(dir: &Path, payload: &InstallerPayload, zip: &[u8]) -> Result<InstallLock> {
+    fn install_quiet(dir: &Path, payload: &InstallerPayload, zip: &[u8]) -> Result<Installed> {
         let (_log, prog) = progress_recorder();
         run_install(dir, payload, zip, Arc::new(AtomicBool::new(false)), prog)
     }

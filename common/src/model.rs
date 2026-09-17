@@ -25,6 +25,7 @@ pub mod registry_kind;
 pub mod registry_value;
 pub mod shortcut_entry;
 pub mod signed_payload;
+pub mod uninstall_dir_policy;
 
 pub(crate) fn default_true() -> bool {
     true
@@ -45,6 +46,7 @@ mod tests {
     use super::plugin_widget::PluginWidget;
     use super::registry_kind::RegistryKind;
     use super::registry_value::RegistryValue;
+    use super::uninstall_dir_policy::UninstallDirPolicy;
     use crate::model::feature_select::FeatureSelection;
 
     #[test]
@@ -62,6 +64,7 @@ mod tests {
         assert!(!p.force_reinstall);
         assert!(!p.purge_unknown_files);
         assert_eq!(p.install_dir_restriction, InstallDirRestriction::Enforce);
+        assert_eq!(p.uninstall_dir_policy, UninstallDirPolicy::Tracked);
         assert!(!p.upgrade_minimal_ui);
         assert!(!p.show_uninstall_complete);
         assert_eq!(p.launch_option, LaunchOption::Checked);
@@ -83,6 +86,8 @@ mod tests {
         assert!(i.hintway_tenant_id.is_none());
         assert!(i.associations.is_empty());
         assert!(i.shortcuts.is_empty());
+        assert_eq!(i.uninstall_dir_policy, UninstallDirPolicy::Tracked);
+        assert!(i.created_dirs.is_empty());
     }
 
     #[test]
@@ -111,6 +116,7 @@ mod tests {
             back.install_dir_restriction,
             InstallDirRestriction::DefaultDirOnly
         );
+        assert_eq!(back.uninstall_dir_policy, UninstallDirPolicy::Purge);
         assert_eq!(
             back.default_install_dir.as_deref(),
             Some(r"%LOCALAPPDATA%\Programs\P")
