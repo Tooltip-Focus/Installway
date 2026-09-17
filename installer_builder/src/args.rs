@@ -128,10 +128,10 @@ pub struct PackCli {
     #[arg(long, value_name = "enforce|default-dir-only|bypass")]
     pub install_dir_restriction: Option<String>,
 
-    /// What the uninstaller removes from the install folder: `tracked` (the
-    /// tracked files, then the folders the installer created once empty) or
-    /// `purge` (the whole folder). Default `tracked`.
-    #[arg(long, value_name = "tracked|purge")]
+    /// What the uninstaller removes from the install folder: `purge` (the
+    /// whole folder) or `tracked` (the tracked files, then the folders the
+    /// installer created once empty). Default `purge`.
+    #[arg(long, value_name = "purge|tracked")]
     pub uninstall_dir_policy: Option<String>,
 
     /// Use the compact minimal UI for upgrades. Optional.
@@ -549,16 +549,16 @@ fn parse_install_dir_restriction(v: Option<String>) -> Result<InstallDirRestrict
 }
 
 /// Parse the optional `uninstall_dir_policy` value (CLI or config).
-/// Accepts `tracked` / `purge` (case-insensitive).
-/// Absent → [`UninstallDirPolicy::Tracked`].
+/// Accepts `purge` / `tracked` (case-insensitive).
+/// Absent → [`UninstallDirPolicy::Purge`].
 fn parse_uninstall_dir_policy(v: Option<String>) -> Result<UninstallDirPolicy> {
     let Some(s) = v else {
-        return Ok(UninstallDirPolicy::Tracked);
+        return Ok(UninstallDirPolicy::Purge);
     };
     match s.trim().to_ascii_lowercase().as_str() {
-        "tracked" => Ok(UninstallDirPolicy::Tracked),
         "purge" => Ok(UninstallDirPolicy::Purge),
-        other => bail!("unknown uninstall-dir-policy '{other}' (tracked | purge)"),
+        "tracked" => Ok(UninstallDirPolicy::Tracked),
+        other => bail!("unknown uninstall-dir-policy '{other}' (purge | tracked)"),
     }
 }
 
@@ -1168,17 +1168,17 @@ force_reinstall = true
 
     #[test]
     fn uninstall_dir_policy_defaults_and_parses() {
-        // Absent → Tracked.
+        // Absent → Purge.
         assert_eq!(
             resolve_with("").unwrap().uninstall_dir_policy,
-            UninstallDirPolicy::Tracked
+            UninstallDirPolicy::Purge
         );
         // From file, case-insensitive.
         assert_eq!(
-            resolve_with("\nuninstall_dir_policy = 'PURGE'\n")
+            resolve_with("\nuninstall_dir_policy = 'TRACKED'\n")
                 .unwrap()
                 .uninstall_dir_policy,
-            UninstallDirPolicy::Purge
+            UninstallDirPolicy::Tracked
         );
         // Unknown value errors.
         assert!(resolve_with("\nuninstall_dir_policy = 'nope'\n").is_err());

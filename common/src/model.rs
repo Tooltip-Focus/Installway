@@ -64,7 +64,7 @@ mod tests {
         assert!(!p.force_reinstall);
         assert!(!p.purge_unknown_files);
         assert_eq!(p.install_dir_restriction, InstallDirRestriction::Enforce);
-        assert_eq!(p.uninstall_dir_policy, UninstallDirPolicy::Tracked);
+        assert_eq!(p.uninstall_dir_policy, UninstallDirPolicy::Purge);
         assert!(!p.upgrade_minimal_ui);
         assert!(!p.show_uninstall_complete);
         assert_eq!(p.launch_option, LaunchOption::Checked);
@@ -86,7 +86,7 @@ mod tests {
         assert!(i.hintway_tenant_id.is_none());
         assert!(i.associations.is_empty());
         assert!(i.shortcuts.is_empty());
-        assert_eq!(i.uninstall_dir_policy, UninstallDirPolicy::Tracked);
+        assert_eq!(i.uninstall_dir_policy, UninstallDirPolicy::Purge);
         assert!(i.created_dirs.is_empty());
     }
 
@@ -116,7 +116,7 @@ mod tests {
             back.install_dir_restriction,
             InstallDirRestriction::DefaultDirOnly
         );
-        assert_eq!(back.uninstall_dir_policy, UninstallDirPolicy::Purge);
+        assert_eq!(back.uninstall_dir_policy, UninstallDirPolicy::Tracked);
         assert_eq!(
             back.default_install_dir.as_deref(),
             Some(r"%LOCALAPPDATA%\Programs\P")

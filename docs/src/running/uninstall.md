@@ -57,8 +57,8 @@ uninstaller does with it:
 
 | Value | Effect |
 |---|---|
-| `tracked` | Default. Removes only the tracked files, then each folder the installer created once it is empty. A folder that existed before the install is never removed, even when empty. |
-| `purge` | Removes the whole install folder, whatever it contains. |
+| `purge` | Default. Removes the whole install folder, whatever it contains. |
+| `tracked` | Removes only the tracked files, then each folder the installer created once it is empty. A folder that existed before the install is never removed, even when empty. |
 
 The installer records the folders it creates in `installer_info.json`
 (`created_dirs`): the install folder and any missing parent folder, plus the
@@ -66,10 +66,11 @@ payload's sub-folders. An upgrade into the same folder adds its own to the
 list. Folder removal is never recursive under `tracked`, so a folder that
 still holds anything stays in place and is noted in the uninstall log.
 
-Every install, upgrade, reinstall or patch rewrites `uninstall.exe`, so the
-policy of the most recent build applies. A product first installed by a
-build predating `created_dirs` has no record of the folders it created:
-under `tracked`, those folders are kept.
+Every install, upgrade, reinstall or patch rewrites `uninstall.exe` and
+`installer_info.json`, so the policy of the most recent build applies. A
+product installed by a build predating the policy is purged, as before. A
+product first installed by a build predating `created_dirs` has no record of
+the folders it created: under `tracked`, those folders are kept.
 
 `purge` refuses a recorded path that is a drive root, a
 profile or system folder, or a parent of one.

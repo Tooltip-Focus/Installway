@@ -52,7 +52,7 @@ serializer-determinism trap.
 | `purge_unknown_files` | `bool` | Full installs: remove unknown or leftover files. Ignored for patches. |
 | `skip_license`, `skip_path` | `bool` | Trim the wizard. |
 | `install_dir_restriction` | `Enforce`, `DefaultDirOnly`, or `Bypass` | Whether a fresh interactive install may target a non-empty folder. Default `Enforce`. |
-| `uninstall_dir_policy` | `Tracked` or `Purge` | What the uninstaller removes from the install folder. Default `Tracked`. |
+| `uninstall_dir_policy` | `Purge` or `Tracked` | What the uninstaller removes from the install folder. Default `Purge`. |
 | `default_install_dir` | `Option<String>` | Proposed path; `%VAR%` tokens are expanded. |
 | `launch_option` | `Checked`, `Unchecked`, or `Hidden` | The final-page "launch now" checkbox. |
 | `upgrade_minimal_ui` | `bool` | Upgrades use the minimal UI; a first install always gets the wizard. |

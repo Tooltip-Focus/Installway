@@ -81,7 +81,7 @@ one of `pub_key` / `pub_key_literal` is also required. An invalid
 | `skip_license` | bool | `false` | Hide the License page. |
 | `skip_path` | bool | `false` | Hide the Choose-location page. |
 | `install_dir_restriction` | string | `enforce` | Whether a fresh interactive install may target a non-empty folder: `enforce`, `default_dir_only`, or `bypass`. See [Wizard pages and install location](../packaging/wizard.md). |
-| `uninstall_dir_policy` | string | `tracked` | What the uninstaller removes from the install folder: `tracked` or `purge`. See [Uninstall](../running/uninstall.md#the-install-folder). |
+| `uninstall_dir_policy` | string | `purge` | What the uninstaller removes from the install folder: `purge` or `tracked`. See [Uninstall](../running/uninstall.md#the-install-folder). |
 | `launch_option` | string | `checked` | The "launch now" checkbox on the final page: `checked`, `unchecked`, or `hidden`. |
 | `upgrade_minimal_ui` | bool | `false` | Upgrades use the compact minimal UI; a first install still gets the wizard. |
 | `show_uninstall_complete` | bool | `false` | Show a confirmation message box at the end of an interactive uninstall. |

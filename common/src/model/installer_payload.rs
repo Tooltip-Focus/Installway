@@ -65,7 +65,7 @@ pub struct InstallerPayload {
     #[serde(default)]
     pub install_dir_restriction: InstallDirRestriction,
     /// What the uninstaller removes from the install directory. Defaults to
-    /// [`UninstallDirPolicy::Tracked`]; see that type's docs.
+    /// [`UninstallDirPolicy::Purge`]; see that type's docs.
     #[serde(default)]
     pub uninstall_dir_policy: UninstallDirPolicy,
     /// Default install directory the UI proposes.
@@ -137,7 +137,7 @@ impl Default for InstallerPayload {
             skip_license: true,
             skip_path: false,
             install_dir_restriction: InstallDirRestriction::DefaultDirOnly,
-            uninstall_dir_policy: UninstallDirPolicy::Purge,
+            uninstall_dir_policy: UninstallDirPolicy::Tracked,
             default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),
             upgrade_minimal_ui: true,
             registry: vec![RegistryEntry {
