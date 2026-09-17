@@ -34,13 +34,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FW_NORMAL, FW_SEMIBOLD, GetStockObject,
     HBRUSH, HFONT, InvalidateRect, NULL_BRUSH, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_INVALIDATE,
-    RedrawWindow, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    RedrawWindow, SetBkMode, SetTextColor, TRANSPARENT,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
@@ -306,25 +305,6 @@ unsafe fn create_window(
 ) -> Result<HWND> {
     unsafe {
         helpers::init_progress_class();
-        let hinstance = GetModuleHandleW(PCWSTR::null())?;
-        let hicon = helpers::own_icon();
-
-        let class_name = w!("InstallwayWnd");
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: WNDCLASS_STYLES(0),
-            lpfnWndProc: Some(wndproc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: HINSTANCE(hinstance.0),
-            hIcon: hicon,
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hbrBackground: HBRUSH(GetStockObject(WHITE_BRUSH).0),
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: class_name,
-            hIconSm: hicon,
-        };
-        RegisterClassExW(&wc);
 
         let font_normal = helpers::create_font("Segoe UI", 16, FW_NORMAL.0 as i32);
         let font_bold = helpers::create_font("Segoe UI", 16, FW_SEMIBOLD.0 as i32);
@@ -333,13 +313,13 @@ unsafe fn create_window(
         let card_brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
         let error_brush = CreateSolidBrush(COLORREF(0x00F2F2FF));
 
-        let title = wide(&tr().fmt(
+        let title = tr().fmt(
             "install.window_title",
             &[
                 ("product", &payload.product),
                 ("version", &payload.to_version),
             ],
-        ));
+        );
 
         let state = Rc::new(RefCell::new(UiState {
             phase: Phase::License,
@@ -377,53 +357,20 @@ unsafe fn create_window(
         });
 
         let style = WS_OVERLAPPED | WS_SYSMENU | WS_CAPTION | WS_MINIMIZEBOX;
-        // Base (96-dpi) size for the initial CW_USEDEFAULT placement; rescaled to
-        // the actual monitor DPI just below once the window exists.
-        let (ww, wh) = helpers::window_size_for_client(WIN_W, WIN_H, style, WINDOW_EX_STYLE(0), 96);
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            class_name,
-            PCWSTR(title.as_ptr()),
+        let hwnd = helpers::create_main_window(
+            w!("InstallwayWnd"),
+            Some(wndproc),
+            &title,
             style,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            ww,
-            wh,
-            None,
-            None,
-            Some(HINSTANCE(hinstance.0)),
-            None,
+            WIN_W,
+            WIN_H,
+            helpers::own_icon(),
         )?;
-
-        if !hicon.is_invalid() {
-            SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(1)),
-                Some(LPARAM(hicon.0 as isize)),
-            );
-            SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(0)),
-                Some(LPARAM(hicon.0 as isize)),
-            );
-        }
 
         // Scale to the monitor this window opened on (per-monitor DPI aware):
         // resize the frame, rebuild fonts, then lay out controls at that DPI.
-        let dpi = helpers::dpi_for(hwnd);
+        let dpi = helpers::fit_to_monitor(hwnd, WIN_W, WIN_H, style);
         rebuild_fonts(dpi);
-        let (sw, sh) = helpers::window_size_for_client(
-            helpers::scale(WIN_W, dpi),
-            helpers::scale(WIN_H, dpi),
-            style,
-            WINDOW_EX_STYLE(0),
-            dpi,
-        );
-        let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
-
-        helpers::center(hwnd);
         views::build_controls(hwnd, payload, default_path);
         views::relayout(hwnd, dpi);
         Ok(hwnd)
@@ -639,17 +586,13 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
                 })
                 .unwrap_or_default()
         });
-        unsafe {
-            helpers::set_dlg_text(hwnd, ID_HEADER, &h);
-            helpers::set_dlg_text(hwnd, ID_SUBHEADER, &s);
-        }
+        helpers::set_dlg_text(hwnd, ID_HEADER, &h);
+        helpers::set_dlg_text(hwnd, ID_SUBHEADER, &s);
     }
 
     if phase == Phase::Error {
-        unsafe {
-            helpers::set_dlg_text(hwnd, ID_HEADER, &tr().get("install.err_title"));
-            helpers::set_dlg_text(hwnd, ID_SUBHEADER, &tr().get("install.err_sub"));
-        }
+        helpers::set_dlg_text(hwnd, ID_HEADER, &tr().get("install.err_title"));
+        helpers::set_dlg_text(hwnd, ID_SUBHEADER, &tr().get("install.err_sub"));
     }
 
     show(ID_LICENSE_EDIT, lic);
@@ -695,7 +638,7 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
         } else {
             "install.install"
         };
-        unsafe { helpers::set_dlg_text(hwnd, ID_INSTALL_BTN, &tr().get(label)) };
+        helpers::set_dlg_text(hwnd, ID_INSTALL_BTN, &tr().get(label));
     }
 
     // With no Choose page (and no plugin pages) the License "Next" is really the
@@ -706,7 +649,7 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
         } else {
             "install.next"
         };
-        unsafe { helpers::set_dlg_text(hwnd, ID_NEXT_BTN, &tr().get(label)) };
+        helpers::set_dlg_text(hwnd, ID_NEXT_BTN, &tr().get(label));
     }
 
     // Plugin wizard: show the current page's controls + nav buttons; hide all
@@ -778,17 +721,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // window rect; HIWORD(wParam) the new DPI. Resize to it, rebuild
             // fonts + lay out controls at the new DPI, then repaint - keeps the
             // wizard crisp instead of leaving controls mis-scaled / off-window.
-            let new_dpi = ((wparam.0 >> 16) & 0xFFFF) as i32;
-            let rc = &*(lparam.0 as *const RECT);
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                rc.left,
-                rc.top,
-                rc.right - rc.left,
-                rc.bottom - rc.top,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
+            let new_dpi = helpers::follow_dpi_change(hwnd, wparam, lparam);
             rebuild_fonts(new_dpi);
             views::apply_fonts(hwnd);
             views::relayout(hwnd, new_dpi);

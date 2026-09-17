@@ -31,11 +31,10 @@ use common::plugin::InputsByPlugin;
 use common::utils::wide;
 use std::path::PathBuf;
 use std::sync::Arc;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::BST_CHECKED;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, w};
+use windows::core::w;
 
 const BS_AUTOCHECKBOX: u32 = 0x0003;
 const BS_AUTORADIOBUTTON: u32 = 0x0009;
@@ -326,7 +325,6 @@ impl Wizard {
     unsafe fn push(&mut self, hwnd: HWND, page: PluginPage, notice: String, back: bool) {
         let slot = self.next_slot;
         self.next_slot += 1;
-        let hinst = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() }.0);
         let content_w = WIN_W - PAD * 2;
         let mut y = BANNER_H + PAD + 8;
         let mut fields = Vec::new();
@@ -334,7 +332,6 @@ impl Wizard {
             let f = unsafe {
                 build_widget(
                     hwnd,
-                    hinst,
                     slot,
                     &page.id,
                     widget,
@@ -452,7 +449,6 @@ pub(super) fn update_current_progress(hwnd: HWND, scaled: i32) {
 #[allow(clippy::too_many_arguments)]
 unsafe fn build_label_row(
     hwnd: HWND,
-    hinst: HINSTANCE,
     x: i32,
     y: &mut i32,
     content_w: i32,
@@ -466,15 +462,13 @@ unsafe fn build_label_row(
     let lid = *next_id;
     *next_id += 1;
     unsafe {
-        mk(
+        helpers::child_ex(
             hwnd,
-            hinst,
+            WINDOW_EX_STYLE(0),
             w!("STATIC"),
             label,
-            WINDOW_STYLE(0),
-            WINDOW_EX_STYLE(0),
+            WS_CLIPSIBLINGS | WINDOW_STYLE(0),
             lid,
-            (x, *y, content_w, 20),
         );
     }
     rects.push((lid, x, *y, content_w, 20));
@@ -486,7 +480,6 @@ unsafe fn build_label_row(
 #[allow(clippy::too_many_arguments)]
 unsafe fn build_widget(
     hwnd: HWND,
-    hinst: HINSTANCE,
     page: usize,
     page_id: &str,
     widget: &PluginWidget,
@@ -500,15 +493,13 @@ unsafe fn build_widget(
             let id = *next_id;
             *next_id += 1;
             unsafe {
-                mk(
+                helpers::child_ex(
                     hwnd,
-                    hinst,
+                    WINDOW_EX_STYLE(0),
                     w!("STATIC"),
                     text,
-                    WINDOW_STYLE(0),
-                    WINDOW_EX_STYLE(0),
+                    WS_CLIPSIBLINGS | WINDOW_STYLE(0),
                     id,
-                    (x, *y, content_w, 20),
                 );
             }
             let rects = vec![(id, x, *y, content_w, 20)];
@@ -534,7 +525,7 @@ unsafe fn build_widget(
             multiline,
         } => {
             let mut rects = Vec::new();
-            unsafe { build_label_row(hwnd, hinst, x, y, content_w, label, next_id, &mut rects) };
+            unsafe { build_label_row(hwnd, x, y, content_w, label, next_id, &mut rects) };
             let mut alloc = || {
                 let id = *next_id;
                 *next_id += 1;
@@ -553,15 +544,13 @@ unsafe fn build_widget(
             let h_px = if *multiline { 72 } else { 28 };
             let eid = alloc();
             unsafe {
-                let h = mk(
+                let h = helpers::child_ex(
                     hwnd,
-                    hinst,
+                    WS_EX_CLIENTEDGE,
                     w!("EDIT"),
                     default,
-                    style,
-                    WS_EX_CLIENTEDGE,
+                    WS_CLIPSIBLINGS | style,
                     eid,
-                    (x, *y, content_w, h_px),
                 );
                 if !placeholder.is_empty() && !*multiline {
                     let p = wide(placeholder);
@@ -593,15 +582,13 @@ unsafe fn build_widget(
             let cid = *next_id;
             *next_id += 1;
             unsafe {
-                let h = mk(
+                let h = helpers::child_ex(
                     hwnd,
-                    hinst,
+                    WINDOW_EX_STYLE(0),
                     w!("BUTTON"),
                     label,
-                    WINDOW_STYLE(BS_AUTOCHECKBOX) | WS_TABSTOP,
-                    WINDOW_EX_STYLE(0),
+                    WS_CLIPSIBLINGS | WINDOW_STYLE(BS_AUTOCHECKBOX) | WS_TABSTOP,
                     cid,
-                    (x, *y, content_w, 22),
                 );
                 if *default {
                     SendMessageW(
@@ -633,7 +620,7 @@ unsafe fn build_widget(
             required,
         } => {
             let mut rects = Vec::new();
-            unsafe { build_label_row(hwnd, hinst, x, y, content_w, label, next_id, &mut rects) };
+            unsafe { build_label_row(hwnd, x, y, content_w, label, next_id, &mut rects) };
             let mut alloc = || {
                 let id = *next_id;
                 *next_id += 1;
@@ -650,15 +637,16 @@ unsafe fn build_widget(
                     unsafe {
                         // The height arg is the dropped-down extent; the closed box
                         // occupies one row, so the cursor only advances ~28.
-                        let h = mk(
+                        let h = helpers::child_ex(
                             hwnd,
-                            hinst,
+                            WINDOW_EX_STYLE(0),
                             w!("COMBOBOX"),
                             "",
-                            WINDOW_STYLE(CBS_DROPDOWNLIST) | WS_TABSTOP | WS_VSCROLL_S,
-                            WINDOW_EX_STYLE(0),
+                            WS_CLIPSIBLINGS
+                                | WINDOW_STYLE(CBS_DROPDOWNLIST)
+                                | WS_TABSTOP
+                                | WS_VSCROLL_S,
                             cid,
-                            (x, *y, content_w, 200),
                         );
                         for o in options {
                             let s = wide(&o.label);
@@ -693,15 +681,13 @@ unsafe fn build_widget(
                             WINDOW_STYLE(BS_AUTORADIOBUTTON) | WS_TABSTOP
                         };
                         unsafe {
-                            let h = mk(
+                            let h = helpers::child_ex(
                                 hwnd,
-                                hinst,
+                                WINDOW_EX_STYLE(0),
                                 w!("BUTTON"),
                                 &o.label,
-                                style,
-                                WINDOW_EX_STYLE(0),
+                                WS_CLIPSIBLINGS | style,
                                 rid,
-                                (x + 16, *y, content_w - 16, 22),
                             );
                             if i == default_idx {
                                 SendMessageW(
@@ -737,7 +723,7 @@ unsafe fn build_widget(
             required,
         } => {
             let mut rects = Vec::new();
-            unsafe { build_label_row(hwnd, hinst, x, y, content_w, label, next_id, &mut rects) };
+            unsafe { build_label_row(hwnd, x, y, content_w, label, next_id, &mut rects) };
             let mut alloc = || {
                 let id = *next_id;
                 *next_id += 1;
@@ -748,15 +734,13 @@ unsafe fn build_widget(
             for o in options {
                 let cid = alloc();
                 unsafe {
-                    let h = mk(
+                    let h = helpers::child_ex(
                         hwnd,
-                        hinst,
+                        WINDOW_EX_STYLE(0),
                         w!("BUTTON"),
                         &o.label,
-                        WINDOW_STYLE(BS_AUTOCHECKBOX) | WS_TABSTOP,
-                        WINDOW_EX_STYLE(0),
+                        WS_CLIPSIBLINGS | WINDOW_STYLE(BS_AUTOCHECKBOX) | WS_TABSTOP,
                         cid,
-                        (x + 16, *y, content_w - 16, 22),
                     );
                     if default.contains(&o.value) {
                         SendMessageW(
@@ -786,15 +770,13 @@ unsafe fn build_widget(
             let id = *next_id;
             *next_id += 1;
             unsafe {
-                mk(
+                helpers::child_ex(
                     hwnd,
-                    hinst,
+                    WINDOW_EX_STYLE(0),
                     w!("msctls_progress32"),
                     "",
-                    WINDOW_STYLE(0),
-                    WINDOW_EX_STYLE(0),
+                    WS_CLIPSIBLINGS | WINDOW_STYLE(0),
                     id,
-                    (x, *y, content_w, 20),
                 );
             }
             let rects = vec![(id, x, *y, content_w, 20)];
@@ -812,39 +794,6 @@ unsafe fn build_widget(
     }
 }
 
-/// Create one hidden child control. The window text is copied by Win32, so the
-/// wide buffer need not outlive this call.
-#[allow(clippy::too_many_arguments)]
-unsafe fn mk(
-    hwnd: HWND,
-    hinst: HINSTANCE,
-    class: PCWSTR,
-    text: &str,
-    style: WINDOW_STYLE,
-    ex: WINDOW_EX_STYLE,
-    id: usize,
-    r: (i32, i32, i32, i32),
-) -> HWND {
-    let t = wide(text);
-    unsafe {
-        CreateWindowExW(
-            ex,
-            class,
-            PCWSTR(t.as_ptr()),
-            WS_CHILD | WS_CLIPSIBLINGS | style,
-            r.0,
-            r.1,
-            r.2,
-            r.3,
-            Some(hwnd),
-            Some(HMENU(id as *mut _)),
-            Some(hinst),
-            None,
-        )
-        .unwrap_or_default()
-    }
-}
-
 fn with_state<F: FnOnce(&super::UiState)>(f: F) {
     STATE.with(|st| {
         let Some(state) = st.borrow().as_ref().cloned() else {
@@ -856,15 +805,9 @@ fn with_state<F: FnOnce(&super::UiState)>(f: F) {
 
 /// Reposition every plugin control for `dpi` (mirrors `views::relayout`).
 pub(super) fn relayout(hwnd: HWND, dpi: i32) {
-    let s = |v: i32| helpers::scale(v, dpi);
-    with_state(|state| unsafe {
+    with_state(|state| {
         for f in &state.plugin_fields {
-            for &(id, x, y, w, h) in &f.rects {
-                let ctrl = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
-                if !ctrl.is_invalid() {
-                    let _ = MoveWindow(ctrl, s(x), s(y), s(w), s(h), true);
-                }
-            }
+            helpers::move_controls(hwnd, dpi, &f.rects);
         }
     });
 }
@@ -873,11 +816,9 @@ pub(super) fn relayout(hwnd: HWND, dpi: i32) {
 pub(super) fn apply_fonts(hwnd: HWND) {
     with_state(|state| {
         let font = state.font_normal;
-        unsafe {
-            for f in &state.plugin_fields {
-                for &(id, ..) in &f.rects {
-                    helpers::set_font(hwnd, id, font);
-                }
+        for f in &state.plugin_fields {
+            for &(id, ..) in &f.rects {
+                helpers::set_font(hwnd, id, font);
             }
         }
     });
@@ -910,10 +851,8 @@ pub(super) unsafe fn set_banner(hwnd: HWND) {
             .map(|z| z.current_title())
             .unwrap_or_default()
     });
-    unsafe {
-        helpers::set_dlg_text(hwnd, ID_HEADER, &title);
-        helpers::set_dlg_text(hwnd, ID_SUBHEADER, &subtitle);
-    }
+    helpers::set_dlg_text(hwnd, ID_HEADER, &title);
+    helpers::set_dlg_text(hwnd, ID_SUBHEADER, &subtitle);
 }
 
 /// A field snapshot taken under the `STATE` borrow: `(kind, required, key,

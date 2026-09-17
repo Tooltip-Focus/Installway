@@ -12,6 +12,7 @@ pub mod plugin;
 pub mod registry;
 pub mod shortcuts;
 pub mod utils;
+pub mod win32;
 
 /// Progress callback shared by the installer and uninstaller UI/worker paths.
 pub type ProgressFn = std::sync::Arc<dyn Fn(u64, u64, &str) + Send + Sync>;

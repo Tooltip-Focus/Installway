@@ -299,7 +299,7 @@ use crate::ui::dest::should_block_nonempty;
 /// Choose page and on every edit of the path field.
 pub(super) unsafe fn update_path_warning(hwnd: HWND) {
     let edit = unsafe { GetDlgItem(Some(hwnd), ID_PATH_EDIT as i32).unwrap_or_default() };
-    let path = unsafe { get_window_text(edit) };
+    let path = get_window_text(edit);
     let danger = should_block_nonempty(
         super::restriction(),
         super::skip_path(),
@@ -311,7 +311,7 @@ pub(super) unsafe fn update_path_warning(hwnd: HWND) {
     let warn_icon = unsafe { GetDlgItem(Some(hwnd), ID_PATH_WARN_ICON as i32).unwrap_or_default() };
     let install_btn = unsafe { GetDlgItem(Some(hwnd), ID_INSTALL_BTN as i32).unwrap_or_default() };
     if danger {
-        unsafe { set_dlg_text(hwnd, ID_PATH_WARN, &tr().get("install.path_not_empty")) };
+        set_dlg_text(hwnd, ID_PATH_WARN, &tr().get("install.path_not_empty"));
     }
     unsafe {
         let vis = if danger { SW_SHOW } else { SW_HIDE };
@@ -327,7 +327,7 @@ pub(super) unsafe fn update_path_warning(hwnd: HWND) {
 /// works from a later plugin page too.
 unsafe fn validate_and_store_path(hwnd: HWND) -> Option<PathBuf> {
     let edit = unsafe { GetDlgItem(Some(hwnd), ID_PATH_EDIT as i32).unwrap_or_default() };
-    let path = unsafe { get_window_text(edit) };
+    let path = get_window_text(edit);
     if path.trim().is_empty() {
         unsafe { message_box(hwnd, &tr().get("install.err_no_path"), MB_ICONWARNING) };
         return None;
@@ -502,14 +502,14 @@ pub(super) unsafe fn update_progress(hwnd: HWND) {
             Err(_) => (0, 0, String::new()),
         };
         let scaled = scale_progress(done, total);
-        unsafe { set_progress(hwnd, ID_PROGRESS, scaled) };
+        set_progress(hwnd, ID_PROGRESS, scaled);
         let pct = scaled / 100;
         let txt = if total > 0 {
             format!("{}%   ({} / {} bytes)\n{}", pct, done, total, name)
         } else {
             name
         };
-        unsafe { set_dlg_text(hwnd, ID_STATUS, &txt) };
+        set_dlg_text(hwnd, ID_STATUS, &txt);
     });
 }
 

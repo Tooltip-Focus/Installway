@@ -9,28 +9,22 @@
 
 use super::progress::{self, ProgressStore};
 use super::{UninstallParams, Worker, tr};
-use common::utils::wide;
+use common::win32::{
+    ControlRect, DEFAULT_BUTTON, PUSH_BUTTON, child, create_font, create_main_window,
+    fit_to_monitor, follow_dpi_change, init_progress_class, own_icon, post, scale, scale_progress,
+    set_dlg_text, set_font, set_progress,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::thread;
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
-    DEFAULT_PITCH, DeleteObject, FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH,
-    HFONT, InvalidateRect, OUT_DEFAULT_PRECIS, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HFONT, InvalidateRect,
+    SetBkMode, SetTextColor, TRANSPARENT,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::{
-    ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, PBM_SETPOS, PBM_SETRANGE32,
-    PROGRESS_CLASSW,
-};
-use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
-use windows::Win32::UI::Shell::ExtractIconW;
+use windows::Win32::UI::Controls::PROGRESS_CLASSW;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, w};
-
-const BS_PUSHBUTTON: u32 = 0x0;
-const BS_DEFPUSHBUTTON: u32 = 0x1;
+use windows::core::w;
 
 const ID_HEADER: usize = 1001;
 const ID_SUBHEADER: usize = 1002;
@@ -79,34 +73,7 @@ thread_local! {
 /// have produced internal errors - those are reported via the status label).
 pub(super) fn run(params: UninstallParams) -> bool {
     unsafe {
-        let icc = INITCOMMONCONTROLSEX {
-            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_PROGRESS_CLASS,
-        };
-        let _ = InitCommonControlsEx(&icc);
-        let hinstance = GetModuleHandleW(PCWSTR::null()).unwrap_or_default();
-
-        // Own embedded icon (the app's icon, stamped into uninstall.exe at build).
-        let hicon = own_icon();
-
-        let class_name = w!("RustUninstallerWnd");
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: WNDCLASS_STYLES(0),
-            lpfnWndProc: Some(wndproc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: HINSTANCE(hinstance.0),
-            hIcon: hicon,
-            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            hbrBackground: HBRUSH(GetStockObject(WHITE_BRUSH).0),
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: class_name,
-            hIconSm: hicon,
-        };
-        RegisterClassExW(&wc);
-
-        let title_w = wide(&params.title);
+        init_progress_class();
         let progress_store = ProgressStore::default();
         let state = Rc::new(RefCell::new(State {
             phase: Phase::Confirm,
@@ -121,50 +88,24 @@ pub(super) fn run(params: UninstallParams) -> bool {
         STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
 
         let style = WS_OVERLAPPED | WS_SYSMENU | WS_CAPTION;
-        // Base (96-dpi) size for the initial placement; rescaled to the monitor
-        // DPI below once the window exists.
-        let (ww, wh) = window_outer_size(WIN_W, WIN_H, style, 96);
-        let hwnd = match CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            class_name,
-            PCWSTR(title_w.as_ptr()),
+        // Own embedded icon (the app's icon, stamped into uninstall.exe at build).
+        let Ok(hwnd) = create_main_window(
+            w!("RustUninstallerWnd"),
+            Some(wndproc),
+            &params.title,
             style,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            ww,
-            wh,
-            None,
-            None,
-            Some(HINSTANCE(hinstance.0)),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return false,
+            WIN_W,
+            WIN_H,
+            own_icon(),
+        ) else {
+            return false;
         };
-
-        if !hicon.is_invalid() {
-            SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(1)),
-                Some(LPARAM(hicon.0 as isize)),
-            );
-            SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(0)),
-                Some(LPARAM(hicon.0 as isize)),
-            );
-        }
 
         // Scale to the monitor this window opened on (per-monitor DPI aware):
         // resize, rebuild fonts, lay out at that DPI - so a move to a screen of
         // different scale stays crisp instead of dropping/clipping controls.
-        let dpi = dpi_for(hwnd);
+        let dpi = fit_to_monitor(hwnd, WIN_W, WIN_H, style);
         rebuild_fonts(dpi);
-        let (sw, sh) = window_outer_size(scale(WIN_W, dpi), scale(WIN_H, dpi), style, dpi);
-        let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
-        center(hwnd);
         build_controls(hwnd, &params);
         relayout(hwnd, dpi);
         if params.auto_start {
@@ -199,12 +140,7 @@ pub(super) fn run(params: UninstallParams) -> bool {
                 let progress = progress::callback(&progress_store);
                 thread::spawn(move || {
                     let _ = w.run(progress);
-                    let _ = PostMessageW(
-                        Some(HWND(hwnd_isize as *mut _)),
-                        WM_APP_DONE,
-                        WPARAM(0),
-                        LPARAM(0),
-                    );
+                    post(hwnd_isize, WM_APP_DONE);
                 });
             }
         }
@@ -216,65 +152,6 @@ pub(super) fn run(params: UninstallParams) -> bool {
                 .unwrap_or(false)
         })
     }
-}
-
-/// Load this exe's own primary icon (stamped at build) for window + taskbar.
-unsafe fn own_icon() -> HICON {
-    let Ok(exe) = std::env::current_exe() else {
-        return HICON::default();
-    };
-    let w = wide(&exe.to_string_lossy());
-    unsafe {
-        let hmod = GetModuleHandleW(PCWSTR::null()).unwrap_or_default();
-        ExtractIconW(Some(HINSTANCE(hmod.0)), PCWSTR(w.as_ptr()), 0)
-    }
-}
-
-fn create_font(name: &str, height: i32, weight: i32) -> HFONT {
-    let name_w = wide(name);
-    unsafe {
-        CreateFontW(
-            height,
-            0,
-            0,
-            0,
-            weight,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,
-            (DEFAULT_PITCH.0 as u32) | ((FF_DONTCARE.0 as u32) << 4),
-            PCWSTR(name_w.as_ptr()),
-        )
-    }
-}
-
-unsafe fn apply_font(hwnd: HWND, id: usize, font: HFONT) {
-    unsafe {
-        let h = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
-        if !h.is_invalid() {
-            SendMessageW(
-                h,
-                WM_SETFONT,
-                Some(WPARAM(font.0 as usize)),
-                Some(LPARAM(1)),
-            );
-        }
-    }
-}
-
-/// Scale a 96-dpi base measurement to the given DPI.
-fn scale(v: i32, dpi: i32) -> i32 {
-    v * dpi / 96
-}
-
-/// The DPI of the monitor `hwnd` is on (96 = 100%). 96 fallback on failure.
-unsafe fn dpi_for(hwnd: HWND) -> i32 {
-    let d = unsafe { GetDpiForWindow(hwnd) };
-    if d == 0 { 96 } else { d as i32 }
 }
 
 /// Recreate both fonts at `dpi` (deleting the old) and store them.
@@ -298,182 +175,57 @@ unsafe fn apply_fonts(hwnd: HWND) {
     STATE.with(|s| {
         if let Some(state) = s.borrow().as_ref() {
             let st = state.borrow();
-            unsafe {
-                apply_font(hwnd, ID_HEADER, st.font_header);
-                for id in [
-                    ID_SUBHEADER,
-                    ID_CONFIRM_TEXT,
-                    ID_PROGRESS,
-                    ID_STATUS,
-                    ID_YES_BTN,
-                    ID_NO_BTN,
-                ] {
-                    apply_font(hwnd, id, st.font_body);
-                }
+            set_font(hwnd, ID_HEADER, st.font_header);
+            for id in [
+                ID_SUBHEADER,
+                ID_CONFIRM_TEXT,
+                ID_PROGRESS,
+                ID_STATUS,
+                ID_YES_BTN,
+                ID_NO_BTN,
+            ] {
+                set_font(hwnd, id, st.font_body);
             }
         }
     });
 }
 
-/// Reposition + resize every control for `dpi` (96-dpi base units, scaled).
-/// Run after creation and on each `WM_DPICHANGED`. Identity at 96 dpi.
+/// Every control's rectangle, in 96-dpi base units: the only place the layout
+/// lives.
+const LAYOUT: &[ControlRect] = &[
+    (ID_BANNER, 0, 0, WIN_W, BANNER_H),
+    (ID_HEADER, PAD, 16, WIN_W - PAD * 2, 28),
+    (ID_SUBHEADER, PAD, 46, WIN_W - PAD * 2, 20),
+    (ID_CONFIRM_TEXT, PAD, BANNER_H + PAD, WIN_W - PAD * 2, 120),
+    (ID_PROGRESS, PAD, BANNER_H + PAD + 16, WIN_W - PAD * 2, 22),
+    (ID_STATUS, PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 48),
+    (ID_YES_BTN, WIN_W - PAD - 260, WIN_H - 84, 140, 32),
+    (ID_NO_BTN, WIN_W - PAD - 110, WIN_H - 84, 110, 32),
+];
+
+/// Place every control for `dpi`. Run after creation and on each
+/// `WM_DPICHANGED`.
 unsafe fn relayout(hwnd: HWND, dpi: i32) {
-    let s = |v: i32| scale(v, dpi);
-    let btn_y = WIN_H - 84;
-    let items: &[(usize, i32, i32, i32, i32)] = &[
-        (ID_BANNER, 0, 0, WIN_W, BANNER_H),
-        (ID_HEADER, PAD, 16, WIN_W - PAD * 2, 28),
-        (ID_SUBHEADER, PAD, 46, WIN_W - PAD * 2, 20),
-        (ID_CONFIRM_TEXT, PAD, BANNER_H + PAD, WIN_W - PAD * 2, 120),
-        (ID_PROGRESS, PAD, BANNER_H + PAD + 16, WIN_W - PAD * 2, 22),
-        (ID_STATUS, PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 48),
-        (ID_YES_BTN, WIN_W - PAD - 260, btn_y, 140, 32),
-        (ID_NO_BTN, WIN_W - PAD - 110, btn_y, 110, 32),
-    ];
-    unsafe {
-        for &(id, x, y, w, h) in items {
-            let ctrl = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
-            if !ctrl.is_invalid() {
-                let _ = MoveWindow(ctrl, s(x), s(y), s(w), s(h), true);
-            }
-        }
-    }
+    common::win32::move_controls(hwnd, dpi, LAYOUT)
 }
 
 unsafe fn build_controls(hwnd: HWND, p: &UninstallParams) {
-    let hinst = unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() };
-    let hinst = HINSTANCE(hinst.0);
-
-    let header_w = wide(&p.title);
-    let sub_w = wide(&p.subtitle);
-    let confirm_w = wide(&p.confirm_text);
-    let yes_w = wide(&tr().get("uninstall.yes"));
-    let no_w = wide(&tr().get("uninstall.no"));
-
+    let hidden = WINDOW_STYLE(0);
     unsafe {
-        // Banner
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            w!(""),
-            WS_VISIBLE | WS_CHILD,
-            0,
-            0,
-            WIN_W,
-            BANNER_H,
-            Some(hwnd),
-            Some(HMENU(ID_BANNER as *mut _)),
-            Some(hinst),
-            None,
-        );
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            PCWSTR(header_w.as_ptr()),
-            WS_VISIBLE | WS_CHILD,
-            PAD,
-            16,
-            WIN_W - PAD * 2,
-            28,
-            Some(hwnd),
-            Some(HMENU(ID_HEADER as *mut _)),
-            Some(hinst),
-            None,
-        );
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            PCWSTR(sub_w.as_ptr()),
-            WS_VISIBLE | WS_CHILD,
-            PAD,
-            46,
-            WIN_W - PAD * 2,
-            20,
-            Some(hwnd),
-            Some(HMENU(ID_SUBHEADER as *mut _)),
-            Some(hinst),
-            None,
-        );
-
+        child(hwnd, w!("STATIC"), "", WS_VISIBLE, ID_BANNER);
+        child(hwnd, w!("STATIC"), &p.title, WS_VISIBLE, ID_HEADER);
+        child(hwnd, w!("STATIC"), &p.subtitle, WS_VISIBLE, ID_SUBHEADER);
         // Confirm phase
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            PCWSTR(confirm_w.as_ptr()),
-            WS_CHILD,
-            PAD,
-            BANNER_H + PAD,
-            WIN_W - PAD * 2,
-            120,
-            Some(hwnd),
-            Some(HMENU(ID_CONFIRM_TEXT as *mut _)),
-            Some(hinst),
-            None,
-        );
-
+        child(hwnd, w!("STATIC"), &p.confirm_text, hidden, ID_CONFIRM_TEXT);
         // Progress phase
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            PROGRESS_CLASSW,
-            PCWSTR::null(),
-            WS_CHILD,
-            PAD,
-            BANNER_H + PAD + 16,
-            WIN_W - PAD * 2,
-            22,
-            Some(hwnd),
-            Some(HMENU(ID_PROGRESS as *mut _)),
-            Some(hinst),
-            None,
-        );
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            w!(""),
-            WS_CHILD,
-            PAD,
-            BANNER_H + PAD + 48,
-            WIN_W - PAD * 2,
-            48,
-            Some(hwnd),
-            Some(HMENU(ID_STATUS as *mut _)),
-            Some(hinst),
-            None,
-        );
-
+        child(hwnd, PROGRESS_CLASSW, "", hidden, ID_PROGRESS);
+        child(hwnd, w!("STATIC"), "", hidden, ID_STATUS);
         // Buttons
-        let btn_y = WIN_H - 84;
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("BUTTON"),
-            PCWSTR(yes_w.as_ptr()),
-            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON),
-            WIN_W - PAD - 260,
-            btn_y,
-            140,
-            32,
-            Some(hwnd),
-            Some(HMENU(ID_YES_BTN as *mut _)),
-            Some(hinst),
-            None,
-        );
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("BUTTON"),
-            PCWSTR(no_w.as_ptr()),
-            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON),
-            WIN_W - PAD - 110,
-            btn_y,
-            110,
-            32,
-            Some(hwnd),
-            Some(HMENU(ID_NO_BTN as *mut _)),
-            Some(hinst),
-            None,
-        );
+        let (yes, no) = (tr().get("uninstall.yes"), tr().get("uninstall.no"));
+        child(hwnd, w!("BUTTON"), &yes, DEFAULT_BUTTON, ID_YES_BTN);
+        child(hwnd, w!("BUTTON"), &no, PUSH_BUTTON, ID_NO_BTN);
+        apply_fonts(hwnd);
     }
-
-    unsafe { apply_fonts(hwnd) }
 }
 
 unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
@@ -519,17 +271,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_DPICHANGED => unsafe {
             // Moved to a monitor of different scale: resize to the suggested
             // rect, rebuild fonts + lay out at the new DPI, repaint.
-            let new_dpi = ((wparam.0 >> 16) & 0xFFFF) as i32;
-            let rc = &*(lparam.0 as *const RECT);
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                rc.left,
-                rc.top,
-                rc.right - rc.left,
-                rc.bottom - rc.top,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
+            let new_dpi = follow_dpi_change(hwnd, wparam, lparam);
             rebuild_fonts(new_dpi);
             apply_fonts(hwnd);
             relayout(hwnd, new_dpi);
@@ -616,60 +358,10 @@ unsafe fn update_progress(hwnd: HWND) {
             .map(|state| state.borrow().progress.get())
             .unwrap_or_default()
     });
-    let bar = unsafe { GetDlgItem(Some(hwnd), ID_PROGRESS as i32).unwrap_or_default() };
-    let label = unsafe { GetDlgItem(Some(hwnd), ID_STATUS as i32).unwrap_or_default() };
-    let total_nz = if progress.total == 0 {
-        1
-    } else {
-        progress.total
-    };
-    let scaled = ((progress.done as u128 * 10000u128) / total_nz as u128) as i32;
-    unsafe {
-        SendMessageW(bar, PBM_SETRANGE32, Some(WPARAM(0)), Some(LPARAM(10000)));
-        SendMessageW(
-            bar,
-            PBM_SETPOS,
-            Some(WPARAM(scaled as usize)),
-            Some(LPARAM(0)),
-        );
-        let label_text = wide(&progress.name);
-        let _ = SetWindowTextW(label, PCWSTR(label_text.as_ptr()));
-    }
-}
-
-/// Total window size whose *client area* is `client_w × client_h` for the given
-/// style at `dpi`. Use this so control layout (in client coords) gets symmetric
-/// margins.
-///
-/// Uses `AdjustWindowRectExForDpi` rather than the DPI-unaware
-/// `AdjustWindowRectEx`: at 150 %+ the caption/borders are much taller than
-/// their 96-dpi size, so a 96-dpi calculation leaves the client too short and
-/// clips the bottom controls (progress bar, status). At 96 dpi this matches the
-/// old result.
-fn window_outer_size(client_w: i32, client_h: i32, style: WINDOW_STYLE, dpi: i32) -> (i32, i32) {
-    let mut r = RECT {
-        left: 0,
-        top: 0,
-        right: client_w,
-        bottom: client_h,
-    };
-    let _ =
-        unsafe { AdjustWindowRectExForDpi(&mut r, style, false, WINDOW_EX_STYLE(0), dpi as u32) };
-    (r.right - r.left, r.bottom - r.top)
-}
-
-unsafe fn center(hwnd: HWND) {
-    let mut rect = RECT::default();
-    unsafe {
-        let _ = GetWindowRect(hwnd, &mut rect);
-    };
-    let w = rect.right - rect.left;
-    let h = rect.bottom - rect.top;
-    let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-    let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-    let x = (sw - w) / 2;
-    let y = (sh - h) / 2;
-    unsafe {
-        let _ = SetWindowPos(hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-    }
+    set_progress(
+        hwnd,
+        ID_PROGRESS,
+        scale_progress(progress.done, progress.total),
+    );
+    set_dlg_text(hwnd, ID_STATUS, &progress.name);
 }
