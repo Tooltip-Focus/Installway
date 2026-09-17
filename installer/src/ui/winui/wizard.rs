@@ -13,8 +13,8 @@ use super::model::{
     launch_option, restriction, skip_license, skip_path, tr, with_payload,
 };
 use super::plugin_page;
-use super::wizard_state::Step;
 use super::worker::{self, Feed};
+use crate::ui::wizard_engine::Step;
 use common::model::launch_option::LaunchOption;
 use common::model::payload_kind::PayloadKind;
 use std::cell::RefCell;
@@ -337,7 +337,10 @@ fn plugin_view(model: &Model, set: &SetState<Model>) -> Element {
     let rows = WIZARD.with(|w| {
         w.borrow()
             .as_ref()
-            .and_then(|z| z.current_page().map(|p| plugin_page::render(p, model, set)))
+            .and_then(|z| {
+                z.current()
+                    .map(|f| plugin_page::render(&f.page, model, set))
+            })
             .unwrap_or_default()
     });
     card(
@@ -635,8 +638,8 @@ fn next_handler(
             Phase::Plugin => {
                 let page_missing = WIZARD.with(|w| {
                     w.borrow().as_ref().and_then(|z| {
-                        z.current_page()
-                            .and_then(|p| plugin_page::first_missing_required(p, &m.answers))
+                        z.current()
+                            .and_then(|f| plugin_page::first_missing_required(&f.page, &m.answers))
                     })
                 });
                 if page_missing.is_some() {
@@ -691,7 +694,7 @@ fn step_forward(m: &mut Model, feed: &Feed, seq: &HookRef<u64>) {
     {
         let canned = WIZARD.with(|w| w.borrow().as_ref().map(|z| z.is_canned()).unwrap_or(false));
         if canned {
-            let step = WIZARD.with(|w| w.borrow_mut().as_mut().map(|z| z.step_canned()));
+            let step = WIZARD.with(|w| w.borrow_mut().as_mut().map(|z| z.step_canned(|_| ())));
             if let Some(step) = step {
                 act_step(m, step, feed, seq);
             }
@@ -718,6 +721,7 @@ fn act_step(m: &mut Model, step: Step, feed: &Feed, seq: &HookRef<u64>) {
             refresh_page(m);
         }
         Step::Install => commit_install(m, feed),
+        Step::Stay => {}
         Step::Exit => {
             m.phase = if !skip_path() {
                 Phase::Choose
@@ -841,7 +845,11 @@ fn apply_signal(m: &mut Model, signal: &Signal, feed: &Feed, seq: &HookRef<u64>)
             let Some(outcome) = outcome else {
                 return false;
             };
-            let step = WIZARD.with(|w| w.borrow_mut().as_mut().map(|z| z.apply_outcome(outcome)));
+            let step = WIZARD.with(|w| {
+                w.borrow_mut()
+                    .as_mut()
+                    .map(|z| z.apply_outcome(outcome, |_| ()))
+            });
             match step {
                 Some(step) => act_step(m, step, feed, seq),
                 None => return false,
