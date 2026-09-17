@@ -150,6 +150,13 @@ pub fn bytes_blake3(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
+/// Read and parse the JSON file `name` in `dir`.
+pub fn read_json<T: serde::de::DeserializeOwned>(dir: &Path, name: &str) -> Result<T> {
+    let path = dir.join(name);
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parse {name}"))
+}
+
 /// Write a file atomically: write to a sibling `.tmp` then rename over the
 /// target. A crash can leave the `.tmp` behind but never a half-written
 /// target, so readers always see either the old or the new complete file.

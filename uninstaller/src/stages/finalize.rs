@@ -9,6 +9,7 @@
 use crate::cleanup;
 use crate::ui::{self, StepCounter, UninstallParams};
 use anyhow::Result;
+use common::model::install_info::InstallInfo;
 use common::model::uninstall_dir_policy::UninstallDirPolicy;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -86,7 +87,7 @@ pub fn run(
 /// now that the uninstall step's locks are released. Nothing is touched when
 /// `installer_info.json` is unreadable.
 fn clear_app_dir(data_dir: &Path) {
-    let info = match cleanup::read_info(data_dir) {
+    let info = match InstallInfo::read(data_dir) {
         Ok(info) => info,
         Err(e) => {
             common::log::warn(format!("{e:#} - leaving the app dir in place"));
@@ -148,7 +149,6 @@ fn schedule_self_delete_on_reboot() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::model::install_info::InstallInfo;
 
     fn record(data_dir: &Path, app_dir: &Path, policy: UninstallDirPolicy) {
         let app_dir = app_dir.to_string_lossy().into_owned();
@@ -159,7 +159,7 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&info).unwrap();
-        fs::write(data_dir.join("installer_info.json"), json).unwrap();
+        fs::write(data_dir.join(InstallInfo::FILE), json).unwrap();
     }
 
     #[test]

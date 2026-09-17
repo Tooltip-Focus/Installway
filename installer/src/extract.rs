@@ -1187,8 +1187,7 @@ pub(crate) fn prior_install_info_by_ids(
 ) -> Option<(PathBuf, InstallInfo)> {
     for machine in [true, false] {
         if let Some(dir) = common::paths::uninstall_dir_for(publisher, product_id, machine)
-            && let Ok(text) = fs::read_to_string(dir.join("installer_info.json"))
-            && let Ok(info) = serde_json::from_str::<InstallInfo>(&text)
+            && let Ok(info) = InstallInfo::read(&dir)
         {
             return Some((dir, info));
         }
@@ -1632,17 +1631,8 @@ fn repair_corrupt(
 /// files are checked under `info.install_dir` (the app folder). Returns `Err`
 /// if anything is missing or corrupt (exit code 1 for scripts).
 pub fn verify_install(data_dir: &Path) -> Result<()> {
-    let info_path = data_dir.join("installer_info.json");
-    let info_data = fs::read_to_string(&info_path)
-        .with_context(|| format!("read {} - is this product installed?", info_path.display()))?;
-    let info: common::model::install_info::InstallInfo =
-        serde_json::from_str(&info_data).context("parse installer_info.json")?;
-
-    let manifest_path = data_dir.join("installer_manifest.json");
-    let mdata = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("read {}", manifest_path.display()))?;
-    let manifest: Manifest =
-        serde_json::from_str(&mdata).context("parse installer_manifest.json")?;
+    let info = InstallInfo::read(data_dir)?;
+    let manifest = Manifest::read(data_dir)?;
 
     let app_dir = PathBuf::from(&info.install_dir);
 

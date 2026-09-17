@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use common::model::file_assoc::FileAssoc;
 use common::model::install_info::InstallInfo;
 use common::model::installer_payload::InstallerPayload;
+use common::model::manifest::Manifest;
 use common::model::plugin_phase::PluginPhase;
 use common::model::registry_entry::RegistryEntry;
 use common::model::registry_value::RegistryValue;
@@ -104,9 +105,7 @@ fn finalize(
     // Prior install record, read BEFORE we overwrite installer_info.json, so we
     // can drop the associations / registry entries this version no longer
     // declares (otherwise they orphan and even survive uninstall).
-    let prior: Option<InstallInfo> = fs::read_to_string(data_dir.join("installer_info.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok());
+    let prior = InstallInfo::read(&data_dir).ok();
     let prior_assocs: Vec<FileAssoc> = prior
         .as_ref()
         .map(|i| i.associations.clone())
@@ -240,7 +239,7 @@ fn finalize(
     // set correctly and self-heal. Atomic writes: a half-written file would
     // break uninstall / version checks.
     common::utils::write_atomic(
-        &data_dir.join("installer_manifest.json"),
+        &data_dir.join(Manifest::FILE),
         serde_json::to_string_pretty(&payload.manifest)?.as_bytes(),
     )?;
     common::utils::write_atomic(
@@ -249,7 +248,7 @@ fn finalize(
             .as_bytes(),
     )?;
     common::utils::write_atomic(
-        &data_dir.join("installer_info.json"),
+        &data_dir.join(InstallInfo::FILE),
         serde_json::to_string_pretty(&info)?.as_bytes(),
     )?;
     // Post-install plugins run last, from the data dir, with everything in

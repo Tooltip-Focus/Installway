@@ -4,6 +4,7 @@ use crate::model::registry_entry::RegistryEntry;
 use crate::model::shortcut_entry::ShortcutEntry;
 use crate::model::uninstall_dir_policy::UninstallDirPolicy;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Persisted to `<install_dir>/installer_info.json` by the installer.
 /// Read by the uninstaller (and any tooling) to locate registry entries
@@ -61,4 +62,14 @@ pub struct InstallInfo {
     /// install and is never removed under [`UninstallDirPolicy::Tracked`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub created_dirs: Vec<String>,
+}
+
+impl InstallInfo {
+    /// Its file name in the uninstall data dir.
+    pub const FILE: &str = "installer_info.json";
+
+    /// The record kept in the uninstall data dir `data_dir`.
+    pub fn read(data_dir: &Path) -> anyhow::Result<Self> {
+        crate::utils::read_json(data_dir, Self::FILE)
+    }
 }

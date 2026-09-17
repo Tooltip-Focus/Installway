@@ -45,7 +45,7 @@ pub fn init_for_run(silent: bool) {
         Ok(pd) if !pd.is_empty() && data_dir.starts_with(&pd) => "admin",
         _ => "user",
     };
-    let tenant_id = crate::cleanup::read_info(&data_dir)
+    let tenant_id = common::model::install_info::InstallInfo::read(&data_dir)
         .ok()
         .and_then(|info| info.hintway_tenant_id);
     let backend = if silent {
