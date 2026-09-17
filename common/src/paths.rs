@@ -69,20 +69,22 @@ pub fn is_machine_location(dir: &Path) -> bool {
 /// Case-insensitive, component-wise "is `dir` inside `root` (or equal)". Compares
 /// whole components so `C:\Program Files Xtra` is not treated as under
 /// `C:\Program Files`.
-fn path_under(dir: &Path, root: &Path) -> bool {
-    let norm = |p: &Path| -> Vec<String> {
-        p.components()
-            .filter_map(|c| match c {
-                std::path::Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
-                std::path::Component::Prefix(p) => {
-                    Some(p.as_os_str().to_string_lossy().to_lowercase())
-                }
-                _ => None,
-            })
-            .collect()
-    };
-    let (d, r) = (norm(dir), norm(root));
+pub fn path_under(dir: &Path, root: &Path) -> bool {
+    let (d, r) = (path_components(dir), path_components(root));
     !r.is_empty() && d.len() >= r.len() && d[..r.len()] == r[..]
+}
+
+/// The lowercased prefix and normal components of a Windows path, so different
+/// spellings of one folder (case, separators, trailing `\`) compare equal.
+/// `..` is dropped, not resolved: reject such paths first where it matters.
+pub fn path_components(p: &Path) -> Vec<String> {
+    p.components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
+            std::path::Component::Prefix(p) => Some(p.as_os_str().to_string_lossy().to_lowercase()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Make a string safe to use as a single path component: drop characters

@@ -527,7 +527,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
 
     // Before anything touches the disk: what is missing now is what this run
     // creates, so the uninstaller never removes a folder that was already there.
-    let created_dirs = missing_dirs(&ctx.install_dir, manifest);
+    let created_dirs = dirs_to_create(&ctx.install_dir, manifest);
 
     check_preconditions(&ctx)?;
 
@@ -601,10 +601,10 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
     })
 }
 
-/// Directories an install of `manifest` into `install_dir` would create: the
-/// install dir and its missing ancestors, plus each payload sub-directory not
-/// on disk yet. Sorted, without duplicates.
-pub(crate) fn missing_dirs(install_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
+/// Directories installing `manifest` into `install_dir` creates: the install
+/// dir and its ancestors, plus each payload sub-directory, that are not on disk
+/// yet. Sorted, without duplicates.
+fn dirs_to_create(install_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
     let mut dirs = std::collections::BTreeSet::new();
     dirs.extend(install_dir.ancestors().map(Path::to_path_buf));
     for rel in manifest.files.keys() {
@@ -616,7 +616,13 @@ pub(crate) fn missing_dirs(install_dir: &Path, manifest: &Manifest) -> Vec<PathB
                 .map(|a| install_dir.join(a)),
         );
     }
-    dirs.into_iter().filter(|d| !d.exists()).collect()
+    dirs.into_iter().filter(|d| is_absent(d)).collect()
+}
+
+/// Whether `path` is known not to exist. A path that cannot be checked counts
+/// as present, so a folder that was already there is never claimed as created.
+fn is_absent(path: &Path) -> bool {
+    matches!(path.try_exists(), Ok(false))
 }
 
 /// Build the final content for `rel` into `staged_path`, verified by BLAKE3.
@@ -745,17 +751,13 @@ pub(crate) fn check_writable(dir: &Path) -> Result<()> {
     }
 }
 
-/// [`check_writable`] without side effects: removes again the folders the
-/// probe had to create, so a later [`install`] still sees them as its own.
-pub(crate) fn probe_writable(dir: &Path) -> Result<()> {
-    let created: Vec<PathBuf> = dir
-        .ancestors()
-        .filter(|a| !a.exists())
-        .map(Path::to_path_buf)
-        .collect();
+/// [`check_writable`], then removes the folders it had to create, so a later
+/// [`install`] still records them as created by the install.
+pub(crate) fn check_writable_dry_run(dir: &Path) -> Result<()> {
+    let absent: Vec<&Path> = dir.ancestors().filter(|d| is_absent(d)).collect();
     let result = check_writable(dir);
     // `ancestors` yields deepest first, the order an empty chain unwinds in.
-    for d in &created {
+    for d in absent {
         let _ = fs::remove_dir(d);
     }
     result
@@ -1701,7 +1703,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_dirs_lists_only_what_the_install_creates() {
+    fn dirs_to_create_lists_only_missing_dirs() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path();
         let existing = root.join("existing");
@@ -1713,14 +1715,14 @@ mod tests {
 
         // Pre-existing install dir: only the payload folders not on disk yet.
         assert_eq!(
-            missing_dirs(&existing, &m),
+            dirs_to_create(&existing, &m),
             vec![existing.join("data"), existing.join(r"data\x")]
         );
 
         // Fresh nested dir: every missing ancestor, and all payload folders.
         let fresh = root.join("Acme").join("MyApp");
         assert_eq!(
-            missing_dirs(&fresh, &m),
+            dirs_to_create(&fresh, &m),
             vec![
                 root.join("Acme"),
                 fresh.clone(),
@@ -1732,13 +1734,13 @@ mod tests {
     }
 
     #[test]
-    fn probe_writable_leaves_no_folder_behind() {
+    fn check_writable_dry_run_leaves_no_folder_behind() {
         let d = tempfile::tempdir().unwrap();
         let target = d.path().join("a").join("b");
-        probe_writable(&target).unwrap();
+        check_writable_dry_run(&target).unwrap();
         assert!(!d.path().join("a").exists());
         // An existing folder is left in place.
-        probe_writable(d.path()).unwrap();
+        check_writable_dry_run(d.path()).unwrap();
         assert!(d.path().exists());
     }
 

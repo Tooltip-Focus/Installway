@@ -6,10 +6,10 @@
 use anyhow::{Context, Result};
 use common::model::install_info::InstallInfo;
 use common::model::manifest::Manifest;
-use common::model::uninstall_dir_policy::UninstallDirPolicy;
+use common::paths::{path_components, path_under};
 use common::utils::{FS_RETRIES, FS_RETRY_DELAY, wide};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RegDeleteTreeW};
 use windows::core::PCWSTR;
@@ -143,13 +143,6 @@ pub fn remove_shortcuts(info: &InstallInfo) {
     }
 }
 
-/// Recursively remove every empty subdirectory of `install_dir` (bottom-up).
-/// Leaves `install_dir` itself in place. Shares one implementation with the
-/// installer's post-delete prune.
-pub fn remove_empty_subdirs(install_dir: &Path) {
-    common::utils::prune_empty_dirs(install_dir);
-}
-
 /// Env vars naming folders that must never be removed as an "app dir".
 const PROTECTED_DIR_VARS: &[&str] = &[
     "USERPROFILE",
@@ -164,74 +157,43 @@ const PROTECTED_DIR_VARS: &[&str] = &[
     "TEMP",
 ];
 
-/// Case-insensitive path components (prefix + normal parts), for comparing
-/// spellings of the same Windows path.
-fn norm(p: &Path) -> Vec<String> {
-    p.components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
-            std::path::Component::Prefix(pr) => {
-                Some(pr.as_os_str().to_string_lossy().to_lowercase())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Sanity check before recursively deleting the recorded app dir: a corrupted
-/// or tampered `installer_info.json` must not be able to point the uninstaller
-/// at a drive root, a profile folder, or an ancestor of one.
+/// Sanity check before deleting under the recorded app dir: a corrupted or
+/// tampered `installer_info.json` must not be able to point the uninstaller at
+/// a drive root, a profile folder, or an ancestor of one.
 pub fn safe_app_dir(dir: &Path) -> bool {
-    if !dir.is_absolute() {
+    // The component-wise checks below cannot resolve `..`.
+    if !dir.is_absolute() || dir.components().any(|c| c == Component::ParentDir) {
         return false;
     }
-    let d = norm(dir);
     // A bare prefix (drive/share root) has no normal components.
-    if d.len() < 2 {
+    if path_components(dir).len() < 2 {
         return false;
     }
-    for var in PROTECTED_DIR_VARS {
-        if let Ok(v) = std::env::var(var) {
-            if v.is_empty() {
-                continue;
-            }
-            let k = norm(Path::new(&v));
-            // Equal to, or ancestor of, a protected folder.
-            if !k.is_empty() && d.len() <= k.len() && k[..d.len()] == d[..] {
-                return false;
-            }
-        }
-    }
-    true
+    // Equal to, or ancestor of, a protected folder.
+    !PROTECTED_DIR_VARS
+        .iter()
+        .filter_map(|var| std::env::var(var).ok())
+        .any(|protected| path_under(Path::new(&protected), dir))
 }
 
-/// Whether the whole install dir is removed, content included (`purge`).
-pub fn purge_app_dir(info: &InstallInfo) -> bool {
-    info.uninstall_dir_policy == UninstallDirPolicy::Purge
-}
-
-/// Remove the directories the installer created that are now empty, deepest
-/// first so a chain unwinds. Non-recursive: a directory still holding anything
-/// stays. Only the install dir, its sub-directories and its ancestors are
-/// considered, and an ancestor must pass [`safe_app_dir`].
+/// Remove the directories the installer created (`created_dirs`) that are now
+/// empty, deepest first so a created chain unwinds. Never recursive: a
+/// directory still holding anything stays. Only the install dir, what is under
+/// it and its ancestors are considered, each past [`safe_app_dir`].
 pub fn remove_created_dirs(info: &InstallInfo) {
-    let app = norm(Path::new(&info.install_dir));
-    let mut dirs: Vec<(PathBuf, Vec<String>)> = info
+    let app_dir = Path::new(&info.install_dir);
+    let mut dirs: Vec<&Path> = info
         .created_dirs
         .iter()
-        .map(|d| (PathBuf::from(d), norm(Path::new(d))))
-        .filter(|(p, n)| {
-            let inside = n.len() >= app.len() && n[..app.len()] == app[..];
-            let ancestor = n.len() < app.len() && app[..n.len()] == n[..];
-            inside || (ancestor && safe_app_dir(p))
-        })
+        .map(Path::new)
+        .filter(|d| (path_under(d, app_dir) || path_under(app_dir, d)) && safe_app_dir(d))
         .collect();
-    dirs.sort_by_key(|(_, n)| std::cmp::Reverse(n.len()));
-    for (dir, _) in dirs {
-        match fs::remove_dir(&dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => common::log::info(format!("kept (not empty): {}", dir.display())),
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    for dir in dirs {
+        if let Err(e) = fs::remove_dir(dir)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            common::log::info(format!("kept {} ({e})", dir.display()));
         }
     }
 }
@@ -257,37 +219,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remove_empty_subdirs_keeps_nonempty_and_root() {
-        let d = tempfile::tempdir().unwrap();
-        let root = d.path();
-        fs::create_dir_all(root.join("empty1").join("empty2")).unwrap();
-        fs::create_dir_all(root.join("keep")).unwrap();
-        fs::write(root.join("keep").join("f.txt"), b"x").unwrap();
-
-        remove_empty_subdirs(root);
-
-        assert!(root.exists()); // root left in place
-        assert!(!root.join("empty1").exists()); // empty tree removed
-        assert!(root.join("keep").exists()); // non-empty kept
-        assert!(root.join("keep").join("f.txt").exists());
-    }
-
-    fn info_for(app: &Path, policy: UninstallDirPolicy, created: &[&Path]) -> InstallInfo {
-        let mut info: InstallInfo = serde_json::from_value(serde_json::json!({
-            "product": "P", "version": "1.0",
-            "install_dir": app.to_string_lossy(),
-            "installed_at_unix": 0, "registry_key": "P",
-        }))
-        .unwrap();
-        info.uninstall_dir_policy = policy;
-        info.created_dirs = created
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-        info
-    }
-
-    #[test]
     fn remove_created_dirs_only_removes_our_empty_dirs() {
         let d = tempfile::tempdir().unwrap();
         let parent = d.path().join("Acme");
@@ -301,19 +232,24 @@ mod tests {
         fs::write(ours_full.join("addin.dll"), b"x").unwrap();
         let outside = d.path().join("elsewhere");
         fs::create_dir_all(&outside).unwrap();
+        // Spelled as if under the install dir, but `..` resolves outside it.
+        let escaped = app.join(r"..\..\elsewhere");
 
-        let info = info_for(
-            &app,
-            UninstallDirPolicy::Tracked,
-            &[&parent, &app, &ours_empty, &ours_full, &outside],
-        );
+        let info = InstallInfo {
+            install_dir: app.to_string_lossy().into_owned(),
+            created_dirs: [&parent, &app, &ours_empty, &ours_full, &outside, &escaped]
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+            ..Default::default()
+        };
         remove_created_dirs(&info);
 
         assert!(!ours_empty.exists()); // created and empty
         assert!(ours_full.join("addin.dll").exists()); // created but not empty
         assert!(theirs_empty.exists()); // there before the install
         assert!(app.exists() && parent.exists()); // still hold the kept dirs
-        assert!(outside.exists()); // not under or above the install dir
+        assert!(outside.exists()); // not under or above the install dir, nor via `..`
 
         // Once the foreign content is gone, the created chain unwinds fully.
         fs::remove_dir_all(&ours_full).unwrap();
@@ -327,6 +263,7 @@ mod tests {
         assert!(!safe_app_dir(Path::new(r"C:\")));
         assert!(!safe_app_dir(Path::new(r"C:\Users")));
         assert!(!safe_app_dir(Path::new("relative\\path")));
+        assert!(!safe_app_dir(Path::new(r"D:\Games\MyApp\..\..")));
         if let Ok(profile) = std::env::var("USERPROFILE") {
             assert!(!safe_app_dir(Path::new(&profile)));
         }

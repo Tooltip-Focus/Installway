@@ -54,11 +54,6 @@ enum Cmd {
     /// locked while the first stage was running.
     #[command(hide = true)]
     Finalize {
-        /// Application directory to remove.
-        /// Omitted when the metadata was unreadable (best-effort fallback).
-        #[arg(long)]
-        app_dir: Option<PathBuf>,
-
         /// Uninstaller data directory to remove
         /// (`%LOCALAPPDATA%\<publisher>\Uninstall\<product>`).
         #[arg(long)]
@@ -137,20 +132,12 @@ fn run() -> Result<()> {
 
     match cli.command {
         Some(Cmd::Finalize {
-            app_dir,
             data_dir,
             product,
             parent_pid,
             display_name,
             show_complete,
-        }) => stages::finalize::run(
-            app_dir,
-            data_dir,
-            product,
-            parent_pid,
-            display_name,
-            show_complete,
-        ),
+        }) => stages::finalize::run(data_dir, product, parent_pid, display_name, show_complete),
         None => {
             #[cfg(feature = "hintway")]
             analytics::init_for_run(cli.silent);

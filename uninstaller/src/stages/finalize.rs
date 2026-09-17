@@ -6,8 +6,10 @@
 //! dir as its uninstall dir policy says, removes the data dir, then schedules its
 //! own removal via `MoveFileExW(MOVEFILE_DELAY_UNTIL_REBOOT)`.
 
+use crate::cleanup;
 use crate::ui::{self, StepCounter, UninstallParams};
 use anyhow::Result;
+use common::model::uninstall_dir_policy::UninstallDirPolicy;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -16,7 +18,6 @@ use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 
 pub fn run(
-    app_dir: Option<PathBuf>,
     data_dir: PathBuf,
     product: String,
     parent_pid: Option<u32>,
@@ -28,12 +29,8 @@ pub fn run(
     let log_id = parent_pid.unwrap_or_else(std::process::id);
     common::log::init(common::log::log_path_uninstall_temp(&product, log_id));
     common::log::info(format!(
-        "finalize start: product={} app_dir={} data_dir={} parent_pid={:?}",
+        "finalize start: product={} data_dir={} parent_pid={:?}",
         product,
-        app_dir
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "<none>".into()),
         data_dir.display(),
         parent_pid
     ));
@@ -56,10 +53,8 @@ pub fn run(
             }
 
             counter.step(&tr.get("uninstall.removing_install_dir"));
-            // Remove the application dir; absent when metadata was unreadable.
-            if let Some(ref dir) = app_dir {
-                remove_app_dir(dir, &data_dir);
-            }
+            // The app dir first: its policy is read from the data dir.
+            clear_app_dir(&data_dir);
             remove_data_dir(&data_dir);
 
             counter.step(&tr.get("uninstall.schedule_deletion"));
@@ -87,32 +82,29 @@ pub fn run(
     Ok(())
 }
 
-/// Clear the application dir as its uninstall dir policy says, read from the
-/// data dir before that is removed. Only `purge` deletes it recursively, and
-/// only past the tamper check:
-/// a corrupted `installer_info.json` must not turn this into a profile-folder
-/// wipe. Otherwise the installer-created dirs left empty go, now that the
-/// uninstall step's locks are released.
-fn remove_app_dir(dir: &Path, data_dir: &Path) {
-    let info = match crate::cleanup::read_info(data_dir) {
+/// Clear the app dir recorded in `data_dir` as its uninstall dir policy says,
+/// now that the uninstall step's locks are released. Nothing is touched when
+/// `installer_info.json` is unreadable.
+fn clear_app_dir(data_dir: &Path) {
+    let info = match cleanup::read_info(data_dir) {
         Ok(info) => info,
         Err(e) => {
-            common::log::warn(format!(
-                "installer_info.json unreadable ({e:#}) - leaving {} in place",
-                dir.display()
-            ));
+            common::log::warn(format!("{e:#} - leaving the app dir in place"));
             return;
         }
     };
-    if !crate::cleanup::purge_app_dir(&info) {
-        crate::cleanup::remove_created_dirs(&info);
-    } else if crate::cleanup::safe_app_dir(dir) {
-        common::utils::remove_dir_retry(dir);
-    } else {
-        common::log::warn(format!(
+    let dir = Path::new(&info.install_dir);
+    match info.uninstall_dir_policy {
+        UninstallDirPolicy::Tracked => cleanup::remove_created_dirs(&info),
+        // Recursive: the tamper check keeps a corrupted `installer_info.json`
+        // from turning this into a profile-folder wipe.
+        UninstallDirPolicy::Purge if cleanup::safe_app_dir(dir) => {
+            common::utils::remove_dir_retry(dir)
+        }
+        UninstallDirPolicy::Purge => common::log::warn(format!(
             "refusing to remove suspicious app dir: {}",
             dir.display()
-        ));
+        )),
     }
 }
 
@@ -149,6 +141,47 @@ fn wait_for_pid(pid: u32, timeout: Duration) {
 
 fn schedule_self_delete_on_reboot() {
     if let Ok(self_exe) = std::env::current_exe() {
-        crate::cleanup::schedule_delete_on_reboot(&self_exe);
+        cleanup::schedule_delete_on_reboot(&self_exe);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::model::install_info::InstallInfo;
+
+    fn record(data_dir: &Path, app_dir: &Path, policy: UninstallDirPolicy) {
+        let app_dir = app_dir.to_string_lossy().into_owned();
+        let info = InstallInfo {
+            install_dir: app_dir.clone(),
+            uninstall_dir_policy: policy,
+            created_dirs: vec![app_dir],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        fs::write(data_dir.join("installer_info.json"), json).unwrap();
+    }
+
+    #[test]
+    fn clear_app_dir_follows_the_recorded_policy() {
+        let d = tempfile::tempdir().unwrap();
+        let (data_dir, app_dir) = (d.path().join("data"), d.path().join("app"));
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&app_dir).unwrap();
+        fs::write(app_dir.join("user.txt"), b"x").unwrap();
+
+        // No record: nothing is touched.
+        clear_app_dir(&data_dir);
+        assert!(app_dir.join("user.txt").exists());
+
+        // Tracked: a created dir still holding a foreign file stays.
+        record(&data_dir, &app_dir, UninstallDirPolicy::Tracked);
+        clear_app_dir(&data_dir);
+        assert!(app_dir.join("user.txt").exists());
+
+        // Purge: the whole dir goes, content included.
+        record(&data_dir, &app_dir, UninstallDirPolicy::Purge);
+        clear_app_dir(&data_dir);
+        assert!(!app_dir.exists());
     }
 }

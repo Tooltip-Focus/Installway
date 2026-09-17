@@ -9,6 +9,7 @@ use common::lock::{NamedLock, Scope};
 use common::model::install_info::InstallInfo;
 use common::model::manifest::Manifest;
 use common::model::plugin_ctx::PluginContext;
+use common::model::uninstall_dir_policy::UninstallDirPolicy;
 use std::ffi::OsString;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -109,7 +110,7 @@ pub fn run(silent: bool) -> Result<()> {
             common::log::warn(format!(
                 "installer_info.json unreadable ({e:#}) - best-effort cleanup of leftovers"
             ));
-            spawn_finalize(None, &data_dir, None, false)?;
+            spawn_finalize(&data_dir, None, false)?;
             return Ok(());
         }
     };
@@ -199,12 +200,7 @@ fn run_here(
         progress(done, total, &progress_message(&tr, label));
     });
     common::log::info("spawning finalize step");
-    if let Err(e) = spawn_finalize(
-        Some(app_dir),
-        data_dir,
-        Some(&info.product),
-        info.show_uninstall_complete,
-    ) {
+    if let Err(e) = spawn_finalize(data_dir, Some(&info.product), info.show_uninstall_complete) {
         common::log::error(format!("finalize spawn failed: {e:#}"));
         ui::fatal(&tr.fmt("uninstall.spawn_failed", &[("err", &format!("{e:#}"))]));
     }
@@ -255,11 +251,11 @@ pub(crate) fn do_cleanup(
 
     step("state");
     cleanup::remove_app_state_files(app_dir);
-    if cleanup::purge_app_dir(info) {
-        // The finalize step removes the whole dir; tidy up in case it never runs.
-        cleanup::remove_empty_subdirs(app_dir);
-    } else {
-        cleanup::remove_created_dirs(info);
+    // The finalize step applies the policy again once this process has exited;
+    // clear the empty folders now in case it never runs.
+    match info.uninstall_dir_policy {
+        UninstallDirPolicy::Tracked => cleanup::remove_created_dirs(info),
+        UninstallDirPolicy::Purge => common::utils::prune_empty_dirs(app_dir),
     }
 
     step("registry");
@@ -276,7 +272,7 @@ fn run_silent(
     do_cleanup(info, manifest, app_dir, data_dir, |done, total, label| {
         common::log::info(format!("[{done}/{total}] {label}"));
     });
-    spawn_finalize(Some(app_dir), data_dir, None, false)
+    spawn_finalize(data_dir, None, false)
 }
 
 fn run_elevated(progress: ui::Progress) -> anyhow::Result<()> {
@@ -309,10 +305,9 @@ fn run_down_plugins(info: &InstallInfo, data_dir: &Path) {
     }
 }
 
-/// Copies this exe to %TEMP% and spawns the finalize step detached. `app_dir`
-/// is `None` when metadata was unreadable (skips app-dir removal).
+/// Copies this exe to %TEMP% and spawns the finalize step detached. It reads
+/// the app dir from `installer_info.json` in `data_dir`.
 pub(crate) fn spawn_finalize(
-    app_dir: Option<&Path>,
     data_dir: &Path,
     display_name: Option<&str>,
     show_complete: bool,
@@ -326,7 +321,6 @@ pub(crate) fn spawn_finalize(
 
     Command::new(&dest)
         .args(finalize_args(
-            app_dir,
             data_dir,
             &data_dir_key(data_dir),
             std::process::id(),
@@ -343,7 +337,6 @@ pub(crate) fn spawn_finalize(
 /// `--show-complete` are only emitted together, when both a name and the flag
 /// are present.
 fn finalize_args(
-    app_dir: Option<&Path>,
     data_dir: &Path,
     product: &str,
     parent_pid: u32,
@@ -359,10 +352,6 @@ fn finalize_args(
         OsString::from("--parent-pid"),
         OsString::from(parent_pid.to_string()),
     ];
-    if let Some(dir) = app_dir {
-        args.push(OsString::from("--app-dir"));
-        args.push(dir.as_os_str().to_os_string());
-    }
     if show_complete && let Some(name) = display_name {
         args.push(OsString::from("--display-name"));
         args.push(OsString::from(name));
@@ -396,7 +385,6 @@ mod tests {
     #[test]
     fn finalize_args_full_form() {
         let a = finalize_args(
-            Some(Path::new(r"C:\Apps\MyApp")),
             Path::new(r"C:\Data\MyApp"),
             "MyApp",
             42,
@@ -413,8 +401,6 @@ mod tests {
                 "MyApp",
                 "--parent-pid",
                 "42",
-                "--app-dir",
-                r"C:\Apps\MyApp",
                 "--display-name",
                 "My App",
                 "--show-complete",
@@ -423,8 +409,8 @@ mod tests {
     }
 
     #[test]
-    fn finalize_args_omits_app_dir_and_display_name() {
-        let a = finalize_args(None, Path::new(r"C:\Data\MyApp"), "MyApp", 7, None, false);
+    fn finalize_args_omits_display_name() {
+        let a = finalize_args(Path::new(r"C:\Data\MyApp"), "MyApp", 7, None, false);
         assert_eq!(
             args_of(&a),
             vec![
@@ -444,7 +430,6 @@ mod tests {
     #[test]
     fn finalize_args_display_name_and_flag_travel_together() {
         let no_flag = finalize_args(
-            None,
             Path::new(r"C:\Data\MyApp"),
             "MyApp",
             7,
@@ -453,7 +438,7 @@ mod tests {
         );
         assert!(!args_of(&no_flag).iter().any(|a| a == "--display-name"));
 
-        let no_name = finalize_args(None, Path::new(r"C:\Data\MyApp"), "MyApp", 7, None, true);
+        let no_name = finalize_args(Path::new(r"C:\Data\MyApp"), "MyApp", 7, None, true);
         assert!(!args_of(&no_name).iter().any(|a| a == "--show-complete"));
     }
 

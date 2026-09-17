@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Persisted to `<install_dir>/installer_info.json` by the installer.
 /// Read by the uninstaller (and any tooling) to locate registry entries
 /// and walk the manifest for cleanup.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct InstallInfo {
     pub product: String,
     #[serde(default)]
