@@ -66,28 +66,8 @@ pub fn run_each(
     enforce_required: bool,
 ) -> Result<()> {
     for (entry, dll, inputs_json) in items {
-        let bytes =
-            std::fs::read(dll).with_context(|| format!("read plugin dll {}", dll.display()))?;
-        if crate::utils::bytes_blake3(&bytes) != entry.blake3 {
-            let m = format!("plugin '{}' hash mismatch - refusing to load", entry.name);
-            if enforce_required && entry.required {
-                bail!("{m}");
-            }
-            crate::log::warn(m);
-            continue;
-        }
-        crate::log::info(format!("plugin '{}': {}", entry.name, func));
-        let mut ctx = base_ctx.clone();
-        ctx.inputs_json = inputs_json.clone();
-        let ctx_json = serde_json::to_string(&ctx)?;
-        let (ok, _descriptor) = run_child(self_exe, dll, func, &ctx_json, false, None)?;
-        if !ok {
-            let m = format!("plugin '{}' {} returned failure", entry.name, func);
-            if enforce_required && entry.required {
-                bail!("{m}");
-            }
-            crate::log::warn(format!("{m} (continuing)"));
-        }
+        let ctx = ctx_json(base_ctx, inputs_json)?;
+        run_one(self_exe, entry, dll, &ctx, func, enforce_required, None)?;
     }
     Ok(())
 }
@@ -105,37 +85,76 @@ pub fn run_up_single(
     inputs_json: &str,
     on_progress: Option<Box<dyn Fn(u32) + Send>>,
 ) -> Result<()> {
-    let bytes = std::fs::read(dll).with_context(|| format!("read plugin dll {}", dll.display()))?;
-    if crate::utils::bytes_blake3(&bytes) != entry.blake3 {
-        let m = format!("plugin '{}' hash mismatch - refusing to load", entry.name);
-        if entry.required {
-            bail!("{m}");
-        }
-        crate::log::warn(m);
-        return Ok(());
-    }
-    crate::log::info(format!("plugin '{}': up (wizard)", entry.name));
-    let mut ctx = base_ctx.clone();
-    ctx.inputs_json = inputs_json.to_string();
-    let ctx_json = serde_json::to_string(&ctx)?;
-    let (ok, _) = run_child(self_exe, dll, "up", &ctx_json, false, on_progress)?;
-    if !ok {
-        let m = format!("plugin '{}' up returned failure", entry.name);
-        if entry.required {
+    let ctx_json = ctx_json(base_ctx, inputs_json)?;
+    run_one(self_exe, entry, dll, &ctx_json, "up", true, on_progress)
+}
+
+/// Run `func` for one plugin in its own child process. A hash mismatch or a
+/// failure the plugin reports aborts only when `enforce_required` and the
+/// plugin is required; otherwise it is logged and the plugin skipped.
+fn run_one(
+    self_exe: &Path,
+    entry: &PluginEntry,
+    dll: &Path,
+    ctx_json: &str,
+    func: &str,
+    enforce_required: bool,
+    on_progress: Option<Box<dyn Fn(u32) + Send>>,
+) -> Result<()> {
+    let soft_fail = |m: String| {
+        if enforce_required && entry.required {
             bail!("{m}");
         }
         crate::log::warn(format!("{m} (continuing)"));
+        Ok(())
+    };
+    if !hash_matches(entry, dll)? {
+        return soft_fail(hash_mismatch(entry));
+    }
+    crate::log::info(format!("plugin '{}': {}", entry.name, func));
+    let (ok, _descriptor) = run_child(self_exe, dll, func, ctx_json, false, on_progress)?;
+    if !ok {
+        return soft_fail(format!("plugin '{}' {} returned failure", entry.name, func));
     }
     Ok(())
 }
 
-/// Verify a plugin DLL's BLAKE3 against its manifest entry, bailing on mismatch.
-fn verify_plugin_hash(entry: &PluginEntry, dll: &Path) -> Result<()> {
+/// Whether a plugin DLL matches the BLAKE3 of its manifest entry.
+fn hash_matches(entry: &PluginEntry, dll: &Path) -> Result<bool> {
     let bytes = std::fs::read(dll).with_context(|| format!("read plugin dll {}", dll.display()))?;
-    if crate::utils::bytes_blake3(&bytes) != entry.blake3 {
-        bail!("plugin '{}' hash mismatch - refusing to load", entry.name);
+    Ok(crate::utils::bytes_blake3(&bytes) == entry.blake3)
+}
+
+fn hash_mismatch(entry: &PluginEntry) -> String {
+    format!("plugin '{}' hash mismatch - refusing to load", entry.name)
+}
+
+/// `base_ctx` as JSON, with this plugin's `inputs_json`.
+fn ctx_json(base_ctx: &PluginContext, inputs_json: &str) -> Result<String> {
+    let mut ctx = base_ctx.clone();
+    ctx.inputs_json = inputs_json.to_string();
+    Ok(serde_json::to_string(&ctx)?)
+}
+
+/// Run a plugin step that answers over the descriptor pipe (`features`,
+/// `pages`) and return what it sent.
+fn query(
+    self_exe: &Path,
+    base_ctx: &PluginContext,
+    entry: &PluginEntry,
+    dll: &Path,
+    inputs_json: &str,
+    func: &str,
+) -> Result<String> {
+    if !hash_matches(entry, dll)? {
+        bail!("{}", hash_mismatch(entry));
     }
-    Ok(())
+    let ctx_json = ctx_json(base_ctx, inputs_json)?;
+    let (ok, descriptor) = run_child(self_exe, dll, func, &ctx_json, true, None)?;
+    if !ok {
+        bail!("plugin '{}' {func} returned failure", entry.name);
+    }
+    Ok(descriptor)
 }
 
 /// Query a plugin's optional `installway_features` step. A plugin that doesn't
@@ -148,14 +167,7 @@ pub fn query_features(
     dll: &Path,
     inputs_json: &str,
 ) -> Result<crate::model::feature_select::FeatureSelection> {
-    verify_plugin_hash(entry, dll)?;
-    let mut ctx = base_ctx.clone();
-    ctx.inputs_json = inputs_json.to_string();
-    let ctx_json = serde_json::to_string(&ctx)?;
-    let (ok, descriptor) = run_child(self_exe, dll, "features", &ctx_json, true, None)?;
-    if !ok {
-        bail!("plugin '{}' feature query returned failure", entry.name);
-    }
+    let descriptor = query(self_exe, base_ctx, entry, dll, inputs_json, "features")?;
     if descriptor.trim().is_empty() {
         return Ok(Default::default());
     }
@@ -173,14 +185,7 @@ pub fn query_step(
     dll: &Path,
     answers_json: &str,
 ) -> Result<crate::model::page_step::PageStep> {
-    verify_plugin_hash(entry, dll)?;
-    let mut ctx = base_ctx.clone();
-    ctx.inputs_json = answers_json.to_string();
-    let ctx_json = serde_json::to_string(&ctx)?;
-    let (ok, descriptor) = run_child(self_exe, dll, "pages", &ctx_json, true, None)?;
-    if !ok {
-        bail!("plugin '{}' page step returned failure", entry.name);
-    }
+    let descriptor = query(self_exe, base_ctx, entry, dll, answers_json, "pages")?;
     serde_json::from_str(&descriptor).context("parse plugin page step")
 }
 
@@ -202,12 +207,12 @@ fn run_child(
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     let pipe = if want_descriptor {
-        Some(make_pages_pipe()?)
+        Some(inbound_pipe("pages", 64 * 1024)?)
     } else {
         None
     };
     let progress_pipe = if on_progress.is_some() {
-        Some(make_progress_pipe()?)
+        Some(inbound_pipe("progress", 256)?)
     } else {
         None
     };
@@ -297,22 +302,18 @@ fn run_child(
     Ok((success, descriptor))
 }
 
-struct PagesPipe {
+struct InboundPipe {
     server: HANDLE,
     name: String,
 }
 
-struct ProgressPipe {
-    server: HANDLE,
-    name: String,
-}
-
-/// Create an inbound named pipe with a process-unique name for one `pages` run.
-fn make_pages_pipe() -> Result<PagesPipe> {
+/// Create an inbound named pipe with a process-unique name, for one child's
+/// `kind` channel (`pages` descriptors or `progress` values).
+fn inbound_pipe(kind: &str, in_buffer: u32) -> Result<InboundPipe> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static CTR: AtomicU32 = AtomicU32::new(0);
     let name = format!(
-        r"\\.\pipe\installway-pages-{}-{}",
+        r"\\.\pipe\installway-{kind}-{}-{}",
         std::process::id(),
         CTR.fetch_add(1, Ordering::Relaxed)
     );
@@ -322,44 +323,17 @@ fn make_pages_pipe() -> Result<PagesPipe> {
             PCWSTR(wname.as_ptr()),
             PIPE_ACCESS_INBOUND,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,         // one instance — one child per pipe
-            0,         // out buffer (host only reads)
-            64 * 1024, // in buffer
-            0,         // default timeout (unused without WaitNamedPipe)
+            1, // one instance — one child per pipe
+            0, // out buffer (host only reads)
+            in_buffer,
+            0, // default timeout (unused without WaitNamedPipe)
             None,
         )
     };
     if server == INVALID_HANDLE_VALUE {
-        bail!("create descriptor pipe failed");
+        bail!("create {kind} pipe failed");
     }
-    Ok(PagesPipe { server, name })
-}
-
-fn make_progress_pipe() -> Result<ProgressPipe> {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static CTR: AtomicU32 = AtomicU32::new(0);
-    let name = format!(
-        r"\\.\pipe\installway-progress-{}-{}",
-        std::process::id(),
-        CTR.fetch_add(1, Ordering::Relaxed)
-    );
-    let wname = wide(&name);
-    let server = unsafe {
-        CreateNamedPipeW(
-            PCWSTR(wname.as_ptr()),
-            PIPE_ACCESS_INBOUND,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,
-            0,
-            256,
-            0,
-            None,
-        )
-    };
-    if server == INVALID_HANDLE_VALUE {
-        bail!("create progress pipe failed");
-    }
-    Ok(ProgressPipe { server, name })
+    Ok(InboundPipe { server, name })
 }
 
 /// Read 4-byte progress values from the pipe and call `on_progress` for each.
