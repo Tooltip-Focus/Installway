@@ -11,7 +11,7 @@
 use crate::utils;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -105,27 +105,15 @@ fn iso_utc(t: SystemTime) -> String {
     )
 }
 
-#[allow(dead_code)]
-pub fn log_path_for_install(install_dir: &Path) -> PathBuf {
-    install_dir.join("install.log")
-}
-
 /// Installer log in `%TEMP%`, named by product (so support can tell which app
 /// failed) + PID (uniqueness across concurrent runs). Used as the *live* log
 /// target so diagnostics survive even when the chosen install dir isn't
 /// writable. Copied into the install dir on success.
-#[allow(dead_code)]
 pub fn log_path_installer_temp(product: &str, pid: u32) -> PathBuf {
     let name = crate::paths::sanitize_component(product);
     std::env::temp_dir().join(format!("{}-install-{}.log", name, pid))
 }
 
-#[allow(dead_code)]
-pub fn log_path_for_uninstall(install_dir: &Path) -> PathBuf {
-    install_dir.join("uninstall.log")
-}
-
-#[allow(dead_code)]
 pub fn log_path_uninstall_temp(product: &str, pid: u32) -> PathBuf {
     let name = crate::paths::sanitize_component(product);
     std::env::temp_dir().join(format!("{}-uninstall-{}.log", name, pid))
@@ -134,7 +122,6 @@ pub fn log_path_uninstall_temp(product: &str, pid: u32) -> PathBuf {
 /// Delete this product's `%TEMP%` install/uninstall logs older than
 /// `max_age_days`, so they don't accumulate over a machine's lifetime.
 /// Best-effort: any error (locked file, unreadable mtime) is ignored.
-#[allow(dead_code)]
 pub fn prune_temp_logs(product: &str, max_age_days: u64) {
     let name = crate::paths::sanitize_component(product);
     let install_prefix = format!("{}-install-", name);

@@ -92,26 +92,13 @@ fn remove_file_robust(path: &Path) -> Removal {
 /// (removed now or queued for reboot).
 pub fn remove_app_state_files(app_dir: &Path) -> usize {
     let mut count = 0;
-    for extra in ["version.json", "installer_manifest.json"] {
+    for extra in ["version.json", Manifest::FILE] {
         let p = app_dir.join(extra);
         if matches!(remove_file_robust(&p), Removal::Removed | Removal::Pending) {
             count += 1;
         }
     }
     count
-}
-
-pub fn read_info(install_dir: &Path) -> Result<InstallInfo> {
-    let p = install_dir.join("installer_info.json");
-    let s = fs::read_to_string(&p)
-        .with_context(|| format!("read {} - is this an installed product?", p.display()))?;
-    serde_json::from_str(&s).context("parse installer_info.json")
-}
-
-pub fn read_manifest(install_dir: &Path) -> Result<Manifest> {
-    let p = install_dir.join("installer_manifest.json");
-    let s = fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
-    serde_json::from_str(&s).context("parse installer_manifest.json")
 }
 
 /// Robustly remove a single payload file, logging if it stays stuck. For the

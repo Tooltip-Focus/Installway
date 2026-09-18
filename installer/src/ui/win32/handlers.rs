@@ -10,7 +10,7 @@ use super::{
     ID_PATH_EDIT, ID_PATH_WARN, ID_PATH_WARN_ICON, ID_PROGRESS, ID_STATUS, PAYLOAD, Phase, STATE,
     WIZARD, apply_phase, message_box, tr,
 };
-use crate::extract::{InstallCtx, install};
+use crate::extract::InstallCtx;
 use crate::install as install_mod;
 use crate::ui::helpers::{
     self, WM_APP_CANCELLED, WM_APP_DONE, WM_APP_ERROR, WM_APP_PERM_DENIED, WM_APP_PERM_ERROR,
@@ -299,7 +299,7 @@ use crate::ui::dest::should_block_nonempty;
 /// Choose page and on every edit of the path field.
 pub(super) unsafe fn update_path_warning(hwnd: HWND) {
     let edit = unsafe { GetDlgItem(Some(hwnd), ID_PATH_EDIT as i32).unwrap_or_default() };
-    let path = unsafe { get_window_text(edit) };
+    let path = get_window_text(edit);
     let danger = should_block_nonempty(
         super::restriction(),
         super::skip_path(),
@@ -311,7 +311,7 @@ pub(super) unsafe fn update_path_warning(hwnd: HWND) {
     let warn_icon = unsafe { GetDlgItem(Some(hwnd), ID_PATH_WARN_ICON as i32).unwrap_or_default() };
     let install_btn = unsafe { GetDlgItem(Some(hwnd), ID_INSTALL_BTN as i32).unwrap_or_default() };
     if danger {
-        unsafe { set_dlg_text(hwnd, ID_PATH_WARN, &tr().get("install.path_not_empty")) };
+        set_dlg_text(hwnd, ID_PATH_WARN, &tr().get("install.path_not_empty"));
     }
     unsafe {
         let vis = if danger { SW_SHOW } else { SW_HIDE };
@@ -327,7 +327,7 @@ pub(super) unsafe fn update_path_warning(hwnd: HWND) {
 /// works from a later plugin page too.
 unsafe fn validate_and_store_path(hwnd: HWND) -> Option<PathBuf> {
     let edit = unsafe { GetDlgItem(Some(hwnd), ID_PATH_EDIT as i32).unwrap_or_default() };
-    let path = unsafe { get_window_text(edit) };
+    let path = get_window_text(edit);
     if path.trim().is_empty() {
         unsafe { message_box(hwnd, &tr().get("install.err_no_path"), MB_ICONWARNING) };
         return None;
@@ -415,62 +415,34 @@ unsafe fn commit_install(hwnd: HWND) {
             })
         };
         let ctx = InstallCtx {
-            install_dir: pb.clone(),
+            install_dir: pb,
             payload: &loaded.payload,
             zip_bytes: loaded.zip(),
             cancel: cancel.clone(),
             on_progress: progress_cb,
-            plugin_inputs: plugin_inputs.clone(),
+            plugin_inputs,
             requires_admin,
             hwnd_parent: hwnd_isize,
             translator,
         };
-        #[cfg(feature = "hintway")]
-        crate::analytics::stage("extract");
-        // Lock held across finalize so a concurrent run can't interleave.
-        let installed = match install(ctx) {
-            Ok(installed) => installed,
-            Err(e) => {
-                // A user-confirmed cancel rolled the install back: close cleanly
-                // instead of surfacing it as an installation error.
-                if cancel.load(Ordering::Relaxed) {
-                    common::log::info("install cancelled by user");
-                    helpers::post(hwnd_isize, WM_APP_CANCELLED);
-                    return;
-                }
-                if e.downcast_ref::<crate::extract::PermissionDeniedError>()
-                    .is_some()
-                {
-                    #[cfg(feature = "hintway")]
-                    crate::analytics::error("permission_denied");
-                    push_perm_error(hwnd_isize, pb, plugin_inputs);
-                } else {
-                    #[cfg(feature = "hintway")]
-                    crate::analytics::error(crate::analytics::classify_error(&e));
-                    push_error(hwnd_isize, &format!("{e}"));
-                }
-                return;
-            }
+        let Err(e) = install_mod::run(&ctx, &loaded.uninstaller_bytes) else {
+            helpers::post(hwnd_isize, WM_APP_DONE);
+            return;
         };
-        #[cfg(feature = "hintway")]
-        crate::analytics::stage("finalize");
-        if let Err(e) = install_mod::finalize(
-            &pb,
-            &loaded.payload,
-            &loaded.uninstaller_bytes,
-            loaded.zip(),
-            &plugin_inputs,
-            requires_admin,
-            &installed.created_dirs,
-        ) {
+        // A user-confirmed cancel rolled the install back: close cleanly
+        // instead of surfacing it as an installation error.
+        if cancel.load(Ordering::Relaxed) && !e.is::<install_mod::FinalizeFailed>() {
+            common::log::info("install cancelled by user");
+            helpers::post(hwnd_isize, WM_APP_CANCELLED);
+        } else if e.is::<crate::extract::PermissionDeniedError>() {
+            #[cfg(feature = "hintway")]
+            crate::analytics::error("permission_denied");
+            push_perm_error(hwnd_isize, ctx.install_dir, ctx.plugin_inputs);
+        } else {
             #[cfg(feature = "hintway")]
             crate::analytics::error(crate::analytics::classify_error(&e));
-            push_error(hwnd_isize, &format!("finalize: {e}"));
-            return;
+            push_error(hwnd_isize, &format!("{e:#}"));
         }
-        #[cfg(feature = "hintway")]
-        crate::analytics::stage("done");
-        helpers::post(hwnd_isize, WM_APP_DONE);
     });
 }
 
@@ -530,14 +502,14 @@ pub(super) unsafe fn update_progress(hwnd: HWND) {
             Err(_) => (0, 0, String::new()),
         };
         let scaled = scale_progress(done, total);
-        unsafe { set_progress(hwnd, ID_PROGRESS, scaled) };
+        set_progress(hwnd, ID_PROGRESS, scaled);
         let pct = scaled / 100;
         let txt = if total > 0 {
             format!("{}%   ({} / {} bytes)\n{}", pct, done, total, name)
         } else {
             name
         };
-        unsafe { set_dlg_text(hwnd, ID_STATUS, &txt) };
+        set_dlg_text(hwnd, ID_STATUS, &txt);
     });
 }
 

@@ -3,14 +3,13 @@
 
 //! Compact, auto-starting update UI for app-triggered self-updates.
 
-use crate::extract::{InstallCtx, install};
+use crate::extract::InstallCtx;
 use crate::payload::LoadedPayload;
 use crate::ui::helpers::{
-    self, WM_APP_DONE, WM_APP_ERROR, create_font, own_icon, post, scale_progress, set_dlg_text,
-    set_progress,
+    self, ControlRect, WM_APP_DONE, WM_APP_ERROR, child, create_font, own_icon, post,
+    scale_progress, set_dlg_text, set_progress, set_static_icon,
 };
 use anyhow::Result;
-use common::utils::wide;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -18,15 +17,14 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::thread;
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, GetStockObject, HBRUSH, HFONT,
-    InvalidateRect, SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    CreateSolidBrush, DeleteObject, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HFONT, InvalidateRect,
+    SetBkMode, SetTextColor, TRANSPARENT,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, w};
+use windows::core::w;
 
 const ID_ICON: usize = 1;
 const ID_TITLE: usize = 2;
@@ -34,7 +32,6 @@ const ID_SUB: usize = 3;
 const ID_PROGRESS: usize = 4;
 const ID_STATUS: usize = 5;
 
-const STM_SETICON: u32 = 0x0170;
 const SS_ICON: u32 = 0x0003;
 
 /// `SetTimer` ids. `CLOSE_TIMER` is the post-success "show 100% briefly" pause;
@@ -97,7 +94,7 @@ pub fn run(
         win.prog,
     );
 
-    unsafe { helpers::pump_messages() };
+    helpers::pump_messages();
     Ok(())
 }
 
@@ -128,28 +125,7 @@ unsafe fn build_window(
     payload: &common::model::installer_payload::InstallerPayload,
 ) -> Result<Window> {
     helpers::init_progress_class();
-    let hinstance = unsafe { GetModuleHandleW(PCWSTR::null()) }?;
-
-    let class_name = w!("InstallwayMiniWnd");
-    let wc = WNDCLASSEXW {
-        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        style: WNDCLASS_STYLES(0),
-        lpfnWndProc: Some(wndproc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: HINSTANCE(hinstance.0),
-        hIcon: HICON::default(),
-        hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }?,
-        hbrBackground: HBRUSH(unsafe { GetStockObject(WHITE_BRUSH) }.0),
-        lpszMenuName: PCWSTR::null(),
-        lpszClassName: class_name,
-        hIconSm: HICON::default(),
-    };
-    unsafe { RegisterClassExW(&wc) };
-
-    let hicon = unsafe { own_icon() };
-
-    let title_w = wide(&tr().get("install.minimal_title"));
+    let hicon = own_icon();
     let state = Rc::new(RefCell::new(State {
         cancel: Arc::new(AtomicBool::new(false)),
         prog: Arc::new(Mutex::new(Prog {
@@ -169,55 +145,22 @@ unsafe fn build_window(
 
     // No min/max box, fixed small tool-like window (still has close).
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
-    // Base (96-dpi) size for the initial placement; rescaled to the monitor DPI
-    // below once the window exists.
-    let (ww, wh) = helpers::window_size_for_client(WIN_W, WIN_H, style, WINDOW_EX_STYLE(0), 96);
     let hwnd = unsafe {
-        CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            class_name,
-            PCWSTR(title_w.as_ptr()),
+        helpers::create_main_window(
+            w!("InstallwayMiniWnd"),
+            Some(wndproc),
+            &tr().get("install.minimal_title"),
             style,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            ww,
-            wh,
-            None,
-            None,
-            Some(HINSTANCE(hinstance.0)),
-            None,
+            WIN_W,
+            WIN_H,
+            hicon,
         )
     }?;
-    if !hicon.is_invalid() {
-        unsafe {
-            SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(1)),
-                Some(LPARAM(hicon.0 as isize)),
-            );
-            SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(0)),
-                Some(LPARAM(hicon.0 as isize)),
-            );
-        }
-    }
 
     unsafe {
         // Scale to the monitor this window opened on (per-monitor DPI aware).
-        let dpi = helpers::dpi_for(hwnd);
+        let dpi = helpers::fit_to_monitor(hwnd, WIN_W, WIN_H, style);
         rebuild_fonts(dpi);
-        let (sw, sh) = helpers::window_size_for_client(
-            helpers::scale(WIN_W, dpi),
-            helpers::scale(WIN_H, dpi),
-            style,
-            WINDOW_EX_STYLE(0),
-            dpi,
-        );
-        let _ = SetWindowPos(hwnd, None, 0, 0, sw, sh, SWP_NOMOVE | SWP_NOZORDER);
-        helpers::center(hwnd);
         build_controls(hwnd, payload);
         relayout(hwnd, dpi);
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -298,26 +241,13 @@ fn spawn_worker(
             zip_bytes: loaded.zip(),
             cancel,
             on_progress: prog_cb,
-            plugin_inputs: plugin_inputs.clone(),
+            plugin_inputs,
             requires_admin,
             hwnd_parent: hwnd_isize,
             translator: tr(),
         };
-        // Lock held across finalize so a concurrent run can't interleave.
-        let installed = match install(ctx) {
-            Ok(installed) => installed,
-            Err(e) => return post_err(hwnd_isize, &format!("{e}")),
-        };
-        if let Err(e) = crate::install::finalize(
-            &install_dir,
-            &loaded.payload,
-            &loaded.uninstaller_bytes,
-            loaded.zip(),
-            &plugin_inputs,
-            requires_admin,
-            &installed.created_dirs,
-        ) {
-            return post_err(hwnd_isize, &format!("finalize: {e}"));
+        if let Err(e) = crate::install::run(&ctx, &loaded.uninstaller_bytes) {
+            return post_err(hwnd_isize, &format!("{e:#}"));
         }
         if launch_flag {
             let _ = crate::install::launch_product(
@@ -394,26 +324,18 @@ unsafe fn rebuild_fonts(dpi: i32) {
     });
 }
 
-/// Reposition + resize every control for `dpi` (96-dpi base, scaled). Run after
-/// creation and on each `WM_DPICHANGED`. Identity at 96 dpi.
+/// Place every control for `dpi` (96-dpi base, scaled). Run after creation and
+/// on each `WM_DPICHANGED`.
 unsafe fn relayout(hwnd: HWND, dpi: i32) {
-    let s = |v: i32| helpers::scale(v, dpi);
     let col_w = WIN_W - COL_X - PAD;
-    let items: &[(usize, i32, i32, i32, i32)] = &[
+    let items: &[ControlRect] = &[
         (ID_ICON, PAD, PAD, ICON_SZ, ICON_SZ),
         (ID_TITLE, COL_X, PAD, col_w, 26),
         (ID_SUB, COL_X, PAD + 28, col_w, 20),
         (ID_PROGRESS, COL_X, PAD + 56, col_w, 18),
         (ID_STATUS, COL_X, PAD + 80, col_w, 20),
     ];
-    unsafe {
-        for &(id, x, y, w, h) in items {
-            let ctrl = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
-            if !ctrl.is_invalid() {
-                let _ = MoveWindow(ctrl, s(x), s(y), s(w), s(h), true);
-            }
-        }
-    }
+    helpers::move_controls(hwnd, dpi, items);
 }
 
 /// (Re)apply the stored fonts to the text controls.
@@ -421,116 +343,39 @@ unsafe fn apply_fonts(hwnd: HWND) {
     STATE.with(|s| {
         if let Some(st) = s.borrow().as_ref() {
             let st = st.borrow();
-            unsafe {
-                helpers::set_font(hwnd, ID_TITLE, st.font_title);
-                helpers::set_font(hwnd, ID_SUB, st.font_body);
-                helpers::set_font(hwnd, ID_STATUS, st.font_body);
-            }
+            helpers::set_font(hwnd, ID_TITLE, st.font_title);
+            helpers::set_font(hwnd, ID_SUB, st.font_body);
+            helpers::set_font(hwnd, ID_STATUS, st.font_body);
         }
     });
 }
 
 unsafe fn build_controls(hwnd: HWND, payload: &common::model::installer_payload::InstallerPayload) {
-    let hinst = unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() };
-    let hinst = HINSTANCE(hinst.0);
     let tr = tr();
-
-    let title_w = wide(&tr.get("install.minimal_title"));
-    let sub_w = wide(&tr.fmt(
+    let sub = tr.fmt(
         "install.minimal_sub",
         &[
             ("product", &payload.product),
             ("version", &payload.to_version),
         ],
-    ));
-
+    );
     unsafe {
-        // Icon (static, owner sets via STM_SETICON)
-        let icon_ctrl = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
+        let icon = child(
+            hwnd,
             w!("STATIC"),
-            PCWSTR::null(),
-            WS_VISIBLE | WS_CHILD | WINDOW_STYLE(SS_ICON),
-            PAD,
-            PAD,
-            ICON_SZ,
-            ICON_SZ,
-            Some(hwnd),
-            Some(HMENU(ID_ICON as *mut _)),
-            Some(hinst),
-            None,
-        )
-        .ok();
-        if let Some(ic) = icon_ctrl {
-            STATE.with(|s| {
-                if let Some(st) = s.borrow().as_ref() {
-                    let h = st.borrow().hicon;
-                    if !h.is_invalid() {
-                        SendMessageW(ic, STM_SETICON, Some(WPARAM(h.0 as usize)), Some(LPARAM(0)));
-                    }
-                }
-            });
-        }
-
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            PCWSTR(title_w.as_ptr()),
-            WS_VISIBLE | WS_CHILD,
-            COL_X,
-            PAD,
-            WIN_W - COL_X - PAD,
-            26,
-            Some(hwnd),
-            Some(HMENU(ID_TITLE as *mut _)),
-            Some(hinst),
-            None,
+            "",
+            WS_VISIBLE | WINDOW_STYLE(SS_ICON),
+            ID_ICON,
         );
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            PCWSTR(sub_w.as_ptr()),
-            WS_VISIBLE | WS_CHILD,
-            COL_X,
-            PAD + 28,
-            WIN_W - COL_X - PAD,
-            20,
-            Some(hwnd),
-            Some(HMENU(ID_SUB as *mut _)),
-            Some(hinst),
-            None,
-        );
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            PROGRESS_CLASSW,
-            PCWSTR::null(),
-            WS_VISIBLE | WS_CHILD,
-            COL_X,
-            PAD + 56,
-            WIN_W - COL_X - PAD,
-            18,
-            Some(hwnd),
-            Some(HMENU(ID_PROGRESS as *mut _)),
-            Some(hinst),
-            None,
-        );
-        let _ = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            w!(""),
-            WS_VISIBLE | WS_CHILD,
-            COL_X,
-            PAD + 80,
-            WIN_W - COL_X - PAD,
-            20,
-            Some(hwnd),
-            Some(HMENU(ID_STATUS as *mut _)),
-            Some(hinst),
-            None,
-        );
+        let hicon = STATE.with(|s| s.borrow().as_ref().map(|st| st.borrow().hicon));
+        set_static_icon(icon, hicon.unwrap_or_default());
+        let title = tr.get("install.minimal_title");
+        child(hwnd, w!("STATIC"), &title, WS_VISIBLE, ID_TITLE);
+        child(hwnd, w!("STATIC"), &sub, WS_VISIBLE, ID_SUB);
+        child(hwnd, PROGRESS_CLASSW, "", WS_VISIBLE, ID_PROGRESS);
+        child(hwnd, w!("STATIC"), "", WS_VISIBLE, ID_STATUS);
+        apply_fonts(hwnd);
     }
-
-    unsafe { apply_fonts(hwnd) }
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -538,17 +383,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_DPICHANGED => unsafe {
             // Moved to a monitor of different scale: resize to the suggested
             // rect, rebuild fonts + lay out at the new DPI, repaint.
-            let new_dpi = ((wparam.0 >> 16) & 0xFFFF) as i32;
-            let rc = &*(lparam.0 as *const RECT);
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                rc.left,
-                rc.top,
-                rc.right - rc.left,
-                rc.bottom - rc.top,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
+            let new_dpi = helpers::follow_dpi_change(hwnd, wparam, lparam);
             rebuild_fonts(new_dpi);
             apply_fonts(hwnd);
             relayout(hwnd, new_dpi);
@@ -636,8 +471,8 @@ unsafe fn update_progress(hwnd: HWND) {
             Err(_) => return,
         };
         let scaled = scale_progress(done, total);
-        unsafe { set_progress(hwnd, ID_PROGRESS, scaled) };
+        set_progress(hwnd, ID_PROGRESS, scaled);
         let pct = scaled / 100;
-        unsafe { set_dlg_text(hwnd, ID_STATUS, &format!("{}%  {}", pct, name)) };
+        set_dlg_text(hwnd, ID_STATUS, &format!("{}%  {}", pct, name));
     });
 }

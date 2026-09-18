@@ -32,7 +32,7 @@ impl Drop for StagedIcon {
 }
 
 pub(super) fn stage_own_icon() -> Option<StagedIcon> {
-    let hicon = unsafe { crate::ui::helpers::own_icon() };
+    let hicon = crate::ui::helpers::own_icon();
     if hicon.is_invalid() {
         return None;
     }

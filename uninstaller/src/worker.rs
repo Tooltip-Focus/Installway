@@ -45,7 +45,7 @@ fn uninstall(pipe: &mut File) -> Result<()> {
     // If the metadata is gone, remove the leftovers anyway - same best-effort
     // fallback as the unelevated path, so a broken `installer_info.json` does
     // not leave the data dir behind just because the run was elevated.
-    let info = match crate::cleanup::read_info(&data_dir) {
+    let info = match common::model::install_info::InstallInfo::read(&data_dir) {
         Ok(i) => i,
         Err(e) => {
             common::log::warn(format!(
@@ -56,7 +56,7 @@ fn uninstall(pipe: &mut File) -> Result<()> {
     };
 
     // Manifest may be missing (partial delete); fall back to an empty one.
-    let manifest = crate::cleanup::read_manifest(&data_dir)
+    let manifest = Manifest::read(&data_dir)
         .unwrap_or_else(|_| Manifest::fallback(&info.version, info.exe.as_deref()));
 
     let app_dir = std::path::PathBuf::from(&info.install_dir);

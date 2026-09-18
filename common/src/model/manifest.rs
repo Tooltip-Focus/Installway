@@ -2,6 +2,7 @@ use crate::model::feature_mode::FeatureMode;
 use crate::model::file_entry::FileEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Manifest {
@@ -27,6 +28,14 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// Its file name in the uninstall data dir.
+    pub const FILE: &str = "installer_manifest.json";
+
+    /// The manifest kept in the uninstall data dir `data_dir`.
+    pub fn read(data_dir: &Path) -> anyhow::Result<Self> {
+        crate::utils::read_json(data_dir, Self::FILE)
+    }
+
     /// Minimal stand-in when the recorded manifest is missing or unreadable.
     pub fn fallback(version: &str, exe: Option<&str>) -> Self {
         Manifest {

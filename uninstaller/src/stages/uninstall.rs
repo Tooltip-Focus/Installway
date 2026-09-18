@@ -95,7 +95,7 @@ pub fn run(silent: bool) -> Result<()> {
 
     let Some(_instance) = acquire_instance_lock(&data_dir) else {
         common::log::warn("refused: another uninstall is already running for this product");
-        if !silent && let Ok(info) = cleanup::read_info(&data_dir) {
+        if !silent && let Ok(info) = InstallInfo::read(&data_dir) {
             ui::focus_existing(&ui::tr().fmt("uninstall.title", &[("product", &info.product)]));
         }
         return Ok(());
@@ -104,7 +104,7 @@ pub fn run(silent: bool) -> Result<()> {
     // If the metadata is gone, remove the leftovers instead of reporting the
     // unreadable file: that warning goes to the log only. Failing to spawn the
     // finalize step is still surfaced, as a dialog raised by `main`.
-    let info = match cleanup::read_info(&data_dir) {
+    let info = match InstallInfo::read(&data_dir) {
         Ok(i) => i,
         Err(e) => {
             common::log::warn(format!(
@@ -119,7 +119,7 @@ pub fn run(silent: bool) -> Result<()> {
 
     // Manifest may be missing (partial delete). Fall back to empty: file
     // removal no-ops, but shortcuts/registry/dir cleanup still run.
-    let manifest = cleanup::read_manifest(&data_dir).unwrap_or_else(|e| {
+    let manifest = Manifest::read(&data_dir).unwrap_or_else(|e| {
         common::log::warn(format!("manifest unreadable ({e:#}) - skipping file list"));
         Manifest::fallback(&info.version, info.exe.as_deref())
     });

@@ -4,7 +4,7 @@
 //! Compact auto-update UI built on Reactor's component API.
 
 use super::model::{AsyncValue, Progress, Signal, tr, with_payload};
-use crate::extract::{InstallCtx, install};
+use crate::extract::InstallCtx;
 use crate::payload::LoadedPayload;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -228,28 +228,13 @@ fn spawn(job: Job, progress: AsyncValue<Progress>, signal: AsyncValue<Signal>) {
             zip_bytes: loaded.zip(),
             cancel: Arc::new(AtomicBool::new(false)),
             on_progress,
-            plugin_inputs: plugin_inputs.clone(),
+            plugin_inputs,
             requires_admin,
             hwnd_parent: super::active_hwnd(),
             translator: tr(),
         };
-        let installed = match install(ctx) {
-            Ok(installed) => installed,
-            Err(e) => {
-                signal.call(Signal::Error(format!("{e:#}")));
-                return;
-            }
-        };
-        if let Err(e) = crate::install::finalize(
-            &install_dir,
-            &loaded.payload,
-            &loaded.uninstaller_bytes,
-            loaded.zip(),
-            &plugin_inputs,
-            requires_admin,
-            &installed.created_dirs,
-        ) {
-            signal.call(Signal::Error(format!("finalize: {e:#}")));
+        if let Err(e) = crate::install::run(&ctx, &loaded.uninstaller_bytes) {
+            signal.call(Signal::Error(format!("{e:#}")));
             return;
         }
         if launch && let Some(exe) = loaded.payload.manifest.exe.as_deref() {

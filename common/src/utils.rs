@@ -80,23 +80,6 @@ pub fn expand_env(s: &str) -> String {
     String::from_utf16_lossy(&buf[..n])
 }
 
-/// Remove `path`, retrying transient locks. `Ok` if it's already gone.
-pub fn remove_file_retry(path: &Path) -> Result<()> {
-    retry_fs(|| {
-        if !path.exists() {
-            return Ok(());
-        }
-        fs::remove_file(path)
-    })
-    .with_context(|| {
-        format!(
-            "could not remove {} after {} attempts",
-            path.display(),
-            FS_RETRIES
-        )
-    })
-}
-
 /// Recursively remove a directory, retrying through transient locks.
 pub fn remove_dir_retry(dir: &Path) {
     for _ in 0..FS_RETRIES {
@@ -148,6 +131,13 @@ pub fn file_blake3(path: &Path) -> Result<String> {
 
 pub fn bytes_blake3(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
+}
+
+/// Read and parse the JSON file `name` in `dir`.
+pub fn read_json<T: serde::de::DeserializeOwned>(dir: &Path, name: &str) -> Result<T> {
+    let path = dir.join(name);
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parse {name}"))
 }
 
 /// Write a file atomically: write to a sibling `.tmp` then rename over the
@@ -303,17 +293,6 @@ mod tests {
         copy_retry(&src, &dest).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"binary");
         assert!(src.exists()); // copy, not move
-    }
-
-    #[test]
-    fn remove_file_retry_ok_and_idempotent() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("f");
-        fs::write(&p, b"x").unwrap();
-        remove_file_retry(&p).unwrap();
-        assert!(!p.exists());
-        // Already gone -> still Ok.
-        remove_file_retry(&p).unwrap();
     }
 
     #[test]

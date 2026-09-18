@@ -84,7 +84,7 @@ pub fn run(
                 u.plugins,
                 u.base_ctx,
                 u.self_exe,
-                tmp.clone(),
+                Some(tmp.clone()),
             ));
         });
         tmp

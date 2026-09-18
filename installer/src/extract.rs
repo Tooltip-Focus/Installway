@@ -487,16 +487,16 @@ fn verify_and_repair(
     Ok(())
 }
 
-/// A completed [`install`]. Callers keep it alive across `install::finalize`:
-/// dropping the lock earlier would let a second installer start staging while
-/// this one still writes metadata/registry state.
+/// A completed [`install`]. `install::run` keeps it alive across its metadata
+/// step: dropping the lock earlier would let a second installer start staging
+/// while this one still writes metadata/registry state.
 pub struct Installed {
     _lock: InstallLock,
     /// Directories this run created, recorded for the uninstaller.
     pub created_dirs: Vec<PathBuf>,
 }
 
-pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
+pub fn install(ctx: &InstallCtx<'_>) -> Result<Installed> {
     let manifest = &ctx.payload.manifest;
 
     // Log to %TEMP% so diagnostics survive when the install dir isn't writable.
@@ -529,11 +529,11 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
     // creates, so the uninstaller never removes a folder that was already there.
     let created_dirs = dirs_to_create(&ctx.install_dir, manifest);
 
-    check_preconditions(&ctx)?;
+    check_preconditions(ctx)?;
 
     // Pre-install plugins run before any file is staged, so a required failure
     // aborts cleanly (live install untouched).
-    run_zip_plugins(&ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
+    run_zip_plugins(ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
 
     let temp = TempAreas::prepare(&ctx.install_dir)?;
 
@@ -545,7 +545,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
     // as it always has.
     ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
 
-    let to_commit = match stage_all(&ctx, &temp, total_bytes) {
+    let to_commit = match stage_all(ctx, &temp, total_bytes) {
         Ok(v) => v,
         Err(e) => {
             cleanup(&temp.root);
@@ -556,7 +556,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
     // ---- PHASE 2: COMMIT ----------------------------------------------
     // Swap staged files into place. A journal records every touched path so an
     // interruption can be rolled back.
-    let deleted = plan_deletions(&ctx);
+    let deleted = plan_deletions(ctx);
 
     if to_commit.is_empty() && deleted.is_empty() {
         common::log::info("nothing to commit (already up to date)");
@@ -575,7 +575,7 @@ pub fn install(ctx: InstallCtx<'_>) -> Result<Installed> {
         // returns without clearing the temp dir, as it always has.
         write_journal(&temp.root, &to_commit, &deleted)?;
 
-        if let Err(e) = commit_and_verify(&ctx, &temp, &to_commit, &deleted, total_bytes) {
+        if let Err(e) = commit_and_verify(ctx, &temp, &to_commit, &deleted, total_bytes) {
             cleanup(&temp.root);
             return Err(e);
         }
@@ -1187,8 +1187,7 @@ pub(crate) fn prior_install_info_by_ids(
 ) -> Option<(PathBuf, InstallInfo)> {
     for machine in [true, false] {
         if let Some(dir) = common::paths::uninstall_dir_for(publisher, product_id, machine)
-            && let Ok(text) = fs::read_to_string(dir.join("installer_info.json"))
-            && let Ok(info) = serde_json::from_str::<InstallInfo>(&text)
+            && let Ok(info) = InstallInfo::read(&dir)
         {
             return Some((dir, info));
         }
@@ -1632,17 +1631,8 @@ fn repair_corrupt(
 /// files are checked under `info.install_dir` (the app folder). Returns `Err`
 /// if anything is missing or corrupt (exit code 1 for scripts).
 pub fn verify_install(data_dir: &Path) -> Result<()> {
-    let info_path = data_dir.join("installer_info.json");
-    let info_data = fs::read_to_string(&info_path)
-        .with_context(|| format!("read {} - is this product installed?", info_path.display()))?;
-    let info: common::model::install_info::InstallInfo =
-        serde_json::from_str(&info_data).context("parse installer_info.json")?;
-
-    let manifest_path = data_dir.join("installer_manifest.json");
-    let mdata = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("read {}", manifest_path.display()))?;
-    let manifest: Manifest =
-        serde_json::from_str(&mdata).context("parse installer_manifest.json")?;
+    let info = InstallInfo::read(data_dir)?;
+    let manifest = Manifest::read(data_dir)?;
 
     let app_dir = PathBuf::from(&info.install_dir);
 
@@ -2122,7 +2112,7 @@ mod tests {
         cancel: Arc<AtomicBool>,
         on_progress: common::ProgressFn,
     ) -> Result<Installed> {
-        install(InstallCtx {
+        install(&InstallCtx {
             install_dir: dir.to_path_buf(),
             payload,
             zip_bytes: zip,

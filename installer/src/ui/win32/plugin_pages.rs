@@ -15,27 +15,22 @@ use super::{
     BANNER_H, BM_GETCHECK, BM_SETCHECK, ID_HEADER, ID_PLUGIN_BASE, ID_SUBHEADER, PAD, STATE, WIN_H,
     WIN_W, WIZARD,
 };
-use crate::extract::TempDirGuard;
 use crate::ui::helpers;
 pub(super) use crate::ui::wizard_engine::{
-    StepArgs, StepOutcome, run_plugin_then_step, run_step_query,
+    Step, StepOutcome, run_plugin_then_step, run_step_query,
 };
-use crate::ui::wizard_engine::{advance_steps, page_marquee};
 use common::model::choice_style::ChoiceStyle;
+#[cfg(debug_assertions)]
 use common::model::page_step::PageStep;
-use common::model::plugin_ctx::PluginContext;
 use common::model::plugin_page::PluginInputs;
 use common::model::plugin_page::PluginPage;
 use common::model::plugin_widget::PluginWidget;
-use common::plugin::InputsByPlugin;
 use common::utils::wide;
-use std::path::PathBuf;
-use std::sync::Arc;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use std::ops::{Deref, DerefMut};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::BST_CHECKED;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, w};
+use windows::core::w;
 
 const BS_AUTOCHECKBOX: u32 = 0x0003;
 const BS_AUTORADIOBUTTON: u32 = 0x0009;
@@ -91,148 +86,71 @@ fn key(page_id: &str, widget_id: &str) -> String {
     format!("{page_id}.{widget_id}")
 }
 
-/// What the caller does after a wizard transition.
-pub(super) enum Step {
-    /// Render the now-current page (controls already built).
-    Show,
-    /// Every plugin finished — proceed to install with [`Wizard::inputs`].
-    Install,
-    /// Validation failed; stay on the current page (already warned).
-    Stay,
-    /// Backed out before the first plugin page — return to the built-in flow.
-    Exit,
-    /// Page had `buttons: false` — run the plugin's `up` in the background.
-    AutoRun { marquee: bool },
-}
-
-/// One shown page in the current plugin's path (kept for Back).
-struct Frame {
-    slot: usize,
-    page: PluginPage,
-    back: bool,
-    notice: String,
-}
-
-/// Drives the per-plugin step loop: ask the plugin for the next page given the
-/// answers so far, render it, collect, repeat until `Done`, then the next plugin.
-/// The plugin stays a stateless step function; all state lives here.
+/// The plugin-page wizard, with the controls it builds for each page.
 ///
 /// Pages are built on demand (one slot of controls each) and only shown/hidden —
 /// never destroyed; a back-then-branch leaves a few hidden orphan controls, freed
 /// at window close. Going Back just re-shows a prior page's retained controls.
 pub(super) struct Wizard {
-    plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>, // (entry, extracted dll)
-    base_ctx: PluginContext,
-    self_exe: PathBuf,
-    /// Keeps the extracted-DLL temp dir alive. Shared (via `Arc`) into every
-    /// background step query so a detached query thread can't read a DLL after
-    /// the dir is removed (e.g. the user closed the window mid-query). `None` for
-    /// the canned preview wizard (no real DLLs, no background thread).
-    tmp: Option<Arc<TempDirGuard>>,
-    cur: usize,            // current plugin index
-    answers: PluginInputs, // current plugin's answers (committed pages + last shown)
-    stack: Vec<Frame>,     // current plugin's path; last = shown page
-    finished: InputsByPlugin,
+    /// The shared wizard state; each frame's UI state is its control slot.
+    flow: crate::ui::wizard_engine::Wizard<usize>,
     next_slot: usize,
-    next_id: usize, // running control-id allocator (unique across pages)
-    /// Preview/test: replay these steps instead of spawning a plugin.
-    canned: Option<std::collections::VecDeque<PageStep>>,
+    /// Running control-id allocator (unique across pages).
+    next_id: usize,
+}
+
+impl Deref for Wizard {
+    type Target = crate::ui::wizard_engine::Wizard<usize>;
+    fn deref(&self) -> &Self::Target {
+        &self.flow
+    }
+}
+
+impl DerefMut for Wizard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.flow
+    }
 }
 
 impl Wizard {
     pub(super) fn new(
-        plugins: Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
-        base_ctx: PluginContext,
-        self_exe: PathBuf,
-        tmp: Arc<TempDirGuard>,
+        plugins: Vec<(common::model::plugin_entry::PluginEntry, std::path::PathBuf)>,
+        base_ctx: common::model::plugin_ctx::PluginContext,
+        self_exe: std::path::PathBuf,
+        tmp: Option<std::sync::Arc<crate::extract::TempDirGuard>>,
     ) -> Self {
-        Wizard {
-            plugins,
-            base_ctx,
-            self_exe,
-            tmp: Some(tmp),
-            cur: 0,
-            answers: PluginInputs::new(),
-            stack: Vec::new(),
-            finished: InputsByPlugin::new(),
-            next_slot: 0,
-            next_id: ID_PLUGIN_BASE,
-            canned: None,
-        }
+        Self::with_flow(crate::ui::wizard_engine::Wizard::new(
+            plugins, base_ctx, self_exe, tmp,
+        ))
     }
 
-    /// A preview/test wizard that replays `steps` for one synthetic plugin.
+    /// A preview wizard that replays `steps` for one synthetic plugin.
     #[cfg(debug_assertions)]
     pub(super) fn canned(steps: Vec<PageStep>) -> Self {
-        let mut w = Wizard {
-            plugins: Vec::new(),
-            base_ctx: PluginContext::default(),
-            self_exe: PathBuf::new(),
-            tmp: None,
-            cur: 0,
-            answers: PluginInputs::new(),
-            stack: Vec::new(),
-            finished: InputsByPlugin::new(),
+        Self::with_flow(crate::ui::wizard_engine::Wizard::canned(steps))
+    }
+
+    fn with_flow(flow: crate::ui::wizard_engine::Wizard<usize>) -> Self {
+        Wizard {
+            flow,
             next_slot: 0,
             next_id: ID_PLUGIN_BASE,
-            canned: None,
-        };
-        w.plugins.push((
-            common::model::plugin_entry::PluginEntry::default(),
-            PathBuf::new(),
-        ));
-        w.canned = Some(steps.into());
-        w
-    }
-
-    /// Whether the current page opts in to Back (plugin can disable per page).
-    pub(super) fn wants_back(&self) -> bool {
-        self.stack.last().map(|f| f.back).unwrap_or(false)
-    }
-    /// Whether there's a previous plugin page to step back to.
-    pub(super) fn can_pop(&self) -> bool {
-        self.stack.len() > 1
-    }
-    pub(super) fn current_slot(&self) -> Option<usize> {
-        self.stack.last().map(|f| f.slot)
-    }
-    pub(super) fn current_title(&self) -> (String, String) {
-        match self.stack.last() {
-            Some(f) => {
-                let sub = if f.notice.is_empty() {
-                    f.page.subtitle.clone()
-                } else {
-                    f.notice.clone()
-                };
-                (f.page.title.clone(), sub)
-            }
-            None => (String::new(), String::new()),
         }
     }
-    /// Final answers, routed per plugin, for the install worker.
-    pub(super) fn inputs(&self) -> InputsByPlugin {
-        self.finished.clone()
-    }
 
-    /// Advance the canned (preview) wizard by replaying its queued steps through
-    /// the same [`advance_steps`] engine the real async path uses, so the preview
-    /// can't drift from production behavior. Synchronous (no subprocess), so it
-    /// runs straight on the UI thread.
-    unsafe fn step_canned(&mut self, hwnd: HWND) -> Step {
-        let mut queued = self.canned.take().unwrap_or_default();
-        let answers = std::mem::take(&mut self.answers);
-        let finished = std::mem::take(&mut self.finished);
-        let outcome = advance_steps(&self.plugins, self.cur, answers, finished, |_, _, _| {
-            Ok(queued.pop_front().unwrap_or(PageStep::Done))
-        });
-        self.canned = Some(queued);
-        unsafe { self.apply_step_outcome(hwnd, outcome) }
+    pub(super) fn current_slot(&self) -> Option<usize> {
+        self.current().map(|f| f.ui)
     }
 
     /// First page of the whole flow (canned preview only — the real wizard
     /// dispatches a background query; see `handlers::dispatch_plugin_query`).
     pub(super) unsafe fn start(&mut self, hwnd: HWND) -> Step {
-        unsafe { self.step_canned(hwnd) }
+        let Wizard {
+            flow,
+            next_slot,
+            next_id,
+        } = self;
+        flow.step_canned(|page| unsafe { build_page(hwnd, page, next_slot, next_id) })
     }
 
     /// Collect the current page, then replay the next canned step.
@@ -240,25 +158,11 @@ impl Wizard {
         if !unsafe { self.collect_page(hwnd) } {
             return Step::Stay; // required field missing (already warned)
         }
-        unsafe { self.step_canned(hwnd) }
+        unsafe { self.start(hwnd) }
     }
 
-    /// Step back to the previous page, or signal Exit at the first page.
-    pub(super) fn back(&mut self) -> Step {
-        if self.stack.len() > 1 {
-            self.stack.pop();
-            Step::Show
-        } else {
-            Step::Exit
-        }
-    }
-
-    pub(super) fn is_canned(&self) -> bool {
-        self.canned.is_some()
-    }
-
-    /// Collect the current page's answers into `self.answers`. Returns `false`
-    /// (after warning the user) when a required field is empty. UI thread only.
+    /// Collect the current page's answers. Returns `false` (after warning the
+    /// user) when a required field is empty. UI thread only.
     pub(super) unsafe fn collect_page(&mut self, hwnd: HWND) -> bool {
         let Some(slot) = self.current_slot() else {
             return true;
@@ -266,110 +170,61 @@ impl Wizard {
         let Some(vals) = (unsafe { collect_slot(hwnd, slot) }) else {
             return false;
         };
-        self.answers.extend(vals);
+        let mut answers = self.answers().clone();
+        answers.extend(vals);
+        self.commit(answers);
         true
     }
 
-    /// Extract state for a background `run_step_query` call. `None` when all
-    /// plugins are already exhausted.
-    pub(super) fn step_args(&self) -> Option<StepArgs> {
-        if self.cur >= self.plugins.len() {
-            return None;
-        }
-        Some(StepArgs {
-            self_exe: self.self_exe.clone(),
-            base_ctx: self.base_ctx.clone(),
-            plugins: self.plugins.clone(),
-            cur: self.cur,
-            answers: self.answers.clone(),
-            finished: self.finished.clone(),
-            keepalive: self.tmp.clone(),
-            on_progress: None,
+    /// Apply a `StepOutcome` from the background thread, building the new
+    /// page's controls. UI thread only.
+    pub(super) unsafe fn apply_step_outcome(&mut self, hwnd: HWND, outcome: StepOutcome) -> Step {
+        let Wizard {
+            flow,
+            next_slot,
+            next_id,
+        } = self;
+        flow.apply_outcome(outcome, |page| unsafe {
+            build_page(hwnd, page, next_slot, next_id)
         })
     }
+}
 
-    /// Apply a `StepOutcome` from the background thread: update Wizard state
-    /// and (for `Page`) build the new page's controls. UI thread only.
-    pub(super) unsafe fn apply_step_outcome(&mut self, hwnd: HWND, outcome: StepOutcome) -> Step {
-        match outcome {
-            StepOutcome::Install(finished) => {
-                self.finished = finished;
-                Step::Install
-            }
-            StepOutcome::Page {
-                cur,
-                answers,
-                finished,
-                page,
-                notice,
-                back,
-            } => {
-                if cur != self.cur {
-                    self.stack.clear();
-                }
-                self.cur = cur;
-                self.answers = answers;
-                self.finished = finished;
-                let auto_run = !page.buttons;
-                let marquee = page_marquee(&page);
-                unsafe { self.push(hwnd, page, notice, back) };
-                if auto_run {
-                    Step::AutoRun { marquee }
-                } else {
-                    Step::Show
-                }
-            }
-        }
+/// Build one page's controls in a fresh slot, returned for its frame.
+unsafe fn build_page(
+    hwnd: HWND,
+    page: &PluginPage,
+    next_slot: &mut usize,
+    next_id: &mut usize,
+) -> usize {
+    let slot = *next_slot;
+    *next_slot += 1;
+    let content_w = WIN_W - PAD * 2;
+    let mut y = BANNER_H + PAD + 8;
+    let mut fields = Vec::new();
+    for widget in &page.widgets {
+        let f = unsafe { build_widget(hwnd, slot, &page.id, widget, content_w, &mut y, next_id) };
+        fields.push(f);
     }
-
-    /// Build one page's controls (a fresh slot) and make it the current frame.
-    unsafe fn push(&mut self, hwnd: HWND, page: PluginPage, notice: String, back: bool) {
-        let slot = self.next_slot;
-        self.next_slot += 1;
-        let hinst = HINSTANCE(unsafe { GetModuleHandleW(PCWSTR::null()).unwrap_or_default() }.0);
-        let content_w = WIN_W - PAD * 2;
-        let mut y = BANNER_H + PAD + 8;
-        let mut fields = Vec::new();
-        for widget in &page.widgets {
-            let f = unsafe {
-                build_widget(
-                    hwnd,
-                    hinst,
-                    slot,
-                    &page.id,
-                    widget,
-                    content_w,
-                    &mut y,
-                    &mut self.next_id,
-                )
-            };
-            fields.push(f);
-        }
-        // Button row occupies the bottom ~84 px; content past that is clipped.
-        let content_limit = WIN_H - 84;
-        if y > content_limit {
-            common::log::warn(format!(
-                "plugin page '{}': content {}px exceeds window {}px — bottom widgets clipped",
-                page.id, y, content_limit
-            ));
-        }
-        let dpi = STATE.with(|s| {
-            if let Some(st) = s.borrow().as_ref() {
-                st.borrow_mut().plugin_fields.extend(fields);
-                st.borrow().dpi
-            } else {
-                96
-            }
-        });
-        self.stack.push(Frame {
-            slot,
-            page,
-            back,
-            notice,
-        });
-        relayout(hwnd, dpi);
-        apply_fonts(hwnd);
+    // Button row occupies the bottom ~84 px; content past that is clipped.
+    let content_limit = WIN_H - 84;
+    if y > content_limit {
+        common::log::warn(format!(
+            "plugin page '{}': content {}px exceeds window {}px — bottom widgets clipped",
+            page.id, y, content_limit
+        ));
     }
+    let dpi = STATE.with(|s| {
+        if let Some(st) = s.borrow().as_ref() {
+            st.borrow_mut().plugin_fields.extend(fields);
+            st.borrow().dpi
+        } else {
+            96
+        }
+    });
+    relayout(hwnd, dpi);
+    apply_fonts(hwnd);
+    slot
 }
 
 // ---- Auto-run helpers ---------------------------------------------------
@@ -452,7 +307,6 @@ pub(super) fn update_current_progress(hwnd: HWND, scaled: i32) {
 #[allow(clippy::too_many_arguments)]
 unsafe fn build_label_row(
     hwnd: HWND,
-    hinst: HINSTANCE,
     x: i32,
     y: &mut i32,
     content_w: i32,
@@ -466,15 +320,13 @@ unsafe fn build_label_row(
     let lid = *next_id;
     *next_id += 1;
     unsafe {
-        mk(
+        helpers::child_ex(
             hwnd,
-            hinst,
+            WINDOW_EX_STYLE(0),
             w!("STATIC"),
             label,
-            WINDOW_STYLE(0),
-            WINDOW_EX_STYLE(0),
+            WS_CLIPSIBLINGS | WINDOW_STYLE(0),
             lid,
-            (x, *y, content_w, 20),
         );
     }
     rects.push((lid, x, *y, content_w, 20));
@@ -486,7 +338,6 @@ unsafe fn build_label_row(
 #[allow(clippy::too_many_arguments)]
 unsafe fn build_widget(
     hwnd: HWND,
-    hinst: HINSTANCE,
     page: usize,
     page_id: &str,
     widget: &PluginWidget,
@@ -500,15 +351,13 @@ unsafe fn build_widget(
             let id = *next_id;
             *next_id += 1;
             unsafe {
-                mk(
+                helpers::child_ex(
                     hwnd,
-                    hinst,
+                    WINDOW_EX_STYLE(0),
                     w!("STATIC"),
                     text,
-                    WINDOW_STYLE(0),
-                    WINDOW_EX_STYLE(0),
+                    WS_CLIPSIBLINGS | WINDOW_STYLE(0),
                     id,
-                    (x, *y, content_w, 20),
                 );
             }
             let rects = vec![(id, x, *y, content_w, 20)];
@@ -534,7 +383,7 @@ unsafe fn build_widget(
             multiline,
         } => {
             let mut rects = Vec::new();
-            unsafe { build_label_row(hwnd, hinst, x, y, content_w, label, next_id, &mut rects) };
+            unsafe { build_label_row(hwnd, x, y, content_w, label, next_id, &mut rects) };
             let mut alloc = || {
                 let id = *next_id;
                 *next_id += 1;
@@ -553,15 +402,13 @@ unsafe fn build_widget(
             let h_px = if *multiline { 72 } else { 28 };
             let eid = alloc();
             unsafe {
-                let h = mk(
+                let h = helpers::child_ex(
                     hwnd,
-                    hinst,
+                    WS_EX_CLIENTEDGE,
                     w!("EDIT"),
                     default,
-                    style,
-                    WS_EX_CLIENTEDGE,
+                    WS_CLIPSIBLINGS | style,
                     eid,
-                    (x, *y, content_w, h_px),
                 );
                 if !placeholder.is_empty() && !*multiline {
                     let p = wide(placeholder);
@@ -593,15 +440,13 @@ unsafe fn build_widget(
             let cid = *next_id;
             *next_id += 1;
             unsafe {
-                let h = mk(
+                let h = helpers::child_ex(
                     hwnd,
-                    hinst,
+                    WINDOW_EX_STYLE(0),
                     w!("BUTTON"),
                     label,
-                    WINDOW_STYLE(BS_AUTOCHECKBOX) | WS_TABSTOP,
-                    WINDOW_EX_STYLE(0),
+                    WS_CLIPSIBLINGS | WINDOW_STYLE(BS_AUTOCHECKBOX) | WS_TABSTOP,
                     cid,
-                    (x, *y, content_w, 22),
                 );
                 if *default {
                     SendMessageW(
@@ -633,7 +478,7 @@ unsafe fn build_widget(
             required,
         } => {
             let mut rects = Vec::new();
-            unsafe { build_label_row(hwnd, hinst, x, y, content_w, label, next_id, &mut rects) };
+            unsafe { build_label_row(hwnd, x, y, content_w, label, next_id, &mut rects) };
             let mut alloc = || {
                 let id = *next_id;
                 *next_id += 1;
@@ -650,15 +495,16 @@ unsafe fn build_widget(
                     unsafe {
                         // The height arg is the dropped-down extent; the closed box
                         // occupies one row, so the cursor only advances ~28.
-                        let h = mk(
+                        let h = helpers::child_ex(
                             hwnd,
-                            hinst,
+                            WINDOW_EX_STYLE(0),
                             w!("COMBOBOX"),
                             "",
-                            WINDOW_STYLE(CBS_DROPDOWNLIST) | WS_TABSTOP | WS_VSCROLL_S,
-                            WINDOW_EX_STYLE(0),
+                            WS_CLIPSIBLINGS
+                                | WINDOW_STYLE(CBS_DROPDOWNLIST)
+                                | WS_TABSTOP
+                                | WS_VSCROLL_S,
                             cid,
-                            (x, *y, content_w, 200),
                         );
                         for o in options {
                             let s = wide(&o.label);
@@ -693,15 +539,13 @@ unsafe fn build_widget(
                             WINDOW_STYLE(BS_AUTORADIOBUTTON) | WS_TABSTOP
                         };
                         unsafe {
-                            let h = mk(
+                            let h = helpers::child_ex(
                                 hwnd,
-                                hinst,
+                                WINDOW_EX_STYLE(0),
                                 w!("BUTTON"),
                                 &o.label,
-                                style,
-                                WINDOW_EX_STYLE(0),
+                                WS_CLIPSIBLINGS | style,
                                 rid,
-                                (x + 16, *y, content_w - 16, 22),
                             );
                             if i == default_idx {
                                 SendMessageW(
@@ -737,7 +581,7 @@ unsafe fn build_widget(
             required,
         } => {
             let mut rects = Vec::new();
-            unsafe { build_label_row(hwnd, hinst, x, y, content_w, label, next_id, &mut rects) };
+            unsafe { build_label_row(hwnd, x, y, content_w, label, next_id, &mut rects) };
             let mut alloc = || {
                 let id = *next_id;
                 *next_id += 1;
@@ -748,15 +592,13 @@ unsafe fn build_widget(
             for o in options {
                 let cid = alloc();
                 unsafe {
-                    let h = mk(
+                    let h = helpers::child_ex(
                         hwnd,
-                        hinst,
+                        WINDOW_EX_STYLE(0),
                         w!("BUTTON"),
                         &o.label,
-                        WINDOW_STYLE(BS_AUTOCHECKBOX) | WS_TABSTOP,
-                        WINDOW_EX_STYLE(0),
+                        WS_CLIPSIBLINGS | WINDOW_STYLE(BS_AUTOCHECKBOX) | WS_TABSTOP,
                         cid,
-                        (x + 16, *y, content_w - 16, 22),
                     );
                     if default.contains(&o.value) {
                         SendMessageW(
@@ -786,15 +628,13 @@ unsafe fn build_widget(
             let id = *next_id;
             *next_id += 1;
             unsafe {
-                mk(
+                helpers::child_ex(
                     hwnd,
-                    hinst,
+                    WINDOW_EX_STYLE(0),
                     w!("msctls_progress32"),
                     "",
-                    WINDOW_STYLE(0),
-                    WINDOW_EX_STYLE(0),
+                    WS_CLIPSIBLINGS | WINDOW_STYLE(0),
                     id,
-                    (x, *y, content_w, 20),
                 );
             }
             let rects = vec![(id, x, *y, content_w, 20)];
@@ -812,39 +652,6 @@ unsafe fn build_widget(
     }
 }
 
-/// Create one hidden child control. The window text is copied by Win32, so the
-/// wide buffer need not outlive this call.
-#[allow(clippy::too_many_arguments)]
-unsafe fn mk(
-    hwnd: HWND,
-    hinst: HINSTANCE,
-    class: PCWSTR,
-    text: &str,
-    style: WINDOW_STYLE,
-    ex: WINDOW_EX_STYLE,
-    id: usize,
-    r: (i32, i32, i32, i32),
-) -> HWND {
-    let t = wide(text);
-    unsafe {
-        CreateWindowExW(
-            ex,
-            class,
-            PCWSTR(t.as_ptr()),
-            WS_CHILD | WS_CLIPSIBLINGS | style,
-            r.0,
-            r.1,
-            r.2,
-            r.3,
-            Some(hwnd),
-            Some(HMENU(id as *mut _)),
-            Some(hinst),
-            None,
-        )
-        .unwrap_or_default()
-    }
-}
-
 fn with_state<F: FnOnce(&super::UiState)>(f: F) {
     STATE.with(|st| {
         let Some(state) = st.borrow().as_ref().cloned() else {
@@ -856,15 +663,9 @@ fn with_state<F: FnOnce(&super::UiState)>(f: F) {
 
 /// Reposition every plugin control for `dpi` (mirrors `views::relayout`).
 pub(super) fn relayout(hwnd: HWND, dpi: i32) {
-    let s = |v: i32| helpers::scale(v, dpi);
-    with_state(|state| unsafe {
+    with_state(|state| {
         for f in &state.plugin_fields {
-            for &(id, x, y, w, h) in &f.rects {
-                let ctrl = GetDlgItem(Some(hwnd), id as i32).unwrap_or_default();
-                if !ctrl.is_invalid() {
-                    let _ = MoveWindow(ctrl, s(x), s(y), s(w), s(h), true);
-                }
-            }
+            helpers::move_controls(hwnd, dpi, &f.rects);
         }
     });
 }
@@ -873,11 +674,9 @@ pub(super) fn relayout(hwnd: HWND, dpi: i32) {
 pub(super) fn apply_fonts(hwnd: HWND) {
     with_state(|state| {
         let font = state.font_normal;
-        unsafe {
-            for f in &state.plugin_fields {
-                for &(id, ..) in &f.rects {
-                    helpers::set_font(hwnd, id, font);
-                }
+        for f in &state.plugin_fields {
+            for &(id, ..) in &f.rects {
+                helpers::set_font(hwnd, id, font);
             }
         }
     });
@@ -910,10 +709,8 @@ pub(super) unsafe fn set_banner(hwnd: HWND) {
             .map(|z| z.current_title())
             .unwrap_or_default()
     });
-    unsafe {
-        helpers::set_dlg_text(hwnd, ID_HEADER, &title);
-        helpers::set_dlg_text(hwnd, ID_SUBHEADER, &subtitle);
-    }
+    helpers::set_dlg_text(hwnd, ID_HEADER, &title);
+    helpers::set_dlg_text(hwnd, ID_SUBHEADER, &subtitle);
 }
 
 /// A field snapshot taken under the `STATE` borrow: `(kind, required, key,
