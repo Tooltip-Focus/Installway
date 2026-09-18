@@ -254,7 +254,7 @@ fn spawn_worker(
         // Pre-flight write test — same check as the interactive wizard.
         let needs_elevation = !common::elevation::is_already_elevated()
             && matches!(
-                crate::extract::probe_writable(&install_dir),
+                crate::extract::check_writable_dry_run(&install_dir),
                 Err(ref e) if e.is::<crate::extract::PermissionDeniedError>()
             );
 

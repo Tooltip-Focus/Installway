@@ -67,7 +67,7 @@ wins. Required fields are checked after merging. See
 | `--skip-license` | Off | Hide the License page. |
 | `--skip-path` | Off | Hide the Choose-location page. |
 | `--install-dir-restriction <enforce\|default-dir-only\|bypass>` | `enforce` | Non-empty-folder guard for fresh interactive installs. See [Wizard pages and install location](../packaging/wizard.md#the-non-empty-folder-guard). |
-| `--uninstall-dir-policy <tracked\|purge>` | `tracked` | What the uninstaller removes from the install folder. See [Uninstall](../running/uninstall.md#the-install-folder). |
+| `--uninstall-dir-policy <purge\|tracked>` | `purge` | What the uninstaller removes from the install folder. See [Uninstall](../running/uninstall.md#the-install-folder). |
 | `--launch-option <checked\|unchecked\|hidden>` | `checked` | State of the final-page "launch now" checkbox. |
 | `--upgrade-minimal-ui` | Off | Upgrades use the compact minimal UI; a first install still gets the wizard. |
 | `--show-uninstall-complete` | Off | Show a confirmation message box at the end of an interactive uninstall. |

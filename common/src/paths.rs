@@ -10,7 +10,7 @@
 //! Per-user install:    `%LOCALAPPDATA%\<publisher>\Uninstall\<product>\`
 //! Machine-wide install: `%ProgramData%\<publisher>\Uninstall\<product>\`
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Per-user uninstall data dir (`%LOCALAPPDATA%`). `None` if env var missing.
 pub fn uninstall_dir(publisher: &str, product_id: &str) -> Option<PathBuf> {
@@ -69,20 +69,29 @@ pub fn is_machine_location(dir: &Path) -> bool {
 /// Case-insensitive, component-wise "is `dir` inside `root` (or equal)". Compares
 /// whole components so `C:\Program Files Xtra` is not treated as under
 /// `C:\Program Files`.
-fn path_under(dir: &Path, root: &Path) -> bool {
-    let norm = |p: &Path| -> Vec<String> {
-        p.components()
-            .filter_map(|c| match c {
-                std::path::Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
-                std::path::Component::Prefix(p) => {
-                    Some(p.as_os_str().to_string_lossy().to_lowercase())
-                }
-                _ => None,
-            })
-            .collect()
-    };
-    let (d, r) = (norm(dir), norm(root));
+pub fn path_under(dir: &Path, root: &Path) -> bool {
+    let (d, r) = (path_components(dir), path_components(root));
     !r.is_empty() && d.len() >= r.len() && d[..r.len()] == r[..]
+}
+
+/// Whether `a` and `b` name the same Windows path, whatever the case, separators
+/// or trailing `\`. A path holding `..` never matches: it is not resolved.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    let has_parent_dir = |p: &Path| p.components().any(|c| c == Component::ParentDir);
+    !has_parent_dir(a) && !has_parent_dir(b) && path_components(a) == path_components(b)
+}
+
+/// The lowercased prefix and normal components of a Windows path, so different
+/// spellings of one folder (case, separators, trailing `\`) compare equal.
+/// `..` is dropped, not resolved: reject such paths first where it matters.
+pub fn path_components(p: &Path) -> Vec<String> {
+    p.components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
+            Component::Prefix(p) => Some(p.as_os_str().to_string_lossy().to_lowercase()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Make a string safe to use as a single path component: drop characters
@@ -147,6 +156,16 @@ mod tests {
             Path::new(r"C:\Users\bob\AppData\Local\Programs\MyApp"),
             root
         ));
+    }
+
+    #[test]
+    fn same_path_ignores_spelling_but_not_parent_dirs() {
+        assert!(same_path(
+            Path::new("C:/Program Files/App"),
+            Path::new(r"c:\program files\app\")
+        ));
+        assert!(!same_path(Path::new(r"C:\App"), Path::new(r"C:\Other")));
+        assert!(!same_path(Path::new(r"C:\App\.."), Path::new(r"C:\App")));
     }
 
     #[test]

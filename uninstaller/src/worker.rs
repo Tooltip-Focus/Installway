@@ -51,7 +51,7 @@ fn uninstall(pipe: &mut File) -> Result<()> {
             common::log::warn(format!(
                 "installer_info.json unreadable ({e:#}) - best-effort cleanup of leftovers"
             ));
-            return crate::stages::uninstall::spawn_finalize(None, &data_dir, None, false);
+            return crate::stages::uninstall::spawn_finalize(&data_dir, None, false);
         }
     };
 
@@ -87,7 +87,6 @@ fn uninstall(pipe: &mut File) -> Result<()> {
     );
 
     crate::stages::uninstall::spawn_finalize(
-        Some(&app_dir),
         &data_dir,
         Some(&info.product),
         info.show_uninstall_complete,

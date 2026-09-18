@@ -9,6 +9,7 @@ use common::model::plugin_phase::PluginPhase;
 use common::model::registry_entry::RegistryEntry;
 use common::model::registry_value::RegistryValue;
 use common::model::shortcut_entry::ShortcutEntry;
+use common::paths::{path_components, same_path};
 use common::utils::{days_to_ymd, wide};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -243,14 +244,13 @@ fn merge_created_dirs(
     install_dir: &Path,
     created_now: &[PathBuf],
 ) -> Vec<String> {
-    let key = |p: &str| p.replace('/', "\\").trim_end_matches('\\').to_lowercase();
-    let same_dir = |i: &&InstallInfo| key(&i.install_dir) == key(&install_dir.to_string_lossy());
+    let key = |p: &str| path_components(Path::new(p));
     let mut dirs: Vec<String> = prior
-        .filter(same_dir)
+        .filter(|i| same_path(Path::new(&i.install_dir), install_dir))
         .map(|i| i.created_dirs.clone())
         .unwrap_or_default();
     dirs.extend(created_now.iter().map(|d| d.to_string_lossy().into_owned()));
-    dirs.sort_by_key(|d| key(d));
+    dirs.sort_by_cached_key(|d| key(d));
     dirs.dedup_by_key(|d| key(d));
     dirs
 }
@@ -686,12 +686,11 @@ mod tests {
     }
 
     fn prior_info(install_dir: &str, created_dirs: &[&str]) -> InstallInfo {
-        serde_json::from_value(serde_json::json!({
-            "product": "P", "version": "1.0", "install_dir": install_dir,
-            "installed_at_unix": 0, "registry_key": "P",
-            "created_dirs": created_dirs,
-        }))
-        .unwrap()
+        InstallInfo {
+            install_dir: install_dir.into(),
+            created_dirs: created_dirs.iter().map(|d| d.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     #[test]
