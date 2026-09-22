@@ -505,7 +505,7 @@ pub(super) unsafe fn update_progress(hwnd: HWND) {
         set_progress(hwnd, ID_PROGRESS, scaled);
         let pct = scaled / 100;
         let txt = if total > 0 {
-            format!("{}%   ({} / {} bytes)\n{}", pct, done, total, name)
+            format!("{}%\n{}", pct, name)
         } else {
             name
         };

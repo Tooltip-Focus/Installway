@@ -369,10 +369,7 @@ fn progress_view(model: &Model, set: &SetState<Model>) -> Element {
     } else if model.cancelling {
         tr().get("install.cancelling")
     } else if p.total > 0 {
-        format!(
-            "{}%   ({} / {} bytes)\n{}",
-            fraction as u32, p.done, p.total, p.name
-        )
+        format!("{}%\n{}", fraction as u32, p.name)
     } else {
         p.name.clone()
     };
