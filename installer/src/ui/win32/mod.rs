@@ -67,6 +67,7 @@ pub(super) const ID_PATH_WARN: usize = 1017;
 pub(super) const ID_PATH_WARN_ICON: usize = 1018;
 pub(super) const ID_ERROR_BOX: usize = 1019;
 pub(super) const ID_ERROR_ICON: usize = 1020;
+pub(super) const ID_STATUS_FILE: usize = 1021;
 
 /// `SetTimer` id used to poll install progress on the UI thread during the
 /// Progress phase. The worker only writes the shared `ProgressState`; the UI
@@ -518,7 +519,7 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
                     {
                         p.done = 7_700_000;
                         p.total = 12_345_678;
-                        p.name = "bin/app.exe".to_string();
+                        p.name = crate::ui::SAMPLE_FILE.to_string();
                     }
                 });
                 handlers::update_progress(hwnd);
@@ -610,6 +611,7 @@ pub(super) unsafe fn apply_phase(hwnd: HWND, phase: Phase) {
 
     show(ID_PROGRESS, prog);
     show(ID_STATUS, matches!(phase, Phase::Progress | Phase::Done));
+    show(ID_STATUS_FILE, phase == Phase::Progress);
     show(ID_ERROR_BOX, phase == Phase::Error);
     show(ID_ERROR_ICON, phase == Phase::Error);
 

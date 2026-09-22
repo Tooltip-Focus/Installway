@@ -364,14 +364,17 @@ fn progress_view(model: &Model, set: &SetState<Model>) -> Element {
     } else {
         0.0
     };
-    let status = if done {
-        tr().get("install.done")
+    let (status, file) = if done {
+        (tr().get("install.done"), String::new())
     } else if model.cancelling {
-        tr().get("install.cancelling")
+        (tr().get("install.cancelling"), String::new())
     } else if p.total > 0 {
-        format!("{}%\n{}", fraction as u32, p.name)
+        (
+            format!("{}%", fraction as u32),
+            crate::ui::display_path(&p.name),
+        )
     } else {
-        p.name.clone()
+        (p.name.clone(), String::new())
     };
 
     let mut rows: Vec<Element> = vec![
@@ -382,11 +385,17 @@ fn progress_view(model: &Model, set: &SetState<Model>) -> Element {
                 .maximum(100.0)
                 .horizontal_alignment(HorizontalAlignment::Stretch),
         ),
-        text_block(status)
-            .wrap()
-            .foreground(ThemeBrush::PrimaryText)
-            .height(48.0)
-            .into(),
+        vstack(vec![
+            text_block(status)
+                .foreground(ThemeBrush::PrimaryText)
+                .into(),
+            Element::from(super::path_line(&file, |t| {
+                t.foreground(ThemeBrush::PrimaryText)
+            })),
+        ])
+        .spacing(4.0)
+        .height(48.0)
+        .into(),
     ];
     if done && launch_option() != LaunchOption::Hidden {
         rows.push(
@@ -1065,7 +1074,7 @@ fn apply_preview(m: &mut Model, phase: Phase, feed: &Feed, seq: &HookRef<u64>) {
         Phase::Progress => feed.progress.call(Progress {
             done: 7_700_000,
             total: 12_345_678,
-            name: "bin/app.exe".to_string(),
+            name: crate::ui::SAMPLE_FILE.to_string(),
         }),
         Phase::Done => {
             feed.progress.call(Progress {

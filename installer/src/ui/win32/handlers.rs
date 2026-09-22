@@ -7,8 +7,8 @@
 
 use super::{
     BM_GETCHECK, ID_ACCEPT_CHK, ID_BACK_BTN, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_NEXT_BTN,
-    ID_PATH_EDIT, ID_PATH_WARN, ID_PATH_WARN_ICON, ID_PROGRESS, ID_STATUS, PAYLOAD, Phase, STATE,
-    WIZARD, apply_phase, message_box, tr,
+    ID_PATH_EDIT, ID_PATH_WARN, ID_PATH_WARN_ICON, ID_PROGRESS, ID_STATUS, ID_STATUS_FILE, PAYLOAD,
+    Phase, STATE, WIZARD, apply_phase, message_box, tr,
 };
 use crate::extract::InstallCtx;
 use crate::install as install_mod;
@@ -504,12 +504,13 @@ pub(super) unsafe fn update_progress(hwnd: HWND) {
         let scaled = scale_progress(done, total);
         set_progress(hwnd, ID_PROGRESS, scaled);
         let pct = scaled / 100;
-        let txt = if total > 0 {
-            format!("{}%\n{}", pct, name)
+        let (status, file) = if total > 0 {
+            (format!("{}%", pct), crate::ui::display_path(&name))
         } else {
-            name
+            (name, String::new())
         };
-        set_dlg_text(hwnd, ID_STATUS, &txt);
+        set_dlg_text(hwnd, ID_STATUS, &status);
+        set_dlg_text(hwnd, ID_STATUS_FILE, &file);
     });
 }
 
