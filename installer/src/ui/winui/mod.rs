@@ -14,8 +14,8 @@ mod worker;
 
 use anyhow::Result;
 use model::{
-    BANNER_URI, DEFAULT_PATH, LAUNCH_FLAG, PAYLOAD, RESTRICTION, SIGNAL_SINK, SKIP_LICENSE,
-    SKIP_PATH, Signal, WIZARD,
+    BANNER_DARK_URI, BANNER_URI, DEFAULT_PATH, LAUNCH_FLAG, PAYLOAD, RESTRICTION, SIGNAL_SINK,
+    SKIP_LICENSE, SKIP_PATH, Signal, WIZARD,
 };
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -126,15 +126,27 @@ fn seed_config(
     RESTRICTION.with(|r| *r.borrow_mut() = loaded.payload.install_dir_restriction);
     DEFAULT_PATH.with(|d| *d.borrow_mut() = default_path.to_string_lossy().into_owned());
     model::set_translator(translator);
-    stage_banner(loaded.banner_png.as_deref());
+    stage_banner(loaded.banner_png.as_deref(), Theme::Light);
+    stage_banner(loaded.banner_dark_png.as_deref(), Theme::Dark);
 }
 
-fn stage_banner(png: Option<&[u8]>) {
+/// Which banner slot a PNG fills.
+#[derive(Clone, Copy)]
+enum Theme {
+    Light,
+    Dark,
+}
+
+fn stage_banner(png: Option<&[u8]>, theme: Theme) {
     let Some(png) = png.filter(|b| !b.is_empty()) else {
         return;
     };
-    if let Some(staged) = banner::StagedBanner::write(png) {
-        BANNER_URI.with(|b| *b.borrow_mut() = Some(staged.uri()));
+    let (name, slot) = match theme {
+        Theme::Light => ("banner", &BANNER_URI),
+        Theme::Dark => ("banner-dark", &BANNER_DARK_URI),
+    };
+    if let Some(staged) = banner::StagedBanner::write(png, name) {
+        slot.with(|b| *b.borrow_mut() = Some(staged.uri()));
         STAGED.with(|s| s.borrow_mut().push(Box::new(staged)));
     }
 }
@@ -238,14 +250,19 @@ pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<bool>
     DEFAULT_PATH.with(|d| *d.borrow_mut() = r"C:\Program Files\Sample App".to_string());
     model::set_translator(translator);
 
-    // Iterate on a banner without packing a full installer.
-    if let Some(path) = std::env::var_os("INSTALLWAY_PREVIEW_BANNER") {
-        match std::fs::read(&path) {
-            Ok(bytes) => stage_banner(Some(&bytes)),
-            Err(e) => eprintln!(
-                "preview banner {}: {e}",
-                std::path::Path::new(&path).display()
-            ),
+    // Iterate on the banners without packing a full installer.
+    for (var, theme) in [
+        ("INSTALLWAY_PREVIEW_BANNER", Theme::Light),
+        ("INSTALLWAY_PREVIEW_BANNER_DARK", Theme::Dark),
+    ] {
+        if let Some(path) = std::env::var_os(var) {
+            match std::fs::read(&path) {
+                Ok(bytes) => stage_banner(Some(&bytes), theme),
+                Err(e) => eprintln!(
+                    "preview banner {}: {e}",
+                    std::path::Path::new(&path).display()
+                ),
+            }
         }
     }
 
