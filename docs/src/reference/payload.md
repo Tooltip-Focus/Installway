@@ -13,6 +13,7 @@ documentation lives in
 | `RT_RCDATA` | 3 | The uninstaller `.exe`. |
 | `RT_RCDATA` | 4 | The payload length, a little-endian `u64`. |
 | `RT_RCDATA` | 5 | The optional header banner PNG. Not signed; see [Branding](../packaging/branding.md#header-banner). |
+| `RT_RCDATA` | 6 | The optional dark-theme header banner PNG, shown by the WinUI wizard in dark mode. Not signed; see [Branding](../packaging/branding.md#dark-theme-variant). |
 | PE overlay | | A magic marker followed by the payload archive, appended after all resource passes. |
 
 ## SignedPayload
