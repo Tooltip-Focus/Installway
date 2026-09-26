@@ -88,9 +88,10 @@ struct PatchInfo {
 
 ### Payload archive layout
 
-The payload is a ZIP archive by default, or a PakLib archive with `--pak`.
-The installer tells them apart by their first bytes (`PAKLIB1\0`), so the
-manifest does not record the format. Both use the same entry names.
+The payload is a [PakLib](https://github.com/Tooltip-Focus/PakLib) archive:
+independent zstd blocks of up to 64 MiB (level 20) that never span two files,
+so the installer decodes files in parallel straight from the memory-mapped
+exe. Already-compressed media and HDiffPatch patches are stored raw.
 
 Full files live under `full/<rel>`; binary patches under
 `patches/<blake3(rel)>.patch`. The installer reads `PatchInfo.file` verbatim as
@@ -98,14 +99,14 @@ the archive path, so the name in the manifest and the actual entry name are
 produced by one function in the builder; they always match. Unchanged files in
 a patch have no entry, only their recorded hash.
 
-PakLib support comes from the `paklib` Cargo feature of `installer` and
-`installer_builder`, on by default. Cargo builds the
-[PakLib](https://github.com/Tooltip-Focus/PakLib) submodule (`vendor/PakLib`)
-with CMake and vcpkg, both part of the Visual Studio C++ workload, and links it
-statically: the installer stays a single exe. `PAKLIB_BUILD_DIR` points at an
-existing `windows-static` preset build instead. A stub built with
-`--no-default-features` rejects a PakLib payload, and `pack` catches that at
-build time through its self-verify.
+Cargo builds PakLib from the `vendor/PakLib` submodule with CMake and vcpkg,
+both part of the Visual Studio C++ workload, and links it statically: the
+installer stays a single exe. `PAKLIB_BUILD_DIR` points at an existing
+`windows-static` preset build instead.
+
+Installers built before PakLib payloads carried a ZIP instead. The formats do
+not mix: each installer only reads the payload it was packed with, and `pack`
+self-verifies that pairing at build time.
 
 ## InstallInfo
 

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Safe, minimal Rust ownership layer over PakLib's C ABI (`pak/CAbi.h`).
+//! Safe, minimal Rust ownership layer over PakLib's C ABI (`pak/CAbi.h`),
+//! the format of the installer payload. PakLib is the `vendor/PakLib`
+//! submodule, built and statically linked by `build.rs`.
 //!
 //! Only what Installway needs: open an archive from memory, stream entries
 //! out of it, and write an archive from files on disk.
@@ -13,9 +15,25 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::NonNull;
 
-/// `PAK_COMPRESSION_AUTOMATIC`: zstd per block, stored raw when a
-/// block saves less than the writer's `minimum_saving`.
-const COMPRESSION_AUTOMATIC: u8 = 2;
+/// How [`Writer::add_file`] stores one entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compression {
+    /// Raw bytes, for data that is already compressed.
+    Stored,
+    /// Zstd per block; a block saving less than the writer's
+    /// `minimum_saving` is stored raw.
+    Automatic,
+}
+
+impl Compression {
+    /// `pak_compression_policy` value.
+    fn policy(self) -> u8 {
+        match self {
+            Self::Stored => 0,
+            Self::Automatic => 2,
+        }
+    }
+}
 
 /// Data alignment of each entry inside the archive, in bytes.
 const DATA_ALIGNMENT: u32 = 16;
@@ -251,8 +269,13 @@ impl Writer {
         })
     }
 
-    /// Append the file at `source` as `archive_path` (automatic compression).
-    pub fn add_file(&mut self, source: &Path, archive_path: &str) -> io::Result<()> {
+    /// Append the file at `source` as `archive_path`.
+    pub fn add_file(
+        &mut self,
+        source: &Path,
+        archive_path: &str,
+        compression: Compression,
+    ) -> io::Result<()> {
         let source = wide(source);
         let mut detail = PakError::default();
         // SAFETY: `source` is NUL-terminated; `archive_path` has its length.
@@ -262,7 +285,7 @@ impl Writer {
                 source.as_ptr(),
                 archive_path.as_ptr().cast(),
                 archive_path.len(),
-                COMPRESSION_AUTOMATIC,
+                compression.policy(),
                 &mut detail,
             )
         };
@@ -288,7 +311,6 @@ impl Drop for Writer {
 
 #[cfg(test)]
 mod tests {
-    use super::super::is_pak;
     use super::*;
 
     #[test]
@@ -296,6 +318,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let big: Vec<u8> = (0..300_000u32).map(|i| (i / 7 % 26) as u8 + b'a').collect();
         std::fs::write(dir.path().join("big.txt"), &big).unwrap();
+        std::fs::write(dir.path().join("raw.bin"), &big[..5000]).unwrap();
         std::fs::write(dir.path().join("empty.bin"), b"").unwrap();
 
         let output = dir.path().join("out.pak");
@@ -308,16 +331,20 @@ mod tests {
             },
         )
         .unwrap();
-        writer
-            .add_file(&dir.path().join("big.txt"), "a/big.txt")
-            .unwrap();
-        writer
-            .add_file(&dir.path().join("empty.bin"), "empty.bin")
-            .unwrap();
+        for (source, name, compression) in [
+            ("big.txt", "a/big.txt", Compression::Automatic),
+            ("raw.bin", "raw.bin", Compression::Stored),
+            ("empty.bin", "empty.bin", Compression::Automatic),
+        ] {
+            writer
+                .add_file(&dir.path().join(source), name, compression)
+                .unwrap();
+        }
         writer.finalize().unwrap();
 
         let bytes = std::fs::read(&output).unwrap();
-        assert!(is_pak(&bytes));
+        // Compressed: the whole archive is far smaller than its content.
+        assert!(bytes.len() < big.len() / 4 + 5000);
         let archive = Archive::open_memory(&bytes).unwrap();
 
         // Odd-sized reads cross block boundaries and hit the decoded-block cache.
@@ -332,6 +359,14 @@ mod tests {
             out.extend_from_slice(&chunk[..n]);
         }
         assert_eq!(out, big);
+
+        let mut raw = Vec::new();
+        archive
+            .open("raw.bin")
+            .unwrap()
+            .read_to_end(&mut raw)
+            .unwrap();
+        assert_eq!(raw, &big[..5000]);
 
         let mut empty = Vec::new();
         archive

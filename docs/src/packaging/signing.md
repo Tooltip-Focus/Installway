@@ -30,7 +30,7 @@ signtool sign /fd SHA256 `
 
 ## Why signing comes last
 
-The payload zip is appended as a PE overlay before signing. `signtool`
+The payload archive is appended as a PE overlay before signing. `signtool`
 appends its certificate table after the overlay, and the installer locates
 the overlay from the PE section table rather than the end of the file, so
 the trailing certificate is harmless and the order is safe:

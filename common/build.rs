@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Builds and statically links PakLib when the `paklib` feature is on.
+//! Builds and statically links PakLib, the installer payload format.
 //!
 //! PakLib is the `vendor/PakLib` git submodule. It is configured with CMake
 //! and its dependencies (zstd, xxHash) come from vcpkg in manifest mode, as the
@@ -20,11 +20,9 @@ const LIBRARIES: [&str; 3] = ["pak_c_api", "zstd", "xxhash"];
 const TRIPLET: &str = "x64-windows-static";
 
 fn main() {
-    if std::env::var_os("CARGO_FEATURE_PAKLIB").is_none() {
-        return;
-    }
+    // `common::pak` only exists on Windows, like the installer itself.
     if std::env::var_os("CARGO_CFG_WINDOWS").is_none() {
-        panic!("the `paklib` feature is Windows-only");
+        return;
     }
     println!("cargo:rerun-if-env-changed=PAKLIB_BUILD_DIR");
 

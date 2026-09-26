@@ -243,9 +243,9 @@ fn run(cli: Cli) -> Result<()> {
 
     if cli.verify {
         attach_console();
-        // Hash and signature already passed in `load_and_verify`; also prove
-        // this stub can read the archive format (a PakLib payload needs a stub
-        // built with the `paklib` feature).
+        // Hash and signature already passed in `load_and_verify`; also parse
+        // the archive index, so a payload this stub cannot read (a stub from
+        // before PakLib payloads) fails the builder's self-verify.
         archive::PayloadArchive::open(loaded.archive())?;
         let license = match &loaded.payload.license_text {
             Some(t) => format!("custom ({} bytes)", t.len()),

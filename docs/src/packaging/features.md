@@ -59,7 +59,7 @@ one path segment; `**` matches across segments; `?` matches one character. A
 file may belong to at most one feature: an overlap fails the build, and a
 feature matching no file fails too, as a typo guard.
 
-The single payload zip still carries every file, under one signature and one
+The single payload archive still carries every file, under one signature and one
 BLAKE3 hash. The installer just extracts the active subset, so the `.exe`
 size covers all features regardless of what a given run installs.
 

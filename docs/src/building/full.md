@@ -55,14 +55,15 @@ and file associations and `%EXE%` tokens cannot resolve.
    `--publisher`, an invalid `--product-id`, and case-only filename collisions
    that would clash on NTFS.
 2. Scans `--input`, hashes every file with BLAKE3, and compresses the set into
-   the payload zip. Already-compressed media formats are stored verbatim;
-   everything else is compressed with zstd at level 19.
+   the [PakLib](../reference/payload.md#payload-archive-layout) payload archive.
+   Already-compressed media formats are stored verbatim; everything else is
+   compressed with zstd at level 20 in blocks of up to 64 MiB.
 3. Builds the signed manifest and metadata, and signs the exact JSON bytes
    with Ed25519.
 4. Produces the installer stub and the uninstaller, either through
    `cargo build` or from a prebuilt kit, and copies the stub to `--out`.
 5. Embeds the signed manifest, the icon-stamped uninstaller, and a
-   version-info resource, then appends the payload zip as a PE overlay.
+   version-info resource, then appends the payload archive as a PE overlay.
 6. Self-verifies by running the produced installer's own `--verify`. If the
    stub rejects the payload, for example because a prebuilt stub's key does
    not match `--priv-key`, the build fails here instead of shipping a broken

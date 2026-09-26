@@ -7,7 +7,7 @@ no admin rights required.
 
 Every installer you ship is one file that carries everything:
 
-- The file payload (a zip) is appended to the executable as a PE overlay, so
+- The file payload (a PakLib archive) is appended to the executable as a PE overlay, so
   there is no size ceiling. It is streamed on at build time and memory-mapped
   at install time.
 - The signed manifest, the uninstaller, and the payload length are embedded as
@@ -38,7 +38,7 @@ Each installer carries overlapping guarantees:
 1. **Ed25519 signature** over the exact JSON bytes that describe the payload.
    The public key is compiled into the installer stub at build time, never
    shipped as a swappable resource.
-2. **BLAKE3 hash of the payload zip**, recorded in the signed manifest and
+2. **BLAKE3 hash of the payload archive**, recorded in the signed manifest and
    re-verified before a single byte is extracted.
 3. **BLAKE3 hash per file**, checked after each write or patch apply.
 4. **Version floor** via `min_installer_version`: a stub that is too old

@@ -115,19 +115,19 @@ pub fn embed_all(exe: &Path, spec: &EmbedSpec) -> Result<()> {
     Ok(())
 }
 
-/// Append the payload zip as a PE overlay: `MAGIC || zip`, written straight to
+/// Append the payload archive as a PE overlay: `MAGIC || payload`, written straight to
 /// the end of the file. Streaming, no resource-size limit. Must run AFTER
 /// [`embed_all`] (that rewrites the PE and would drop a pre-existing overlay)
 /// and BEFORE Authenticode signing (signtool appends its
 /// certificate table after the overlay; the installer locates the overlay from
 /// the PE section table, not the end of file, so a trailing cert is harmless).
-pub fn append_payload(exe: &Path, payload_zip: &[u8]) -> Result<()> {
+pub fn append_payload(exe: &Path, payload: &[u8]) -> Result<()> {
     let mut f = OpenOptions::new()
         .append(true)
         .open(exe)
         .with_context(|| format!("open {} for overlay append", exe.display()))?;
     f.write_all(OVERLAY_MAGIC).context("write overlay magic")?;
-    f.write_all(payload_zip).context("write overlay payload")?;
+    f.write_all(payload).context("write overlay payload")?;
     f.flush().ok();
     Ok(())
 }

@@ -299,7 +299,7 @@ fn write_plugin_dlls(
     if payload.plugins.is_empty() {
         return Ok(());
     }
-    let mut archive = crate::archive::PayloadArchive::open(archive_bytes)?;
+    let archive = crate::archive::PayloadArchive::open(archive_bytes)?;
     for p in &payload.plugins {
         let buf = archive.read_entry(&p.file)?;
         // `p.file` is `plugins/<name>.dll`, relative to the data dir.

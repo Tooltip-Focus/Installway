@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 //! `pack` command orchestration. [`run`] drives the phases in order; the heavy
-//! lifting lives in the sibling modules ([`crate::payload`] for the zip +
+//! lifting lives in the sibling modules ([`crate::payload`] for the archive +
 //! manifest, [`crate::embed`] for the PE resources, [`crate::toolchain`] for
 //! cargo builds).
 
@@ -14,7 +14,7 @@ use crate::keys::{
     load_pub_key_hex, load_signing_key, parse_signing_key_hex, validate_pub_key_hex,
 };
 use crate::license::{decode_license, trimmed_title};
-use crate::payload::{ZipJob, build_full, build_patch};
+use crate::payload::{PayloadJob, build_full, build_patch};
 use crate::toolchain::cargo_build_release;
 use anyhow::{Context, Result, bail};
 use common::model::file_assoc::FileAssoc;
@@ -47,7 +47,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
     let (signing, pub_key_hex) = resolve_keys(args)?;
     let (plugin_entries, plugin_files) = scan_plugins(&args.plugins)?;
 
-    // Payload zip + manifest.
+    // Payload archive + manifest.
     let (archive_bytes, mut manifest) = match &patch_from {
         Some(from_dir) => build_patch(
             &args.input,
@@ -55,17 +55,15 @@ pub fn run(args: &PackArgs) -> Result<()> {
             args.exe.as_deref(),
             &args.to_version,
             &plugin_files,
-            args.format,
         )?,
         None => build_full(
             &args.input,
             args.exe.as_deref(),
             &args.to_version,
             &plugin_files,
-            args.format,
         )?,
     };
-    // Tag files with their feature pack in the manifest (the zip keeps every file).
+    // Tag files with their feature pack in the manifest (the archive keeps every file).
     crate::features::apply(&mut manifest, &args.features)?;
     // Record how upgrades seed the active feature base (sticky vs. override).
     manifest.feature_mode = args.feature_mode;
@@ -87,7 +85,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         license_text,
         associations,
     )?;
-    println!("Payload: {} bytes ({:?})", archive_bytes.len(), args.format);
+    println!("Payload: {} bytes", archive_bytes.len());
     println!("Signed manifest: {} bytes", signed_json.len());
 
     let stub = resolve_stub(args, pub_key_hex.as_deref())?;
@@ -154,20 +152,20 @@ fn resolve_keys(args: &PackArgs) -> Result<(SigningKey, Option<String>)> {
     Ok((signing, pub_key_hex))
 }
 
-/// Read each plugin DLL for its hash + in-zip name. The bytes themselves are
-/// bundled into the payload zip by `build_full` / `build_patch`.
-fn scan_plugins(plugins: &[ResolvedPlugin]) -> Result<(Vec<PluginEntry>, Vec<ZipJob>)> {
+/// Read each plugin DLL for its hash + archive name. The bytes themselves are
+/// bundled into the payload archive by `build_full` / `build_patch`.
+fn scan_plugins(plugins: &[ResolvedPlugin]) -> Result<(Vec<PluginEntry>, Vec<PayloadJob>)> {
     let mut entries = Vec::with_capacity(plugins.len());
     let mut files = Vec::with_capacity(plugins.len());
     for p in plugins {
-        let in_zip = format!("plugins/{}.dll", p.name);
+        let archive_name = format!("plugins/{}.dll", p.name);
         let hash =
             file_blake3(&p.src).with_context(|| format!("read plugin dll {}", p.src.display()))?;
         println!("Plugin: {} ({:?}) <- {}", p.name, p.phase, p.src.display());
-        files.push((in_zip.clone(), p.src.clone()));
+        files.push((archive_name.clone(), p.src.clone()));
         entries.push(PluginEntry {
             name: p.name.clone(),
-            file: in_zip,
+            file: archive_name,
             blake3: hash,
             phase: p.phase,
             required: p.required,
@@ -434,10 +432,9 @@ fn self_verify(setup: &Path) -> Result<()> {
             "self-verify failed ({} --verify exited {}). The produced installer rejects its \
              own payload — most likely the prebuilt stub's compiled-in public key does not \
              match --priv-key, the stub (installer.exe) was built without INSTALLER_PUB_KEY, \
-             or a --pak payload met a stub built without the `paklib` feature. Rebuild \
-             installer.exe/uninstall.exe with INSTALLER_PUB_KEY set to the matching pub.key \
-             (keeping the default `paklib` feature for --pak), or drop --installer-stub/--uninstaller to \
-             let pack build the stub.",
+             or it predates PakLib payloads. Rebuild installer.exe/uninstall.exe from this \
+             version with INSTALLER_PUB_KEY set to the matching pub.key, or drop \
+             --installer-stub/--uninstaller to let pack build the stub.",
             setup.display(),
             status.code().unwrap_or(-1)
         );
