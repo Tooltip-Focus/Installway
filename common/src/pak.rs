@@ -15,6 +15,10 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::NonNull;
 
+// PakLib's zstd calls resolve to this crate's zstd (see build.rs). Naming it
+// keeps it linked into binaries that use nothing else from it.
+use zstd_sys as _;
+
 /// How [`Writer::add_file`] stores one entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Compression {

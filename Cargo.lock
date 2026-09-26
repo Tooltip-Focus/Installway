@@ -243,6 +243,7 @@ dependencies = [
  "toml",
  "walkdir",
  "windows",
+ "zstd-sys",
 ]
 
 [[package]]

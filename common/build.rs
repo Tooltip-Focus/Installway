@@ -10,13 +10,18 @@
 //! leaving the submodule clean. `PAKLIB_BUILD_DIR` points at an existing build
 //! instead (a `windows-static` preset build of a PakLib checkout).
 //!
+//! vcpkg's zstd only provides the headers PakLib compiles against: its symbols
+//! resolve to the `zstd-sys` crate (same zstd version), which hdiffpatch-rs
+//! already links, so the exe carries a single zstd.
+//!
 //! CMake and vcpkg are taken from `PATH` / `VCPKG_ROOT` when set, else from the
 //! Visual Studio installation (both ship with the C++ workload).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const LIBRARIES: [&str; 3] = ["pak_c_api", "zstd", "xxhash"];
+/// Linked from the PakLib build; zstd comes from `zstd-sys` instead.
+const LIBRARIES: [&str; 2] = ["pak_c_api", "xxhash"];
 const TRIPLET: &str = "x64-windows-static";
 
 fn main() {
@@ -82,15 +87,11 @@ fn build_submodule() -> PathBuf {
     build
 }
 
-/// Link the three static libraries of a PakLib build directory.
+/// Link the static libraries of a PakLib build directory.
 fn link(build: &Path) {
     let release = build.join("Release");
     let dependencies = build.join("vcpkg_installed").join(TRIPLET).join("lib");
-    for (dir, library) in [
-        (&release, LIBRARIES[0]),
-        (&dependencies, LIBRARIES[1]),
-        (&dependencies, LIBRARIES[2]),
-    ] {
+    for (dir, library) in [(&release, LIBRARIES[0]), (&dependencies, LIBRARIES[1])] {
         let path = dir.join(format!("{library}.lib"));
         if !path.exists() {
             panic!("PakLib: {} not found", path.display());
