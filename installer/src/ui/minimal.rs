@@ -33,6 +33,8 @@ const ID_PROGRESS: usize = 4;
 const ID_STATUS: usize = 5;
 
 const SS_ICON: u32 = 0x0003;
+const SS_NOPREFIX: u32 = 0x0080;
+const SS_PATHELLIPSIS: u32 = 0x8000;
 
 /// `SetTimer` ids. `CLOSE_TIMER` is the post-success "show 100% briefly" pause;
 /// `PROGRESS_TIMER` polls the shared `Prog` on the UI thread so the worker never
@@ -108,7 +110,7 @@ pub fn preview(translator: common::i18n::Translator) -> Result<()> {
         if let Ok(mut p) = win.prog.lock() {
             p.done = 62;
             p.total = 100;
-            p.name = "bin/app.exe".to_string();
+            p.name = crate::ui::SAMPLE_FILE.to_string();
         }
         helpers::pump_messages();
     }
@@ -373,7 +375,9 @@ unsafe fn build_controls(hwnd: HWND, payload: &common::model::installer_payload:
         child(hwnd, w!("STATIC"), &title, WS_VISIBLE, ID_TITLE);
         child(hwnd, w!("STATIC"), &sub, WS_VISIBLE, ID_SUB);
         child(hwnd, PROGRESS_CLASSW, "", WS_VISIBLE, ID_PROGRESS);
-        child(hwnd, w!("STATIC"), "", WS_VISIBLE, ID_STATUS);
+        // One line: a long file path loses its middle instead of wrapping.
+        let status_style = WS_VISIBLE | WINDOW_STYLE(SS_NOPREFIX | SS_PATHELLIPSIS);
+        child(hwnd, w!("STATIC"), "", status_style, ID_STATUS);
         apply_fonts(hwnd);
     }
 }
@@ -473,6 +477,7 @@ unsafe fn update_progress(hwnd: HWND) {
         let scaled = scale_progress(done, total);
         set_progress(hwnd, ID_PROGRESS, scaled);
         let pct = scaled / 100;
-        set_dlg_text(hwnd, ID_STATUS, &format!("{}%  {}", pct, name));
+        let file = crate::ui::display_path(&name);
+        set_dlg_text(hwnd, ID_STATUS, &format!("{}%  {}", pct, file));
     });
 }

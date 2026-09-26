@@ -74,6 +74,17 @@ pub fn run_minimal(
     minimal::run(loaded, install_dir, launch, translator)
 }
 
+/// A payload-relative path the way Windows shows one (`bin\app.exe`). The
+/// progress line ellipsizes it in the middle and keeps what follows the last
+/// `\` (the file name) whole.
+pub(crate) fn display_path(rel: &str) -> String {
+    rel.replace('/', "\\")
+}
+
+/// Dev-only: a deep file so `--preview` shows the progress line's ellipsis.
+#[cfg(debug_assertions)]
+pub(crate) const SAMPLE_FILE: &str = "resources/app/node_modules/@company/design-system/dist/components/data-grid/locales/fr-FR/messages.json";
+
 /// Dev-only: render one view with sample data.
 #[cfg(debug_assertions)]
 pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
