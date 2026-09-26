@@ -9,8 +9,10 @@ name = "installer"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["paklib"]
 hintway = ["dep:hintway_analytics", "dep:uuid"]
+# Read PakLib payloads. Builds and statically links vendor/PakLib (see common/build.rs).
+paklib = ["common/paklib"]
 
 [dependencies]
 common = { path = "../common" }

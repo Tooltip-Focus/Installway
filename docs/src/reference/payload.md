@@ -13,7 +13,7 @@ documentation lives in
 | `RT_RCDATA` | 3 | The uninstaller `.exe`. |
 | `RT_RCDATA` | 4 | The payload length, a little-endian `u64`. |
 | `RT_RCDATA` | 5 | The optional header banner PNG. Not signed; see [Branding](../packaging/branding.md#header-banner). |
-| PE overlay | | A magic marker followed by the payload zip, appended after all resource passes. |
+| PE overlay | | A magic marker followed by the payload archive, appended after all resource passes. |
 
 ## SignedPayload
 
@@ -40,7 +40,7 @@ serializer-determinism trap.
 | `from_version` | `Option<String>` | Set for patches; pins the target version. |
 | `to_version` | `String` | |
 | `min_installer_version` | `String` | Minimum stub version allowed to run this payload. Default `1.0.0`. |
-| `payload_blake3` | `String` | BLAKE3 of the zip, re-verified before extraction. |
+| `payload_blake3` | `String` | BLAKE3 of the payload archive, re-verified before extraction. |
 | `created_at_unix` | `i64` | |
 | `manifest` | `Manifest` | The per-file table; see below. |
 | `license_text` | `Option<String>` | EULA shown on the License page. |
@@ -81,16 +81,31 @@ struct FileEntry {
 }
 
 struct PatchInfo {
-    file: String,   // in-zip path: patches/<blake3(rel)>.patch
+    file: String,   // archive path: patches/<blake3(rel)>.patch
     size: u64,
 }
 ```
 
-**Payload zip layout.** Full files live under `full/<rel>`; binary patches
-under `patches/<blake3(rel)>.patch`. The installer reads `PatchInfo.file`
-verbatim as the in-zip path, so the name in the manifest and the actual zip
-entry name are produced by one function in the builder; they always match.
-Unchanged files in a patch have no zip entry, only their recorded hash.
+### Payload archive layout
+
+The payload is a ZIP archive by default, or a PakLib archive with `--pak`.
+The installer tells them apart by their first bytes (`PAKLIB1\0`), so the
+manifest does not record the format. Both use the same entry names.
+
+Full files live under `full/<rel>`; binary patches under
+`patches/<blake3(rel)>.patch`. The installer reads `PatchInfo.file` verbatim as
+the archive path, so the name in the manifest and the actual entry name are
+produced by one function in the builder; they always match. Unchanged files in
+a patch have no entry, only their recorded hash.
+
+PakLib support comes from the `paklib` Cargo feature of `installer` and
+`installer_builder`, on by default. Cargo builds the
+[PakLib](https://github.com/Tooltip-Focus/PakLib) submodule (`vendor/PakLib`)
+with CMake and vcpkg, both part of the Visual Studio C++ workload, and links it
+statically: the installer stays a single exe. `PAKLIB_BUILD_DIR` points at an
+existing `windows-static` preset build instead. A stub built with
+`--no-default-features` rejects a PakLib payload, and `pack` catches that at
+build time through its self-verify.
 
 ## InstallInfo
 

@@ -48,19 +48,21 @@ pub fn run(args: &PackArgs) -> Result<()> {
     let (plugin_entries, plugin_files) = scan_plugins(&args.plugins)?;
 
     // Payload zip + manifest.
-    let (zip_bytes, mut manifest) = match &patch_from {
+    let (archive_bytes, mut manifest) = match &patch_from {
         Some(from_dir) => build_patch(
             &args.input,
             from_dir,
             args.exe.as_deref(),
             &args.to_version,
             &plugin_files,
+            args.format,
         )?,
         None => build_full(
             &args.input,
             args.exe.as_deref(),
             &args.to_version,
             &plugin_files,
+            args.format,
         )?,
     };
     // Tag files with their feature pack in the manifest (the zip keeps every file).
@@ -79,13 +81,13 @@ pub fn run(args: &PackArgs) -> Result<()> {
     let signed_json = sign_payload(
         args,
         &signing,
-        &zip_bytes,
+        &archive_bytes,
         manifest,
         plugin_entries,
         license_text,
         associations,
     )?;
-    println!("Payload: {} bytes (zip)", zip_bytes.len());
+    println!("Payload: {} bytes ({:?})", archive_bytes.len(), args.format);
     println!("Signed manifest: {} bytes", signed_json.len());
 
     let stub = resolve_stub(args, pub_key_hex.as_deref())?;
@@ -99,7 +101,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         &stub,
         &signed_json,
         &uninstaller_bytes,
-        &zip_bytes,
+        &archive_bytes,
         banner_png.as_deref(),
         icons.as_ref(),
     )?;
@@ -197,7 +199,7 @@ fn load_license(args: &PackArgs) -> Result<Option<String>> {
 fn sign_payload(
     args: &PackArgs,
     signing: &SigningKey,
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
     manifest: Manifest,
     plugins: Vec<PluginEntry>,
     license_text: Option<String>,
@@ -216,7 +218,7 @@ fn sign_payload(
         from_version: args.from_version.clone(),
         to_version: args.to_version.clone(),
         min_installer_version: args.min_installer_version.clone(),
-        payload_blake3: bytes_blake3(zip_bytes),
+        payload_blake3: bytes_blake3(archive_bytes),
         created_at_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -366,7 +368,7 @@ fn assemble_output(
     stub: &Path,
     signed_json: &str,
     uninstaller_bytes: &[u8],
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
     banner_png: Option<&[u8]>,
     icons: Option<&ExeIcons>,
 ) -> Result<()> {
@@ -387,7 +389,7 @@ fn assemble_output(
             &EmbedSpec {
                 signed_json: signed_json.as_bytes(),
                 uninstaller_exe: uninstaller_bytes,
-                payload_len: zip_bytes.len() as u64,
+                payload_len: archive_bytes.len() as u64,
                 banner_png,
                 product: &args.product,
                 publisher: &args.publisher,
@@ -397,11 +399,11 @@ fn assemble_output(
         )?;
         // Payload appended as a PE overlay, after all resource passes (so they
         // don't drop it) and before signing. No size ceiling; installer mmaps it.
-        embed::append_payload(&tmp, zip_bytes)?;
+        embed::append_payload(&tmp, archive_bytes)?;
         println!(
             "Embedded signed manifest + uninstaller{} + version, appended {}-byte payload overlay",
             if icons.is_some() { " + icon" } else { "" },
-            zip_bytes.len(),
+            archive_bytes.len(),
         );
 
         // Self-check: run the produced installer's own `--verify`. Catches a
@@ -431,9 +433,11 @@ fn self_verify(setup: &Path) -> Result<()> {
         bail!(
             "self-verify failed ({} --verify exited {}). The produced installer rejects its \
              own payload — most likely the prebuilt stub's compiled-in public key does not \
-             match --priv-key, or the stub (installer.exe) was built without INSTALLER_PUB_KEY. \
-             Rebuild installer.exe/uninstall.exe with INSTALLER_PUB_KEY set to the matching \
-             pub.key, or drop --installer-stub/--uninstaller to let pack build the stub.",
+             match --priv-key, the stub (installer.exe) was built without INSTALLER_PUB_KEY, \
+             or a --pak payload met a stub built without the `paklib` feature. Rebuild \
+             installer.exe/uninstall.exe with INSTALLER_PUB_KEY set to the matching pub.key \
+             (keeping the default `paklib` feature for --pak), or drop --installer-stub/--uninstaller to \
+             let pack build the stub.",
             setup.display(),
             status.code().unwrap_or(-1)
         );

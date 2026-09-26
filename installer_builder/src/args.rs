@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
+use crate::payload::PayloadFormat;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use common::model::feature_mode::FeatureMode;
@@ -106,6 +107,11 @@ pub struct PackCli {
     /// remove orphans).
     #[arg(long)]
     pub force_reinstall: bool,
+
+    /// Store the embedded payload as a PakLib archive instead of ZIP (needs a
+    /// builder and stub built with the `paklib` feature).
+    #[arg(long)]
+    pub pak: bool,
 
     /// Remove unknown/leftover files (not in this build) on a Full install, so
     /// an upgrade or reinstall from a full version leaves a clean directory.
@@ -292,6 +298,8 @@ pub struct PackFile {
     #[serde(default)]
     pub force_reinstall: bool,
     #[serde(default)]
+    pub pak: bool,
+    #[serde(default)]
     pub purge_unknown_files: bool,
     #[serde(default)]
     pub skip_license: bool,
@@ -349,6 +357,7 @@ pub struct PackArgs {
     pub assoc: Vec<String>,
     pub min_installer_version: String,
     pub force_reinstall: bool,
+    pub format: PayloadFormat,
     pub purge_unknown_files: bool,
     pub skip_license: bool,
     pub skip_path: bool,
@@ -458,6 +467,11 @@ impl PackArgs {
                 .unwrap_or_else(|| "1.0.0".to_string()),
             // Boolean flags: either source can turn them on.
             force_reinstall: cli.force_reinstall || file.force_reinstall,
+            format: if cli.pak || file.pak {
+                PayloadFormat::Pak
+            } else {
+                PayloadFormat::Zip
+            },
             purge_unknown_files: cli.purge_unknown_files || file.purge_unknown_files,
             skip_license: cli.skip_license || file.skip_license,
             skip_path: cli.skip_path || file.skip_path,
@@ -816,6 +830,7 @@ mod tests {
             assoc: Vec::new(),
             min_installer_version: None,
             force_reinstall: false,
+            pak: false,
             purge_unknown_files: false,
             skip_license: false,
             skip_path: false,

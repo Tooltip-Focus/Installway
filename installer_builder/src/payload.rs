@@ -3,7 +3,7 @@
 
 //! Payload construction: scan the input tree, hash every file, generate
 //! HDiffPatch deltas in patch mode, and pack everything into the in-memory
-//! payload zip alongside its [`Manifest`].
+//! payload archive (ZIP or PakLib) alongside its [`Manifest`].
 
 use anyhow::{Context, Result, bail};
 use common::model::file_entry::FileEntry;
@@ -21,8 +21,17 @@ use zip::write::SimpleFileOptions;
 const PATCHES_PREFIX: &str = "patches/";
 const FULL_PREFIX: &str = "full/";
 
-/// A payload-zip entry to bundle verbatim: `(in-zip name, source path)`.
+/// A payload entry to bundle verbatim: `(archive name, source path)`.
 pub(crate) type ZipJob = (String, PathBuf);
+
+/// Container format of the embedded payload. The installer detects it from
+/// the bytes, so this only matters at build time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PayloadFormat {
+    #[default]
+    Zip,
+    Pak,
+}
 
 /// In-zip path for a file's binary patch: `patches/<blake3(rel)>.patch`. The
 /// installer reads `PatchInfo.file` verbatim as the in-zip path, so the name
@@ -58,6 +67,7 @@ pub(crate) fn build_full(
     exe: Option<&str>,
     version: &str,
     plugins: &[ZipJob],
+    format: PayloadFormat,
 ) -> Result<(Vec<u8>, Manifest)> {
     println!("Scanning {}", input.display());
     let files = collect_files(input)?;
@@ -84,7 +94,8 @@ pub(crate) fn build_full(
         .collect();
 
     let full_size: u64 = entries.values().map(|e| e.size).sum();
-    let zip_bytes = write_zip(input, &files, &HashMap::new(), plugins)?;
+    let jobs = payload_jobs(input, &files, &HashMap::new(), plugins);
+    let archive_bytes = write_payload(format, &jobs)?;
 
     let manifest = Manifest {
         version: version.to_string(),
@@ -97,7 +108,7 @@ pub(crate) fn build_full(
         default_features: Vec::new(),
         feature_mode: Default::default(),
     };
-    Ok((zip_bytes, manifest))
+    Ok((archive_bytes, manifest))
 }
 
 /// Build a patch payload: HDiffPatch deltas for changed files (when smaller
@@ -108,6 +119,7 @@ pub(crate) fn build_patch(
     exe: Option<&str>,
     version: &str,
     plugins: &[ZipJob],
+    format: PayloadFormat,
 ) -> Result<(Vec<u8>, Manifest)> {
     // Warn up front if hdiffz is missing: patching still works but ships full
     // files instead of HDiffPatch deltas.
@@ -251,7 +263,8 @@ pub(crate) fn build_patch(
         entries.insert(w.rel, w.entry);
     }
 
-    let zip_bytes = write_zip(new_input, &full_paths, &patch_paths, plugins)?;
+    let jobs = payload_jobs(new_input, &full_paths, &patch_paths, plugins);
+    let archive_bytes = write_payload(format, &jobs)?;
 
     let manifest = Manifest {
         version: version.to_string(),
@@ -264,7 +277,7 @@ pub(crate) fn build_patch(
         default_features: Vec::new(),
         feature_mode: Default::default(),
     };
-    Ok((zip_bytes, manifest))
+    Ok((archive_bytes, manifest))
 }
 
 /// Extensions already compressed: zstd gains ~0% and forces a pointless
@@ -313,21 +326,14 @@ fn compress_entry(entry_name: &str, bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(zip.finish()?.into_inner())
 }
 
-/// Build a zip in memory. `full_paths` go under `full/<rel>`; `patch_paths`
-/// under their recorded path. Compression runs one rayon worker per file (each
-/// a standalone single-entry zip), then the outputs are merged by raw byte copy
-/// (`raw_copy_file`, no recompression) to saturate every core.
-///
-/// Peak memory is roughly the compressed payload twice over (minis + merged
-/// zip) plus each worker's current file uncompressed — fine for app-sized
-/// payloads; a streaming merge is the upgrade path if multi-GB inputs appear.
-fn write_zip(
+/// Every entry to pack: `full_paths` under `full/<rel>`, `patch_paths` under
+/// their recorded name, then `extra` verbatim (e.g. `plugins/<name>.dll`).
+fn payload_jobs(
     input: &Path,
     full_paths: &[String],
     patch_paths: &HashMap<String, PathBuf>,
     extra: &[ZipJob],
-) -> Result<Vec<u8>> {
-    // (entry_name_in_zip, source_path_on_disk) for every file to pack.
+) -> Vec<ZipJob> {
     let mut jobs: Vec<ZipJob> =
         Vec::with_capacity(full_paths.len() + patch_paths.len() + extra.len());
     for rel in full_paths {
@@ -336,9 +342,25 @@ fn write_zip(
     for (rel, patch_path) in patch_paths {
         jobs.push((patch_entry_name(rel), patch_path.clone()));
     }
-    // Extra verbatim entries (e.g. `plugins/<name>.dll`), already named.
     jobs.extend(extra.iter().cloned());
+    jobs
+}
 
+fn write_payload(format: PayloadFormat, jobs: &[ZipJob]) -> Result<Vec<u8>> {
+    match format {
+        PayloadFormat::Zip => write_zip(jobs),
+        PayloadFormat::Pak => write_pak(jobs),
+    }
+}
+
+/// Build a zip in memory. Compression runs one rayon worker per file (each a
+/// standalone single-entry zip), then the outputs are merged by raw byte copy
+/// (`raw_copy_file`, no recompression) to saturate every core.
+///
+/// Peak memory is roughly the compressed payload twice over (minis + merged
+/// zip) plus each worker's current file uncompressed — fine for app-sized
+/// payloads; a streaming merge is the upgrade path if multi-GB inputs appear.
+fn write_zip(jobs: &[ZipJob]) -> Result<Vec<u8>> {
     // PHASE 1 (parallel): read + compress each file into its own mini-zip.
     let minis: Vec<Vec<u8>> = jobs
         .par_iter()
@@ -361,6 +383,44 @@ fn write_zip(
     }
 
     Ok(zip.finish()?.into_inner())
+}
+
+/// PakLib settings, measured on a 1.3 GB / 3.5k-file corpus. Blocks never
+/// span files and the installer stages files in parallel, so PakLib's maximum
+/// 64 MiB block costs no parallelism and saves ~58 MB over 1 MiB blocks. Zstd
+/// 20 then lands under the ZIP payload at the same install time (21+ saves
+/// ~1 MB more for a slower build). A zero minimum saving keeps every block
+/// that shrinks at all; incompressible ones are still stored raw.
+#[cfg(feature = "paklib")]
+const PAK_OPTIONS: common::pak::WriterOptions = common::pak::WriterOptions {
+    block_size: 64 * 1024 * 1024,
+    zstd_level: 20,
+    minimum_saving: 0.0,
+};
+
+/// Build the payload with PakLib. Entries are sorted so the output does not
+/// depend on the order the jobs were collected in.
+#[cfg(feature = "paklib")]
+fn write_pak(jobs: &[ZipJob]) -> Result<Vec<u8>> {
+    let mut jobs: Vec<&ZipJob> = jobs.iter().collect();
+    jobs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let temp = tempfile::tempdir().context("create PakLib payload temp dir")?;
+    let output = temp.path().join("payload.pak");
+    let mut writer =
+        common::pak::Writer::create(&output, PAK_OPTIONS).context("create PakLib payload")?;
+    for (name, source) in jobs {
+        writer
+            .add_file(source, name)
+            .with_context(|| format!("add {} to PakLib payload", source.display()))?;
+    }
+    writer.finalize().context("finalize PakLib payload")?;
+    fs::read(&output).with_context(|| format!("read {}", output.display()))
+}
+
+#[cfg(not(feature = "paklib"))]
+fn write_pak(_jobs: &[ZipJob]) -> Result<Vec<u8>> {
+    bail!("--pak needs an installer_builder built with the `paklib` feature")
 }
 
 #[cfg(test)]

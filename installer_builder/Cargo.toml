@@ -3,6 +3,11 @@ name = "installer_builder"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["paklib"]
+# Write PakLib payloads (`--pak`). Builds and statically links vendor/PakLib.
+paklib = ["common/paklib"]
+
 [dependencies]
 common = { path = "../common" }
 clap = { version = "4.4", features = ["derive"] }

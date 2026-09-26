@@ -66,7 +66,7 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
     let ctx = crate::extract::InstallCtx {
         install_dir: cmd.install_dir.clone(),
         payload: &loaded.payload,
-        zip_bytes: loaded.zip(),
+        archive_bytes: loaded.archive(),
         cancel,
         on_progress: progress_fn,
         plugin_inputs: cmd.plugin_inputs,

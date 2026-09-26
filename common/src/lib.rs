@@ -7,6 +7,7 @@ pub mod i18n;
 pub mod lock;
 pub mod log;
 pub mod model;
+pub mod pak;
 pub mod paths;
 pub mod plugin;
 pub mod registry;

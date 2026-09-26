@@ -17,6 +17,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # PakLib's zstd/xxHash come from vcpkg (preinstalled on the runner);
+      # keep its binary cache so they are not rebuilt on every run.
+      - uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ hashFiles('vendor/PakLib/vcpkg.json') }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:

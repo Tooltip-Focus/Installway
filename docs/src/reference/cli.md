@@ -74,6 +74,7 @@ wins. Required fields are checked after merging. See
 | `--min-installer-version <VER>` | `1.0.0` | Minimum installer stub version allowed to run this payload. |
 | `--purge-unknown-files` | Off | Full installs: remove unknown or leftover files on an upgrade or reinstall. Known files are still hash-skipped. Ignored for patches. |
 | `--force-reinstall` | Off | Dev: rewrite all files, remove orphans, skip the from-version check. |
+| `--pak` | Off (ZIP) | Experimental: embed the payload as a [PakLib](payload.md#payload-archive-layout) archive (64 MiB zstd-20 blocks). Smaller than ZIP and faster to install, slower to build. Needs the default `paklib` feature in both `installer_builder` and the stub. |
 | `--config <FILE.toml>` | None | Read any of the above from a TOML file. |
 
 Shortcuts, registry entries, plugins, feature packs, and `feature_mode` are

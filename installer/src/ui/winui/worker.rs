@@ -64,7 +64,7 @@ pub(super) fn start_install(feed: Feed, path: PathBuf, plugin_inputs: InputsByPl
         let ctx = InstallCtx {
             install_dir: path,
             payload: &loaded.payload,
-            zip_bytes: loaded.zip(),
+            archive_bytes: loaded.archive(),
             cancel: cancel.clone(),
             on_progress: progress_cb,
             plugin_inputs,
