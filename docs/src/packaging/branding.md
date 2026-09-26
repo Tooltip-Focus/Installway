@@ -60,7 +60,8 @@ How it behaves:
   1400 x 144 px (the header is 700 x 72 logical px), for a sharp result at
   100%, 125%, 150%, and 200% display scale.
 - **Keep the left edge light.** The product title and sub-line are drawn on
-  top of the banner in dark text, anchored to the left. Use a light or
+  top of the banner in dark text, anchored to the left, in both themes unless
+  you add a [dark variant](#dark-theme-variant). Use a light or
   low-contrast left third so the title stays readable; busier art belongs on
   the right, as in the sample above.
 
@@ -68,17 +69,46 @@ The banner is pure branding, so unlike the license it rides as its own raw
 resource rather than inside the signed manifest. Sign the final `.exe` with
 Authenticode to seal the whole file; see [Authenticode signing](signing.md).
 
+### Dark theme variant
+
+The WinUI wizard follows the Windows light/dark setting, live. By default the
+one `--banner` image serves both themes, with the title drawn over it in dark
+text. To match dark mode, add `--banner-dark <path.png>`:
+
+```pwsh
+installer_builder.exe pack `
+    ... `
+    --banner      .\branding\header-1400x144.png `
+    --banner-dark .\branding\header-dark-1400x144.png
+```
+
+- **Shown only in dark mode**, by the WinUI wizard. The light theme and the
+  classic Win32 wizard, which is always light, keep `--banner`.
+- **Light text.** Over the dark banner the title and sub-line switch to light
+  text, so keep its left third dark or low-contrast.
+- **Same rules as `--banner`**: PNG only, 1400 x 144 px, packaged in the
+  `.exe` as its own resource. It needs `--banner`: the build fails on
+  `--banner-dark` alone.
+- **Switches live.** Changing the Windows theme while the installer is open
+  swaps the banner and the text color at once.
+
+In a [config file](../building/config.md), set `banner` and `banner_dark`.
+
 ### Previewing a banner
 
 You can iterate on a banner without packing a full installer. The debug build
 of the stub has a preview window that reads any PNG from an environment
-variable:
+variable, `INSTALLWAY_PREVIEW_BANNER_DARK` for the dark variant:
 
 ```pwsh
 cargo build -p installer
 $env:INSTALLWAY_PREVIEW_BANNER = ".\branding\header-1400x144.png"
+$env:INSTALLWAY_PREVIEW_BANNER_DARK = ".\branding\header-dark-1400x144.png"
 .\target\debug\installer.exe --preview license
 ```
+
+Switch Windows between light and dark mode (Settings > Personalization >
+Colors) to check both.
 
 ## Icon inheritance
 

@@ -7,7 +7,7 @@
 //! cargo builds).
 
 use crate::args::{PackArgs, ResolvedPlugin, parse_assocs};
-use crate::banner::read_banner_png;
+use crate::banner::Banners;
 use crate::embed::{self, EmbedSpec};
 use crate::icon::ExeIcons;
 use crate::keys::{
@@ -69,11 +69,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
     manifest.feature_mode = args.feature_mode;
 
     let license_text = load_license(args)?;
-    let banner_png = args
-        .banner
-        .as_ref()
-        .map(|p| read_banner_png(p))
-        .transpose()?;
+    let banners = Banners::read(args.banner.as_deref(), args.banner_dark.as_deref())?;
     let associations = parse_assocs(&args.assoc, &args.product_id)?;
 
     let signed_json = sign_payload(
@@ -100,7 +96,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         &signed_json,
         &uninstaller_bytes,
         &archive_bytes,
-        banner_png.as_deref(),
+        &banners,
         icons.as_ref(),
     )?;
 
@@ -367,7 +363,7 @@ fn assemble_output(
     signed_json: &str,
     uninstaller_bytes: &[u8],
     archive_bytes: &[u8],
-    banner_png: Option<&[u8]>,
+    banners: &Banners,
     icons: Option<&ExeIcons>,
 ) -> Result<()> {
     if let Some(parent) = args.out.parent() {
@@ -388,7 +384,8 @@ fn assemble_output(
                 signed_json: signed_json.as_bytes(),
                 uninstaller_exe: uninstaller_bytes,
                 payload_len: archive_bytes.len() as u64,
-                banner_png,
+                banner_png: banners.light.as_deref(),
+                banner_dark_png: banners.dark.as_deref(),
                 product: &args.product,
                 publisher: &args.publisher,
                 version: &args.to_version,

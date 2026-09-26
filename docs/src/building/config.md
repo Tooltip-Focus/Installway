@@ -76,6 +76,7 @@ one of `pub_key` / `pub_key_literal` is also required. An invalid
 |---|---|---|---|
 | `license` | path | built-in placeholder | UTF-8 EULA text shown on the License page. |
 | `banner` | path | flat gray header | PNG painted across the wizard header. See [Branding](../packaging/branding.md). |
+| `banner_dark` | path | same as `banner` | Dark-theme variant of `banner` for the WinUI wizard. Needs `banner`. See [Branding](../packaging/branding.md#dark-theme-variant). |
 | `assoc` | array | `[]` | File associations, entries of the form `".ext:Description"`. |
 | `default_install_dir` | string | `%LOCALAPPDATA%\Programs\<product>` | Install path the UI proposes. `%VAR%` env tokens are expanded. |
 | `skip_license` | bool | `false` | Hide the License page. |
@@ -120,6 +121,7 @@ pub_key  = "keys/pub.key"
 
 license = "legal/EULA-myapp-en.txt"
 banner  = "branding/header-1400x144.png"
+banner_dark = "branding/header-dark-1400x144.png"
 assoc   = [".myx:MyApp Document", ".myz:MyApp Archive"]
 
 default_install_dir = "%LOCALAPPDATA%\\Programs\\MyApp"

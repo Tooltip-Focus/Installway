@@ -93,6 +93,11 @@ pub struct PackCli {
     #[arg(long, value_name = "FILE.png")]
     pub banner: Option<PathBuf>,
 
+    /// Optional dark-theme variant of `--banner`, shown by the WinUI wizard when
+    /// Windows runs dark. Without it, `--banner` serves both themes.
+    #[arg(long, value_name = "FILE.png")]
+    pub banner_dark: Option<PathBuf>,
+
     /// File association, format `.ext:Description`. Repeatable. Replaces (not
     /// merges with) any `assoc` list from the config file when given.
     #[arg(long = "assoc", value_name = ".ext:Description")]
@@ -286,6 +291,7 @@ pub struct PackFile {
     pub exe: Option<String>,
     pub license: Option<PathBuf>,
     pub banner: Option<PathBuf>,
+    pub banner_dark: Option<PathBuf>,
     #[serde(default)]
     pub assoc: Vec<String>,
     pub min_installer_version: Option<String>,
@@ -346,6 +352,7 @@ pub struct PackArgs {
     pub exe: Option<String>,
     pub license: Option<PathBuf>,
     pub banner: Option<PathBuf>,
+    pub banner_dark: Option<PathBuf>,
     pub assoc: Vec<String>,
     pub min_installer_version: String,
     pub force_reinstall: bool,
@@ -440,6 +447,7 @@ impl PackArgs {
             from_version: cli.from_version.or(file.from_version),
             license: cli.license.or(file.license),
             banner: cli.banner.or(file.banner),
+            banner_dark: cli.banner_dark.or(file.banner_dark),
             default_install_dir: cli.default_install_dir.or(file.default_install_dir),
             pub_key: cli.pub_key.or(file.pub_key),
             pub_key_literal: cli.pub_key_literal.or(file.pub_key_literal),
@@ -813,6 +821,7 @@ mod tests {
             exe: None,
             license: None,
             banner: None,
+            banner_dark: None,
             assoc: Vec::new(),
             min_installer_version: None,
             force_reinstall: false,

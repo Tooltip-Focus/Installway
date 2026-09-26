@@ -18,6 +18,9 @@ pub struct LoadedPayload {
     /// header. `None` when the installer was packed without `--banner`; the UI
     /// then keeps its flat accent strip.
     pub banner_png: Option<Vec<u8>>,
+    /// Optional dark-theme header banner (resource id=6, `--banner-dark`). The
+    /// WinUI wizard shows it instead of `banner_png` when the app runs dark.
+    pub banner_dark_png: Option<Vec<u8>>,
     /// The whole exe, memory-mapped; the payload archive is a slice into it, so
     /// multi-GB payloads stay demand-paged instead of copied into RAM.
     map: memmap2::Mmap,
@@ -84,14 +87,16 @@ pub fn load_and_verify() -> Result<LoadedPayload> {
 
     check_min_installer_version(&payload.min_installer_version)?;
 
-    // The header banner (id=5) is optional branding, not signed; its absence is
-    // normal and never fails the load.
+    // The header banners (id=5, dark id=6) are optional branding, not signed;
+    // their absence is normal and never fails the load.
     let banner_png = read_resource(5).ok();
+    let banner_dark_png = read_resource(6).ok();
 
     Ok(LoadedPayload {
         payload,
         uninstaller_bytes,
         banner_png,
+        banner_dark_png,
         map,
         archive_off,
         archive_len,
