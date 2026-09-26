@@ -8,7 +8,7 @@ use super::{
     BANNER_H, ID_ACCEPT_CHK, ID_BACK_BTN, ID_BANNER, ID_BROWSE_BTN, ID_CANCEL_BTN, ID_CLOSE_BTN,
     ID_ERROR_BOX, ID_ERROR_ICON, ID_HEADER, ID_INSTALL_BTN, ID_LAUNCH_CHK, ID_LICENSE_EDIT,
     ID_NEXT_BTN, ID_PATH_EDIT, ID_PATH_LABEL, ID_PATH_WARN, ID_PATH_WARN_ICON, ID_PROGRESS,
-    ID_STATUS, ID_SUBHEADER, PAD, STATE, WIN_H, WIN_W, tr,
+    ID_STATUS, ID_STATUS_FILE, ID_SUBHEADER, PAD, STATE, WIN_H, WIN_W, tr,
 };
 use crate::ui::helpers::{
     self, CHECKBOX, ControlRect, DEFAULT_BUTTON, PUSH_BUTTON, child, child_ex, move_controls,
@@ -25,6 +25,8 @@ use windows::core::w;
 const SS_ICON: u32 = 0x0003;
 const SS_CENTERIMAGE: u32 = 0x0200;
 const SS_REALSIZECONTROL: u32 = 0x0040;
+const SS_NOPREFIX: u32 = 0x0080;
+const SS_PATHELLIPSIS: u32 = 0x8000;
 const ES_READONLY: u32 = 0x0800;
 const ES_MULTILINE: u32 = 0x0004;
 const ES_LEFT: u32 = 0x0000;
@@ -196,11 +198,14 @@ unsafe fn stock_error_icon() -> Option<windows::Win32::UI::WindowsAndMessaging::
     Some(sii.hIcon)
 }
 
-/// Progress view: progress bar + status label.
+/// Progress view: progress bar + status label + the file being written, kept on
+/// one line by eliding the middle of a long path.
 unsafe fn build_progress(hwnd: HWND) {
+    let file_style = WINDOW_STYLE(SS_NOPREFIX | SS_PATHELLIPSIS);
     unsafe {
         child(hwnd, PROGRESS_CLASSW, "", WINDOW_STYLE(0), ID_PROGRESS);
         child(hwnd, w!("STATIC"), "", WINDOW_STYLE(0), ID_STATUS);
+        child(hwnd, w!("STATIC"), "", file_style, ID_STATUS_FILE);
     }
 }
 
@@ -293,7 +298,14 @@ pub(super) unsafe fn relayout(hwnd: HWND, dpi: i32) {
             ICON_SZ,
         ),
         (ID_PROGRESS, PAD, BANNER_H + PAD + 16, WIN_W - PAD * 2, 22),
-        (ID_STATUS, PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 48),
+        (ID_STATUS, PAD, BANNER_H + PAD + 48, WIN_W - PAD * 2, 20),
+        (
+            ID_STATUS_FILE,
+            PAD,
+            BANNER_H + PAD + 70,
+            WIN_W - PAD * 2,
+            20,
+        ),
         (ID_ERROR_ICON, PAD, BANNER_H + PAD + 16, 32, 32),
         (
             ID_ERROR_BOX,
@@ -331,6 +343,7 @@ pub(super) unsafe fn apply_fonts(hwnd: HWND) {
             ID_CANCEL_BTN,
             ID_PROGRESS,
             ID_STATUS,
+            ID_STATUS_FILE,
             ID_ERROR_BOX,
             ID_CLOSE_BTN,
             ID_LICENSE_EDIT,

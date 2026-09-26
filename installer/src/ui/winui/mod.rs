@@ -24,6 +24,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::WM_CLOSE;
+use windows_reactor::{
+    ChildrenControl, Grid, GridChildExt, GridLength, HorizontalAlignment, LayoutControl, TextBlock,
+    TextTrimming, View,
+};
 use winui_support::window::WindowHandle;
 
 thread_local! {
@@ -220,6 +224,23 @@ pub(super) fn pick_folder() -> Option<String> {
         CoTaskMemFree(Some(pwstr.0 as *const _));
         s
     }
+}
+
+/// One line that never wraps: a long path loses its middle (`bin\ver…\app.exe`),
+/// the part from the last `\` staying whole. Left-aligned, the grid shrinks to
+/// its content, so a short path leaves no gap before the file name. `cell`
+/// styles both halves alike.
+pub(super) fn path_line(text: &str, cell: impl Fn(TextBlock) -> TextBlock) -> View {
+    let (head, tail) = text.split_at(text.rfind('\\').unwrap_or(text.len()));
+    Grid::new()
+        .columns([GridLength::STAR, GridLength::Auto])
+        .horizontal_alignment(HorizontalAlignment::Left)
+        .children((
+            cell(TextBlock::new().text(head))
+                .text_trimming(TextTrimming::CharacterEllipsis)
+                .grid_column(0),
+            cell(TextBlock::new().text(tail)).grid_column(1),
+        ))
 }
 
 /// Dev-only: render one view with sample data, no payload needed.

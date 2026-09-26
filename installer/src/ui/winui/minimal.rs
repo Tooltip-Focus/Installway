@@ -125,22 +125,30 @@ impl Component for Minimal {
                 .client_size(WIN_W, WIN_H),
         );
 
+        let plain = |s: String| -> View {
+            TextBlock::new()
+                .text(s)
+                .font_size(12.0)
+                .text_wrapping(TextWrapping::Wrap)
+                .into()
+        };
         let status = if !self.error.is_empty() {
-            self.error.clone()
+            plain(self.error.clone())
         } else if self.signal == Signal::Done {
-            t.get("install.minimal_done")
+            plain(t.get("install.minimal_done"))
         } else if self.progress.total > 0 {
-            format!(
+            let line = format!(
                 "{}%   {}",
                 self.progress
                     .done
                     .saturating_mul(100)
                     .checked_div(self.progress.total)
                     .unwrap_or_default(),
-                self.progress.name
-            )
+                crate::ui::display_path(&self.progress.name)
+            );
+            super::path_line(&line, |t| t.font_size(12.0))
         } else {
-            self.progress.name.clone()
+            plain(self.progress.name.clone())
         };
         let fraction = if self.signal == Signal::Done {
             100.0
@@ -171,10 +179,7 @@ impl Component for Minimal {
                             .maximum(100.0)
                             .value(fraction)
                             .horizontal_alignment(HorizontalAlignment::Stretch),
-                        TextBlock::new()
-                            .text(status)
-                            .font_size(12.0)
-                            .text_wrapping(TextWrapping::Wrap),
+                        status,
                     )),
             ))
     }
