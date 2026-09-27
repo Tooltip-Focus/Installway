@@ -1,0 +1,15 @@
+# Context of ci/docker/toolchain.Dockerfile (the repository root).
+.git
+.idea
+.claude
+.agents
+target
+dist
+build
+keys
+products
+test-build
+test/out
+test/keys
+docs/book
+ci/docker/kit

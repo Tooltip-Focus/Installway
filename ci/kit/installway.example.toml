@@ -1,0 +1,25 @@
+# installway.toml - copy into your project folder and adapt.
+# Paths are relative to the folder you run pack.ps1 (or the Docker image) from.
+# Full key reference: https://tooltip-focus.github.io/Installway/building/config.html
+#
+# Do not set priv_key, pub_key, installer_stub or uninstaller here: the kit and
+# the Docker images supply them.
+
+product    = "My App"
+product_id = "myapp"
+publisher  = "My Company"
+to_version = "1.0.0"
+input      = "build"          # folder with the files to install
+exe        = "myapp.exe"      # main executable, relative to input
+out        = "dist/setup-myapp-1.0.0.exe"
+
+# license = "EULA.txt"
+# banner  = "branding/header.png"
+
+# Install analytics: uncomment to use the Hintway-enabled stub.
+# hintway_tenant_id = "your-tenant-id"
+
+[[shortcut]]
+dir    = "%START_MENU%"
+name   = "%PRODUCT%"
+target = "%EXE%"

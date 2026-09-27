@@ -21,6 +21,7 @@ Jump to:
 
 - [Quickstart](https://tooltip-focus.github.io/Installway/getting-started/quickstart.html)
 - [Packaging without the Rust toolchain](https://tooltip-focus.github.io/Installway/building/toolchain.html)
+- [Portable kit and Docker images](https://tooltip-focus.github.io/Installway/building/ci.html)
 - [Install modes](https://tooltip-focus.github.io/Installway/running/install.html)
 - [Builder CLI reference](https://tooltip-focus.github.io/Installway/reference/cli.html)
 
