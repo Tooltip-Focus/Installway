@@ -81,6 +81,9 @@ Distribute those `installer.exe` and `uninstall.exe` files with
 `hintway_tenant_id` when it packs an installer. A kit built without the
 feature ignores this field and contains no Hintway code.
 
+The release [portable kit and Docker images](ci.md) contain both variants
+and pick the Hintway one when the config sets `hintway_tenant_id`.
+
 ## Identity and privacy
 
 Each installer run generates a fresh random UUID as its identity. Nothing is

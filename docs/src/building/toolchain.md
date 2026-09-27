@@ -18,6 +18,10 @@ Icon stamping, version info, the overlay payload, the signature, and
 Authenticode signing all behave identically. The only difference is where the
 stub comes from and whether the packaging machine needs Rust.
 
+Each release also ships a ready-made kit and Docker images; see
+[Portable kit and Docker images](ci.md). This page covers building a kit
+with your own key.
+
 ## Toolchain mode (default)
 
 This is what every example in [Full installers](full.md) and
