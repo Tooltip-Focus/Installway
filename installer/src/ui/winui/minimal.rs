@@ -230,7 +230,7 @@ fn spawn(job: Job, progress: AsyncValue<Progress>, signal: AsyncValue<Signal>) {
         let ctx = InstallCtx {
             install_dir: install_dir.clone(),
             payload: &loaded.payload,
-            zip_bytes: loaded.zip(),
+            archive_bytes: loaded.archive(),
             cancel: Arc::new(AtomicBool::new(false)),
             on_progress,
             plugin_inputs,

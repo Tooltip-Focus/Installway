@@ -417,7 +417,7 @@ unsafe fn commit_install(hwnd: HWND) {
         let ctx = InstallCtx {
             install_dir: pb,
             payload: &loaded.payload,
-            zip_bytes: loaded.zip(),
+            archive_bytes: loaded.archive(),
             cancel: cancel.clone(),
             on_progress: progress_cb,
             plugin_inputs,

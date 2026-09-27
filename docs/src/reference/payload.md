@@ -13,7 +13,8 @@ documentation lives in
 | `RT_RCDATA` | 3 | The uninstaller `.exe`. |
 | `RT_RCDATA` | 4 | The payload length, a little-endian `u64`. |
 | `RT_RCDATA` | 5 | The optional header banner PNG. Not signed; see [Branding](../packaging/branding.md#header-banner). |
-| PE overlay | | A magic marker followed by the payload zip, appended after all resource passes. |
+| `RT_RCDATA` | 6 | The optional dark-theme header banner PNG, shown by the WinUI wizard in dark mode. Not signed; see [Branding](../packaging/branding.md#dark-theme-variant). |
+| PE overlay | | A magic marker followed by the payload archive, appended after all resource passes. |
 
 ## SignedPayload
 
@@ -40,7 +41,7 @@ serializer-determinism trap.
 | `from_version` | `Option<String>` | Set for patches; pins the target version. |
 | `to_version` | `String` | |
 | `min_installer_version` | `String` | Minimum stub version allowed to run this payload. Default `1.0.0`. |
-| `payload_blake3` | `String` | BLAKE3 of the zip, re-verified before extraction. |
+| `payload_blake3` | `String` | BLAKE3 of the payload archive, re-verified before extraction. |
 | `created_at_unix` | `i64` | |
 | `manifest` | `Manifest` | The per-file table; see below. |
 | `license_text` | `Option<String>` | EULA shown on the License page. |
@@ -81,16 +82,32 @@ struct FileEntry {
 }
 
 struct PatchInfo {
-    file: String,   // in-zip path: patches/<blake3(rel)>.patch
+    file: String,   // archive path: patches/<blake3(rel)>.patch
     size: u64,
 }
 ```
 
-**Payload zip layout.** Full files live under `full/<rel>`; binary patches
-under `patches/<blake3(rel)>.patch`. The installer reads `PatchInfo.file`
-verbatim as the in-zip path, so the name in the manifest and the actual zip
-entry name are produced by one function in the builder; they always match.
-Unchanged files in a patch have no zip entry, only their recorded hash.
+### Payload archive layout
+
+The payload is a [PakLib](https://github.com/Tooltip-Focus/PakLib) archive:
+independent zstd blocks of up to 64 MiB (level 20) that never span two files,
+so the installer decodes files in parallel straight from the memory-mapped
+exe. Already-compressed media and HDiffPatch patches are stored raw.
+
+Full files live under `full/<rel>`; binary patches under
+`patches/<blake3(rel)>.patch`. The installer reads `PatchInfo.file` verbatim as
+the archive path, so the name in the manifest and the actual entry name are
+produced by one function in the builder; they always match. Unchanged files in
+a patch have no entry, only their recorded hash.
+
+Cargo builds PakLib from the `vendor/PakLib` submodule with CMake and vcpkg,
+both part of the Visual Studio C++ workload, and links it statically: the
+installer stays a single exe. `PAKLIB_BUILD_DIR` points at an existing
+`windows-static` preset build instead.
+
+Installers built before PakLib payloads carried a ZIP instead. The formats do
+not mix: each installer only reads the payload it was packed with, and `pack`
+self-verifies that pairing at build time.
 
 ## InstallInfo
 

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct PluginEntry {
     pub name: String,
-    /// In-zip / data-dir-relative path, e.g. `plugins/<name>.dll`.
+    /// Archive / data-dir-relative path, e.g. `plugins/<name>.dll`.
     pub file: String,
     pub blake3: String,
     pub phase: PluginPhase,

@@ -68,7 +68,7 @@ pub fn run(ctx: &InstallCtx<'_>, uninstaller_bytes: &[u8]) -> Result<()> {
         &ctx.install_dir,
         ctx.payload,
         uninstaller_bytes,
-        ctx.zip_bytes,
+        ctx.archive_bytes,
         &ctx.plugin_inputs,
         ctx.requires_admin,
         &installed.created_dirs,
@@ -91,7 +91,7 @@ fn finalize(
     install_dir: &Path,
     payload: &InstallerPayload,
     uninstaller_bytes: &[u8],
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
     plugin_inputs: &common::plugin::InputsByPlugin,
     requires_admin: bool,
     created_dirs: &[PathBuf],
@@ -175,7 +175,7 @@ fn finalize(
 
     // Extract the plugin DLLs into the data dir so the uninstaller (and the
     // post-install phase below) can run them.
-    write_plugin_dlls(&data_dir, payload, zip_bytes)?;
+    write_plugin_dlls(&data_dir, payload, archive_bytes)?;
 
     // Register the Add/Remove Programs entry. Uses the in-memory `info`, not
     // the json file, so the json can safely be written last.
@@ -290,15 +290,18 @@ fn merge_created_dirs(
     dirs
 }
 
-/// Extract every plugin DLL from the payload zip into `<data_dir>/plugins/`.
-fn write_plugin_dlls(data_dir: &Path, payload: &InstallerPayload, zip_bytes: &[u8]) -> Result<()> {
+/// Extract every plugin DLL from the payload archive into `<data_dir>/plugins/`.
+fn write_plugin_dlls(
+    data_dir: &Path,
+    payload: &InstallerPayload,
+    archive_bytes: &[u8],
+) -> Result<()> {
     if payload.plugins.is_empty() {
         return Ok(());
     }
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))
-        .context("open payload zip for plugins")?;
+    let archive = crate::archive::PayloadArchive::open(archive_bytes)?;
     for p in &payload.plugins {
-        let buf = crate::extract::read_zip_entry(&mut archive, &p.file)?;
+        let buf = archive.read_entry(&p.file)?;
         // `p.file` is `plugins/<name>.dll`, relative to the data dir.
         common::utils::write_atomic(&data_dir.join(&p.file), &buf)?;
     }

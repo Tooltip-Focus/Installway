@@ -118,6 +118,9 @@ thread_local! {
     pub(super) static PAYLOAD: RefCell<Option<InstallerPayload>> = const { RefCell::new(None) };
     /// Staged banner PNG as a `file:///` URI; `None` keeps the plain header.
     pub(super) static BANNER_URI: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Staged dark-theme banner, shown instead of [`BANNER_URI`] when the app
+    /// runs dark; `None` keeps the one banner for both themes.
+    pub(super) static BANNER_DARK_URI: RefCell<Option<String>> = const { RefCell::new(None) };
     pub(super) static LAUNCH_FLAG: RefCell<bool> = const { RefCell::new(false) };
     pub(super) static SKIP_LICENSE: RefCell<bool> = const { RefCell::new(false) };
     pub(super) static SKIP_PATH: RefCell<bool> = const { RefCell::new(false) };

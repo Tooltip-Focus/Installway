@@ -7,6 +7,8 @@ pub mod i18n;
 pub mod lock;
 pub mod log;
 pub mod model;
+#[cfg(windows)]
+pub mod pak;
 pub mod paths;
 pub mod plugin;
 pub mod registry;

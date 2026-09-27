@@ -17,6 +17,29 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # PakLib's zstd/xxHash come from the runner's preinstalled vcpkg. PakLib
+      # pins them with a `builtin-baseline` newer than the runner image's
+      # vcpkg clone, so update it (history + tool) or the baseline is unknown.
+      - name: Update vcpkg
+        shell: pwsh
+        run: |
+          $vcpkg = $env:VCPKG_INSTALLATION_ROOT
+          if ((git -C $vcpkg rev-parse --is-shallow-repository) -eq 'true') {
+            git -C $vcpkg fetch --quiet --unshallow origin
+          }
+          git -C $vcpkg fetch --quiet origin master
+          git -C $vcpkg checkout --quiet FETCH_HEAD
+          & "$vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Keep vcpkg's binary cache so zstd/xxHash are not rebuilt on every run.
+      - uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ hashFiles('vendor/PakLib/vcpkg.json') }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:

@@ -178,9 +178,12 @@ pub fn headless_plugin_inputs(
     install_dir: &std::path::Path,
 ) -> Result<common::plugin::InputsByPlugin> {
     let self_exe = std::env::current_exe()?;
-    let Some(ui) =
-        crate::extract::extract_ui_plugins(&loaded.payload, install_dir, &self_exe, loaded.zip())
-    else {
+    let Some(ui) = crate::extract::extract_ui_plugins(
+        &loaded.payload,
+        install_dir,
+        &self_exe,
+        loaded.archive(),
+    ) else {
         return Ok(common::plugin::InputsByPlugin::default());
     };
 

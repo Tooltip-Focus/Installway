@@ -24,7 +24,6 @@ blake3 = { version = "1.5", features = ["mmap"] }
 hex = "0.4"
 anyhow = "1.0"
 ed25519-dalek = "2"
-zip = { version = "2.2", default-features = false, features = ["deflate", "zstd"] }
 hdiffpatch-rs = { git = "https://github.com/TwintailTeam/hdiffpatch-rs" }
 mslnk = "0.1"
 fs4 = "0.13"

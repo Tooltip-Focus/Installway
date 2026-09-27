@@ -63,7 +63,7 @@ Jump to:
 1. **Ed25519 signature** over the exact JSON bytes describing the payload. The
    public key is **compiled** into the stub (`INSTALLER_PUB_KEY`), never a
    swappable resource.
-2. **BLAKE3 of the payload zip**, re-verified before a single byte is extracted.
+2. **BLAKE3 of the payload archive**, re-verified before a single byte is extracted.
 3. **BLAKE3 per file**, checked after each write (full) or patch apply.
 4. **Anti-rollback** via `min_installer_version`.
 5. **Patch from-version pinning**: a patch refuses to run unless the target's
@@ -76,7 +76,9 @@ as a post-build step (the builder prints the exact command). See
 ## Quick start
 
 ```pwsh
-# 1. build the packer
+# 1. build the packer (needs the vendor/PakLib submodule and the Visual Studio
+#    C++ workload)
+git submodule update --init
 cargo build --release -p installer_builder
 
 # 2. generate a signing keypair (once per product)

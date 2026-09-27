@@ -45,6 +45,8 @@ impl<T> SetState<T> {
 pub(super) enum Message {
     Set(Model),
     Poll,
+    /// The app's light/dark theme, at start and whenever Windows switches it.
+    Scheme(ColorScheme),
 }
 
 pub(super) struct WizardApp {
@@ -52,6 +54,7 @@ pub(super) struct WizardApp {
     feed: Feed,
     seq: HookRef<u64>,
     attached: bool,
+    scheme: ColorScheme,
 }
 
 impl WizardApp {
@@ -116,11 +119,13 @@ impl Component for WizardApp {
             feed,
             seq,
             attached: false,
+            scheme: ColorScheme::Light,
         }
     }
     fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
         match message {
             Message::Set(m) => self.model = m,
+            Message::Scheme(scheme) => self.scheme = scheme,
             Message::Poll => {
                 if !self.attached && super::active_hwnd() != 0 {
                     super::attach_window(self.feed.signal.clone());
@@ -142,12 +147,14 @@ impl Component for WizardApp {
                 .backdrop(WindowBackdrop::Mica)
                 .client_size(WIN_W, WIN_H),
         );
+        let on_scheme = cx.callback(Message::Scheme);
+        cx.on_color_scheme(on_scheme);
         let model = self.model.clone();
         let set = SetState(cx.callback(Message::Set));
         let title_bar = TitleBar::new().title(with_payload(|p| p.product.clone()));
         let children: Vec<Element> = vec![
             Element::from(title_bar).grid_row(0),
-            banner(&model).grid_row(1),
+            banner(&model, self.scheme).grid_row(1),
             content(&model, &set).grid_row(2),
             buttons(&model, &set, &self.feed, &self.seq).grid_row(3),
             dialog(&model, &set),
@@ -167,14 +174,12 @@ impl Component for WizardApp {
 // ---- Header --------------------------------------------------------------
 
 /// A packaged banner image with the title overlaid, or a large title on Mica.
-fn banner(model: &Model) -> Element {
+fn banner(model: &Model, scheme: ColorScheme) -> Element {
     let (header, sub) = banner_text(model);
 
-    match super::model::BANNER_URI.with(|b| b.borrow().clone()) {
-        // Two children in one grid cell overlap in declaration order. Banner art
-        // is authored light, so the ink stays dark whatever the theme.
-        Some(uri) => {
-            let ink = Color::rgb(0x33, 0x33, 0x33);
+    match banner_art(scheme) {
+        // Two children in one grid cell overlap in declaration order.
+        Some((uri, ink)) => {
             let overlay = vstack((
                 text_block(header)
                     .font_size(20.0)
@@ -206,6 +211,21 @@ fn banner(model: &Model) -> Element {
         .spacing(4.0)
         .padding(Thickness::new(PAD, 12.0, PAD, 4.0))
         .into(),
+    }
+}
+
+/// The banner for `scheme` and the ink for text drawn over it. The main banner
+/// is authored light, so its ink stays dark whatever the theme; the optional
+/// dark banner replaces it in dark mode, with light ink.
+fn banner_art(scheme: ColorScheme) -> Option<(String, Color)> {
+    let dark = (scheme == ColorScheme::Dark)
+        .then(|| super::model::BANNER_DARK_URI.with(|b| b.borrow().clone()))
+        .flatten();
+    match dark {
+        Some(uri) => Some((uri, Color::rgb(0xF3, 0xF3, 0xF3))),
+        None => super::model::BANNER_URI
+            .with(|b| b.borrow().clone())
+            .map(|uri| (uri, Color::rgb(0x33, 0x33, 0x33))),
     }
 }
 
