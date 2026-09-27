@@ -2,19 +2,19 @@
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
 //! `pack` command orchestration. [`run`] drives the phases in order; the heavy
-//! lifting lives in the sibling modules ([`crate::payload`] for the zip +
+//! lifting lives in the sibling modules ([`crate::payload`] for the archive +
 //! manifest, [`crate::embed`] for the PE resources, [`crate::toolchain`] for
 //! cargo builds).
 
 use crate::args::{PackArgs, ResolvedPlugin, parse_assocs};
-use crate::banner::read_banner_png;
+use crate::banner::Banners;
 use crate::embed::{self, EmbedSpec};
 use crate::icon::ExeIcons;
 use crate::keys::{
     load_pub_key_hex, load_signing_key, parse_signing_key_hex, validate_pub_key_hex,
 };
 use crate::license::{decode_license, trimmed_title};
-use crate::payload::{ZipJob, build_full, build_patch};
+use crate::payload::{PayloadJob, build_full, build_patch};
 use crate::toolchain::cargo_build_release;
 use anyhow::{Context, Result, bail};
 use common::model::file_assoc::FileAssoc;
@@ -47,8 +47,8 @@ pub fn run(args: &PackArgs) -> Result<()> {
     let (signing, pub_key_hex) = resolve_keys(args)?;
     let (plugin_entries, plugin_files) = scan_plugins(&args.plugins)?;
 
-    // Payload zip + manifest.
-    let (zip_bytes, mut manifest) = match &patch_from {
+    // Payload archive + manifest.
+    let (archive_bytes, mut manifest) = match &patch_from {
         Some(from_dir) => build_patch(
             &args.input,
             from_dir,
@@ -63,29 +63,25 @@ pub fn run(args: &PackArgs) -> Result<()> {
             &plugin_files,
         )?,
     };
-    // Tag files with their feature pack in the manifest (the zip keeps every file).
+    // Tag files with their feature pack in the manifest (the archive keeps every file).
     crate::features::apply(&mut manifest, &args.features)?;
     // Record how upgrades seed the active feature base (sticky vs. override).
     manifest.feature_mode = args.feature_mode;
 
     let license_text = load_license(args)?;
-    let banner_png = args
-        .banner
-        .as_ref()
-        .map(|p| read_banner_png(p))
-        .transpose()?;
+    let banners = Banners::read(args.banner.as_deref(), args.banner_dark.as_deref())?;
     let associations = parse_assocs(&args.assoc, &args.product_id)?;
 
     let signed_json = sign_payload(
         args,
         &signing,
-        &zip_bytes,
+        &archive_bytes,
         manifest,
         plugin_entries,
         license_text,
         associations,
     )?;
-    println!("Payload: {} bytes (zip)", zip_bytes.len());
+    println!("Payload: {} bytes", archive_bytes.len());
     println!("Signed manifest: {} bytes", signed_json.len());
 
     let stub = resolve_stub(args, pub_key_hex.as_deref())?;
@@ -99,8 +95,8 @@ pub fn run(args: &PackArgs) -> Result<()> {
         &stub,
         &signed_json,
         &uninstaller_bytes,
-        &zip_bytes,
-        banner_png.as_deref(),
+        &archive_bytes,
+        &banners,
         icons.as_ref(),
     )?;
 
@@ -152,20 +148,20 @@ fn resolve_keys(args: &PackArgs) -> Result<(SigningKey, Option<String>)> {
     Ok((signing, pub_key_hex))
 }
 
-/// Read each plugin DLL for its hash + in-zip name. The bytes themselves are
-/// bundled into the payload zip by `build_full` / `build_patch`.
-fn scan_plugins(plugins: &[ResolvedPlugin]) -> Result<(Vec<PluginEntry>, Vec<ZipJob>)> {
+/// Read each plugin DLL for its hash + archive name. The bytes themselves are
+/// bundled into the payload archive by `build_full` / `build_patch`.
+fn scan_plugins(plugins: &[ResolvedPlugin]) -> Result<(Vec<PluginEntry>, Vec<PayloadJob>)> {
     let mut entries = Vec::with_capacity(plugins.len());
     let mut files = Vec::with_capacity(plugins.len());
     for p in plugins {
-        let in_zip = format!("plugins/{}.dll", p.name);
+        let archive_name = format!("plugins/{}.dll", p.name);
         let hash =
             file_blake3(&p.src).with_context(|| format!("read plugin dll {}", p.src.display()))?;
         println!("Plugin: {} ({:?}) <- {}", p.name, p.phase, p.src.display());
-        files.push((in_zip.clone(), p.src.clone()));
+        files.push((archive_name.clone(), p.src.clone()));
         entries.push(PluginEntry {
             name: p.name.clone(),
-            file: in_zip,
+            file: archive_name,
             blake3: hash,
             phase: p.phase,
             required: p.required,
@@ -197,7 +193,7 @@ fn load_license(args: &PackArgs) -> Result<Option<String>> {
 fn sign_payload(
     args: &PackArgs,
     signing: &SigningKey,
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
     manifest: Manifest,
     plugins: Vec<PluginEntry>,
     license_text: Option<String>,
@@ -216,7 +212,7 @@ fn sign_payload(
         from_version: args.from_version.clone(),
         to_version: args.to_version.clone(),
         min_installer_version: args.min_installer_version.clone(),
-        payload_blake3: bytes_blake3(zip_bytes),
+        payload_blake3: bytes_blake3(archive_bytes),
         created_at_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -366,8 +362,8 @@ fn assemble_output(
     stub: &Path,
     signed_json: &str,
     uninstaller_bytes: &[u8],
-    zip_bytes: &[u8],
-    banner_png: Option<&[u8]>,
+    archive_bytes: &[u8],
+    banners: &Banners,
     icons: Option<&ExeIcons>,
 ) -> Result<()> {
     if let Some(parent) = args.out.parent() {
@@ -387,8 +383,9 @@ fn assemble_output(
             &EmbedSpec {
                 signed_json: signed_json.as_bytes(),
                 uninstaller_exe: uninstaller_bytes,
-                payload_len: zip_bytes.len() as u64,
-                banner_png,
+                payload_len: archive_bytes.len() as u64,
+                banner_png: banners.light.as_deref(),
+                banner_dark_png: banners.dark.as_deref(),
                 product: &args.product,
                 publisher: &args.publisher,
                 version: &args.to_version,
@@ -397,11 +394,11 @@ fn assemble_output(
         )?;
         // Payload appended as a PE overlay, after all resource passes (so they
         // don't drop it) and before signing. No size ceiling; installer mmaps it.
-        embed::append_payload(&tmp, zip_bytes)?;
+        embed::append_payload(&tmp, archive_bytes)?;
         println!(
             "Embedded signed manifest + uninstaller{} + version, appended {}-byte payload overlay",
             if icons.is_some() { " + icon" } else { "" },
-            zip_bytes.len(),
+            archive_bytes.len(),
         );
 
         // Self-check: run the produced installer's own `--verify`. Catches a
@@ -431,9 +428,10 @@ fn self_verify(setup: &Path) -> Result<()> {
         bail!(
             "self-verify failed ({} --verify exited {}). The produced installer rejects its \
              own payload — most likely the prebuilt stub's compiled-in public key does not \
-             match --priv-key, or the stub (installer.exe) was built without INSTALLER_PUB_KEY. \
-             Rebuild installer.exe/uninstall.exe with INSTALLER_PUB_KEY set to the matching \
-             pub.key, or drop --installer-stub/--uninstaller to let pack build the stub.",
+             match --priv-key, the stub (installer.exe) was built without INSTALLER_PUB_KEY, \
+             or it predates PakLib payloads. Rebuild installer.exe/uninstall.exe from this \
+             version with INSTALLER_PUB_KEY set to the matching pub.key, or drop \
+             --installer-stub/--uninstaller to let pack build the stub.",
             setup.display(),
             status.code().unwrap_or(-1)
         );

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
-//! Optional header-banner image: read, validate as PNG, and report its size.
+//! Optional header-banner images: read, validate as PNG, and report their size.
 
 use anyhow::{Context, Result, bail};
 use std::fs;
@@ -10,12 +10,38 @@ use std::path::Path;
 /// The 8-byte PNG file signature.
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
-/// Read and validate the optional header-banner image. Must be a PNG (the
+/// The header banners to embed: `light` (`--banner`) serves every theme unless
+/// `dark` (`--banner-dark`) is set, which the WinUI wizard shows in dark mode.
+#[derive(Default)]
+pub(crate) struct Banners {
+    pub light: Option<Vec<u8>>,
+    pub dark: Option<Vec<u8>>,
+}
+
+impl Banners {
+    pub(crate) fn read(light: Option<&Path>, dark: Option<&Path>) -> Result<Self> {
+        if dark.is_some() && light.is_none() {
+            bail!(
+                "--banner-dark needs --banner: the main banner serves the light theme and the \
+                 Win32 wizard, the dark one only replaces it in dark mode"
+            );
+        }
+        Ok(Self {
+            light: light.map(|p| read_banner_png(p, "Banner")).transpose()?,
+            dark: dark
+                .map(|p| read_banner_png(p, "Dark banner"))
+                .transpose()?,
+        })
+    }
+}
+
+/// Read and validate one header-banner image. Must be a PNG (the
 /// runtime decoder and the docs assume PNG); the bytes ride inside the signed
 /// payload, so an oversized image bloats every download — we warn past ~512 KB
 /// but do not hard-fail (a high-res 2x banner can legitimately be a few hundred
 /// KB). Dimensions are read from the IHDR chunk for an informational log line.
-pub(crate) fn read_banner_png(path: &Path) -> Result<Vec<u8>> {
+/// `label` names it in the log line.
+fn read_banner_png(path: &Path, label: &str) -> Result<Vec<u8>> {
     let bytes = fs::read(path).with_context(|| format!("read banner {}", path.display()))?;
     if bytes.len() < PNG_MAGIC.len() || bytes[..PNG_MAGIC.len()] != PNG_MAGIC {
         bail!(
@@ -27,7 +53,7 @@ pub(crate) fn read_banner_png(path: &Path) -> Result<Vec<u8>> {
         .map(|(w, h)| format!("{w}x{h}"))
         .unwrap_or_else(|| "unknown size".to_string());
     println!(
-        "Banner: {} ({}, {} bytes) from {}",
+        "{label}: {} ({}, {} bytes) from {}",
         dims,
         human_bytes(bytes.len()),
         bytes.len(),
@@ -83,9 +109,38 @@ mod tests {
         bytes.extend_from_slice(&1400u32.to_be_bytes());
         bytes.extend_from_slice(&144u32.to_be_bytes());
         std::fs::write(&p, &bytes).unwrap();
-        let out = read_banner_png(&p).unwrap();
+        let out = read_banner_png(&p, "Banner").unwrap();
         assert_eq!(out, bytes);
         assert_eq!(png_dimensions(&bytes), Some((1400, 144)));
+    }
+
+    #[test]
+    fn banners_read_light_and_optional_dark() {
+        let dir = tempfile::tempdir().unwrap();
+        let light = dir.path().join("light.png");
+        let dark = dir.path().join("dark.png");
+        std::fs::write(&light, [&PNG_MAGIC[..], b"light"].concat()).unwrap();
+        std::fs::write(&dark, [&PNG_MAGIC[..], b"dark"].concat()).unwrap();
+
+        let none = Banners::read(None, None).unwrap();
+        assert!(none.light.is_none() && none.dark.is_none());
+
+        let one = Banners::read(Some(&light), None).unwrap();
+        assert!(one.light.unwrap().ends_with(b"light"));
+        assert!(one.dark.is_none());
+
+        let both = Banners::read(Some(&light), Some(&dark)).unwrap();
+        assert!(both.light.unwrap().ends_with(b"light"));
+        assert!(both.dark.unwrap().ends_with(b"dark"));
+    }
+
+    #[test]
+    fn dark_banner_requires_main_banner() {
+        let dir = tempfile::tempdir().unwrap();
+        let dark = dir.path().join("dark.png");
+        std::fs::write(&dark, PNG_MAGIC).unwrap();
+        let err = Banners::read(None, Some(&dark)).err().unwrap().to_string();
+        assert!(err.contains("--banner-dark needs --banner"), "got: {err}");
     }
 
     #[test]
@@ -103,7 +158,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("b.png");
         std::fs::write(&p, b"GIF89a not really a png").unwrap();
-        let err = read_banner_png(&p).unwrap_err().to_string();
+        let err = read_banner_png(&p, "Banner").unwrap_err().to_string();
         assert!(err.contains("not a PNG"), "got: {err}");
     }
 

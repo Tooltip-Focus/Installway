@@ -24,12 +24,16 @@ The hook is the fast local mirror of the global CI check.
 ## Build & test
 
 ```sh
+git submodule update --init   # vendor/PakLib, the payload archive library
 cargo build --workspace
 cargo test --workspace
 ```
 
 Windows-only project (the `windows` crate + Win32 APIs); build and test on
-Windows. CI runs on `windows-latest`.
+Windows. CI runs on `windows-latest`. Besides Rust, the build needs Visual
+Studio (or its Build Tools) with the C++ workload, which also provides the
+CMake and vcpkg used to build PakLib. The first build compiles PakLib and its
+dependencies; later builds reuse them.
 
 ## Releases
 

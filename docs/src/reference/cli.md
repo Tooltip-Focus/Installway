@@ -62,6 +62,7 @@ wins. Required fields are checked after merging. See
 |---|---|---|
 | `--license <FILE>` | Built-in placeholder | UTF-8 EULA shown on the License page. |
 | `--banner <FILE.png>` | Flat gray header | PNG painted across the wizard header. Author at 1400 x 144 px; see [Branding](../packaging/branding.md#header-banner). |
+| `--banner-dark <FILE.png>` | Same as `--banner` | Dark-theme variant of `--banner`, shown by the WinUI wizard when Windows runs dark (with light title text). Needs `--banner`; see [Branding](../packaging/branding.md#dark-theme-variant). |
 | `--assoc ".ext:Description"` | None | File association. Repeatable; a CLI list replaces the config file's list. |
 | `--default-install-dir <DIR>` | `%LOCALAPPDATA%\Programs\<product>` | Proposed install path. `%VAR%` tokens are expanded. |
 | `--skip-license` | Off | Hide the License page. |

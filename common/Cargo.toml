@@ -20,6 +20,9 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
+# The one zstd in the exe: PakLib links against it (see build.rs), and
+# hdiffpatch-rs already pulls the same crate for patches.
+zstd-sys = { version = "2.0.16", default-features = false }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Globalization",

@@ -18,17 +18,20 @@ pub struct LoadedPayload {
     /// header. `None` when the installer was packed without `--banner`; the UI
     /// then keeps its flat accent strip.
     pub banner_png: Option<Vec<u8>>,
-    /// The whole exe, memory-mapped; the payload zip is a slice into it, so
+    /// Optional dark-theme header banner (resource id=6, `--banner-dark`). The
+    /// WinUI wizard shows it instead of `banner_png` when the app runs dark.
+    pub banner_dark_png: Option<Vec<u8>>,
+    /// The whole exe, memory-mapped; the payload archive is a slice into it, so
     /// multi-GB payloads stay demand-paged instead of copied into RAM.
     map: memmap2::Mmap,
-    zip_off: usize,
-    zip_len: usize,
+    archive_off: usize,
+    archive_len: usize,
 }
 
 impl LoadedPayload {
-    /// Borrowed view of the payload zip (mmap-backed, no heap copy).
-    pub fn zip(&self) -> &[u8] {
-        &self.map[self.zip_off..self.zip_off + self.zip_len]
+    /// Borrowed view of the payload archive (mmap-backed, no heap copy).
+    pub fn archive(&self) -> &[u8] {
+        &self.map[self.archive_off..self.archive_off + self.archive_len]
     }
 }
 
@@ -39,7 +42,7 @@ pub fn load_and_verify() -> Result<LoadedPayload> {
     if payload_len.len() != 8 {
         bail!("payload-length resource malformed");
     }
-    let zip_len = u64::from_le_bytes(payload_len[..8].try_into().unwrap()) as usize;
+    let archive_len = u64::from_le_bytes(payload_len[..8].try_into().unwrap()) as usize;
 
     let signed: SignedPayload =
         serde_json::from_slice(&signed_bytes).context("parse signed payload JSON")?;
@@ -60,18 +63,18 @@ pub fn load_and_verify() -> Result<LoadedPayload> {
     if map.len() < magic_end || &map[overlay_start..magic_end] != OVERLAY_MAGIC {
         bail!("payload overlay missing or corrupt (bad magic)");
     }
-    let zip_off = magic_end;
-    if map.len() < zip_off + zip_len {
+    let archive_off = magic_end;
+    if map.len() < archive_off + archive_len {
         bail!(
             "payload overlay truncated: need {} bytes from offset {}, file is {}",
-            zip_len,
-            zip_off,
+            archive_len,
+            archive_off,
             map.len()
         );
     }
 
     // Verify BLAKE3 of the payload, over the mmap (not copied).
-    let actual_hash = blake3::hash(&map[zip_off..zip_off + zip_len])
+    let actual_hash = blake3::hash(&map[archive_off..archive_off + archive_len])
         .to_hex()
         .to_string();
     if actual_hash != payload.payload_blake3 {
@@ -84,17 +87,19 @@ pub fn load_and_verify() -> Result<LoadedPayload> {
 
     check_min_installer_version(&payload.min_installer_version)?;
 
-    // The header banner (id=5) is optional branding, not signed; its absence is
-    // normal and never fails the load.
+    // The header banners (id=5, dark id=6) are optional branding, not signed;
+    // their absence is normal and never fails the load.
     let banner_png = read_resource(5).ok();
+    let banner_dark_png = read_resource(6).ok();
 
     Ok(LoadedPayload {
         payload,
         uninstaller_bytes,
         banner_png,
+        banner_dark_png,
         map,
-        zip_off,
-        zip_len,
+        archive_off,
+        archive_len,
     })
 }
 

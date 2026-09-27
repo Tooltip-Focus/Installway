@@ -39,6 +39,8 @@ pub struct EmbedSpec<'a> {
     pub payload_len: u64,
     /// Optional header banner PNG (RCDATA id=5; absent when `None`).
     pub banner_png: Option<&'a [u8]>,
+    /// Optional dark-theme header banner PNG (RCDATA id=6; absent when `None`).
+    pub banner_dark_png: Option<&'a [u8]>,
     /// Product display name (RT_VERSION).
     pub product: &'a str,
     /// Publisher name (RT_VERSION).
@@ -54,7 +56,7 @@ pub struct EmbedSpec<'a> {
 ///
 /// * `RT_RCDATA` blobs read by the installer via `FindResource`, all under
 ///   neutral language: signed manifest (id=2), uninstaller (id=3), payload
-///   length (id=4) and the optional header banner PNG (id=5);
+///   length (id=4) and the optional header banner PNGs (light id=5, dark id=6);
 /// * the `RT_VERSION` version-info block (Explorer Details tab + SmartScreen);
 /// * the app's `RT_ICON` / `RT_GROUP_ICON` tables, when present.
 ///
@@ -86,6 +88,9 @@ pub fn embed_all(exe: &Path, spec: &EmbedSpec) -> Result<()> {
     if let Some(banner) = spec.banner_png {
         rcdata.insert(ResourceEntryName::ID(5), rcdata_entry(banner));
     }
+    if let Some(banner) = spec.banner_dark_png {
+        rcdata.insert(ResourceEntryName::ID(6), rcdata_entry(banner));
+    }
     resources.root_mut().insert(
         ResourceEntryName::ID(RT_RCDATA),
         ResourceEntry::Table(rcdata),
@@ -115,19 +120,19 @@ pub fn embed_all(exe: &Path, spec: &EmbedSpec) -> Result<()> {
     Ok(())
 }
 
-/// Append the payload zip as a PE overlay: `MAGIC || zip`, written straight to
+/// Append the payload archive as a PE overlay: `MAGIC || payload`, written straight to
 /// the end of the file. Streaming, no resource-size limit. Must run AFTER
 /// [`embed_all`] (that rewrites the PE and would drop a pre-existing overlay)
 /// and BEFORE Authenticode signing (signtool appends its
 /// certificate table after the overlay; the installer locates the overlay from
 /// the PE section table, not the end of file, so a trailing cert is harmless).
-pub fn append_payload(exe: &Path, payload_zip: &[u8]) -> Result<()> {
+pub fn append_payload(exe: &Path, payload: &[u8]) -> Result<()> {
     let mut f = OpenOptions::new()
         .append(true)
         .open(exe)
         .with_context(|| format!("open {} for overlay append", exe.display()))?;
     f.write_all(OVERLAY_MAGIC).context("write overlay magic")?;
-    f.write_all(payload_zip).context("write overlay payload")?;
+    f.write_all(payload).context("write overlay payload")?;
     f.flush().ok();
     Ok(())
 }
@@ -169,6 +174,7 @@ mod tests {
         let signed = b"SIGNED-MANIFEST-JSON";
         let uninst = b"UNINSTALLER-EXE-BYTES";
         let banner = b"PNG-BANNER";
+        let banner_dark = b"PNG-BANNER-DARK";
         let len = 0x1122_3344_5566_7788u64;
         embed_all(
             &exe,
@@ -177,6 +183,7 @@ mod tests {
                 uninstaller_exe: uninst,
                 payload_len: len,
                 banner_png: Some(banner),
+                banner_dark_png: Some(banner_dark),
                 product: "Prod",
                 publisher: "Pub",
                 version: "1.2.3",
@@ -193,6 +200,7 @@ mod tests {
             Some(&len.to_le_bytes()[..])
         );
         assert_eq!(read_rcdata(&image, 5).as_deref(), Some(&banner[..]));
+        assert_eq!(read_rcdata(&image, 6).as_deref(), Some(&banner_dark[..]));
         // Version info landed in the same pass.
         assert!(
             image
@@ -215,6 +223,7 @@ mod tests {
                 uninstaller_exe: b"b",
                 payload_len: 7,
                 banner_png: None,
+                banner_dark_png: None,
                 product: "P",
                 publisher: "Q",
                 version: "1.0",
@@ -226,5 +235,6 @@ mod tests {
         let image = Image::parse_file(&exe).unwrap();
         assert!(read_rcdata(&image, 2).is_some());
         assert!(read_rcdata(&image, 5).is_none()); // no banner -> id 5 absent
+        assert!(read_rcdata(&image, 6).is_none());
     }
 }

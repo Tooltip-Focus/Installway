@@ -1,0 +1,3 @@
+[submodule "vendor/PakLib"]
+	path = vendor/PakLib
+	url = https://github.com/Tooltip-Focus/PakLib.git

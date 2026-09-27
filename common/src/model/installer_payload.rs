@@ -82,7 +82,7 @@ pub struct InstallerPayload {
     /// uninstall.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registry: Vec<RegistryEntry>,
-    /// Native DLL plugins bundled in the payload zip.
+    /// Native DLL plugins bundled in the payload archive.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginEntry>,
     /// Show the "uninstall complete" confirmation message box at the end of an

@@ -5,6 +5,7 @@
 
 #[cfg(feature = "hintway")]
 mod analytics;
+mod archive;
 mod elevation;
 mod extract;
 mod install;
@@ -242,6 +243,10 @@ fn run(cli: Cli) -> Result<()> {
 
     if cli.verify {
         attach_console();
+        // Hash and signature already passed in `load_and_verify`; also parse
+        // the archive index, so a payload this stub cannot read (a stub from
+        // before PakLib payloads) fails the builder's self-verify.
+        archive::PayloadArchive::open(loaded.archive())?;
         let license = match &loaded.payload.license_text {
             Some(t) => format!("custom ({} bytes)", t.len()),
             None => "built-in placeholder".to_string(),
@@ -258,7 +263,7 @@ fn run(cli: Cli) -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| "(fresh)".to_string()),
             loaded.payload.to_version,
-            loaded.zip().len(),
+            loaded.archive().len(),
             license,
         );
         return Ok(());
@@ -301,7 +306,7 @@ fn run(cli: Cli) -> Result<()> {
     // Extract any `ui = true` plugin DLLs for the wizard to query step by step.
     let self_exe = std::env::current_exe()?;
     let ui_plugins =
-        extract::extract_ui_plugins(&loaded.payload, &default_path, &self_exe, loaded.zip());
+        extract::extract_ui_plugins(&loaded.payload, &default_path, &self_exe, loaded.archive());
 
     ui::run_wizard(
         loaded,
@@ -362,7 +367,7 @@ fn run_silent(
     let ctx = extract::InstallCtx {
         install_dir: install_dir.clone(),
         payload: &loaded.payload,
-        zip_bytes: loaded.zip(),
+        archive_bytes: loaded.archive(),
         cancel: Arc::new(AtomicBool::new(false)),
         on_progress: progress,
         plugin_inputs,

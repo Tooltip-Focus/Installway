@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Gaëtan Dezeiraud, Louis Pinaud
 
+use crate::archive::PayloadArchive;
 use anyhow::{Context, Result, bail};
 use common::model::feature_mode::FeatureMode;
 use common::model::install_info::InstallInfo;
@@ -11,12 +12,11 @@ use common::model::plugin_ctx::PluginContext;
 use hdiffpatch_rs::patchers::HDiff;
 use rayon::prelude::*;
 use std::fs::{self, File};
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use zip::ZipArchive;
 
 const FULL_PREFIX: &str = "full/";
 
@@ -122,7 +122,7 @@ fn io_msg(action: &str, path: &Path, e: &std::io::Error) -> String {
 pub struct InstallCtx<'a> {
     pub install_dir: PathBuf,
     pub payload: &'a InstallerPayload,
-    pub zip_bytes: &'a [u8],
+    pub archive_bytes: &'a [u8],
     pub cancel: Arc<AtomicBool>,
     pub on_progress: common::ProgressFn,
     /// Collected plugin-page answers, routed per plugin name. Empty when no UI
@@ -233,8 +233,8 @@ fn check_preconditions(ctx: &InstallCtx<'_>) -> Result<()> {
 /// already correct on disk are hash-skipped and left out of it.
 ///
 /// Files are independent, so staging fans out across cores; `map_init` gives
-/// each worker its own `ZipArchive` view over the shared mmap slice (one
-/// central-directory parse per core, not per file).
+/// each worker its own archive view over the shared mmap slice (one index
+/// parse per core, not per file).
 fn stage_all(ctx: &InstallCtx<'_>, temp: &TempAreas, total_bytes: u64) -> Result<Vec<String>> {
     let done = Arc::new(AtomicU64::new(0));
 
@@ -246,7 +246,7 @@ fn stage_all(ctx: &InstallCtx<'_>, temp: &TempAreas, total_bytes: u64) -> Result
     let staged: Vec<Result<Option<String>>> = entries
         .par_iter()
         .map_init(
-            || ZipArchive::new(Cursor::new(ctx.zip_bytes)),
+            || PayloadArchive::open(ctx.archive_bytes),
             |archive, &(rel, entry)| -> Result<Option<String>> {
                 if ctx.cancel.load(Ordering::Relaxed) {
                     bail!("cancelled by user");
@@ -271,9 +271,7 @@ fn stage_all(ctx: &InstallCtx<'_>, temp: &TempAreas, total_bytes: u64) -> Result
                     return Ok(None);
                 }
 
-                let archive = archive
-                    .as_mut()
-                    .map_err(|e| anyhow::anyhow!("open embedded zip: {e}"))?;
+                let archive = archive.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
                 let staged_path = temp.staged.join(staged_name(rel));
                 stage_file(archive, ctx.payload.kind, rel, entry, &dest, &staged_path)?;
 
@@ -445,7 +443,7 @@ fn verify_and_repair(
                 &ctx.translator.get("install.progress_repairing"),
             );
             let repair = repair_corrupt(
-                ctx.zip_bytes,
+                ctx.archive_bytes,
                 ctx.payload.kind,
                 manifest,
                 &temp.staged,
@@ -516,7 +514,7 @@ pub fn install(ctx: &InstallCtx<'_>) -> Result<Installed> {
     ));
     common::log::info(format!(
         "payload {} bytes, {} files, deleted {}",
-        ctx.zip_bytes.len(),
+        ctx.archive_bytes.len(),
         manifest.files.len(),
         manifest.deleted_files.len()
     ));
@@ -533,17 +531,17 @@ pub fn install(ctx: &InstallCtx<'_>) -> Result<Installed> {
 
     // Pre-install plugins run before any file is staged, so a required failure
     // aborts cleanly (live install untouched).
-    run_zip_plugins(ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
+    run_payload_plugins(ctx, common::model::plugin_phase::PluginPhase::PreInstall)?;
 
     let temp = TempAreas::prepare(&ctx.install_dir)?;
 
     let total_bytes: u64 = manifest.files.values().map(|e| e.size).sum();
 
-    // Validate the embedded zip up front (clean error if corrupt) before the
+    // Validate the embedded archive up front (clean error if corrupt) before the
     // parallel workers each open their own view of it. Deliberately outside the
-    // staging call below: a corrupt zip returns without clearing the temp dir,
+    // staging call below: a corrupt archive returns without clearing the temp dir,
     // as it always has.
-    ZipArchive::new(Cursor::new(ctx.zip_bytes)).context("open embedded zip")?;
+    PayloadArchive::open(ctx.archive_bytes)?;
 
     let to_commit = match stage_all(ctx, &temp, total_bytes) {
         Ok(v) => v,
@@ -627,13 +625,13 @@ fn is_absent(path: &Path) -> bool {
 
 /// Build the final content for `rel` into `staged_path`, verified by BLAKE3.
 /// Tries an in-place patch (against the existing `old` file) first, falls back
-/// to the full file from the zip. Does not touch `old`.
+/// to the full file from the archive. Does not touch `old`.
 ///
 /// `old` is normally the live install target (staging), but the repair path
 /// passes the *backup* copy of the previous version instead - both are valid
 /// patch inputs, since the patch was diffed against that previous version.
 fn stage_file(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    archive: &PayloadArchive<'_>,
     kind: PayloadKind,
     rel: &str,
     entry: &common::model::file_entry::FileEntry,
@@ -649,9 +647,9 @@ fn stage_file(
     {
         // The builder always writes `patch_info.file` already prefixed
         // with `patches/` (see installer_builder::pack), so it can be
-        // used as the in-zip path as-is.
+        // used as the archive path as-is.
         let patch_rel = &patch_info.file;
-        if let Ok(patch_bytes) = read_from_zip(archive, patch_rel) {
+        if let Ok(patch_bytes) = archive.read_entry(patch_rel) {
             let patch_tmp = staged_path.with_extension("patch");
             if fs::write(&patch_tmp, &patch_bytes).is_ok() {
                 let ok = run_hdiff(old, &patch_tmp, staged_path);
@@ -666,11 +664,9 @@ fn stage_file(
         }
     }
 
-    // Full file from zip, streamed in ~1 MB chunks and hashed inline.
-    let zip_rel = format!("{}{}", FULL_PREFIX, rel);
-    let mut entry_rdr = archive
-        .by_name(&zip_rel)
-        .with_context(|| format!("{} not in zip", zip_rel))?;
+    // Full file from the archive, streamed in ~1 MB chunks and hashed inline.
+    let entry_name = format!("{}{}", FULL_PREFIX, rel);
+    let mut entry_rdr = archive.entry(&entry_name)?;
     let mut out = File::create(staged_path)
         .map_err(|e| anyhow::anyhow!("{}", io_msg("creating", staged_path, &e)))?;
     let mut hasher = blake3::Hasher::new();
@@ -678,7 +674,7 @@ fn stage_file(
     loop {
         let n = entry_rdr
             .read(&mut buf)
-            .with_context(|| format!("read {} from embedded zip", zip_rel))?;
+            .with_context(|| format!("read {} from embedded archive", entry_name))?;
         if n == 0 {
             break;
         }
@@ -690,11 +686,11 @@ fn stage_file(
     let actual = hasher.finalize().to_hex().to_string();
     if actual != entry.hash {
         common::log::error(format!(
-            "zip vs manifest hash mismatch: {} (zip={} manifest={})",
+            "archive vs manifest hash mismatch: {} (archive={} manifest={})",
             rel, actual, entry.hash
         ));
         let _ = fs::remove_file(staged_path);
-        bail!("hash mismatch for {} (zip vs manifest)", rel);
+        bail!("hash mismatch for {} (archive vs manifest)", rel);
     }
     common::log::info(format!("staged (full): {} ({} bytes)", rel, entry.size));
     Ok(())
@@ -836,15 +832,6 @@ fn human_bytes(b: u64) -> String {
     } else {
         format!("{} B", b)
     }
-}
-
-fn read_from_zip(archive: &mut ZipArchive<Cursor<&[u8]>>, rel: &str) -> Result<Vec<u8>> {
-    let mut f = archive
-        .by_name(rel)
-        .with_context(|| format!("{} not in zip", rel))?;
-    let mut buf = Vec::with_capacity(f.size() as usize);
-    f.read_to_end(&mut buf)?;
-    Ok(buf)
 }
 
 fn run_hdiff(old: &Path, patch: &Path, out: &Path) -> bool {
@@ -1081,31 +1068,17 @@ fn installed_version(payload: &InstallerPayload) -> Option<String> {
     None
 }
 
-/// Read one entry from an open payload archive into memory.
-pub(crate) fn read_zip_entry(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    name: &str,
-) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    archive
-        .by_name(name)
-        .with_context(|| format!("{name} missing from payload"))?
-        .read_to_end(&mut buf)?;
-    Ok(buf)
-}
-
-/// Extract each plugin's DLL from the payload zip into `dir` as `<name>.dll`.
+/// Extract each plugin's DLL from the payload archive into `dir` as `<name>.dll`.
 fn extract_plugin_dlls_to(
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
     plugins: &[common::model::plugin_entry::PluginEntry],
     dir: &Path,
 ) -> Result<Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>> {
     fs::create_dir_all(dir)?;
-    let mut archive =
-        ZipArchive::new(Cursor::new(zip_bytes)).context("open payload zip for plugins")?;
+    let archive = PayloadArchive::open(archive_bytes)?;
     let mut items = Vec::with_capacity(plugins.len());
     for p in plugins {
-        let buf = read_zip_entry(&mut archive, &p.file)?;
+        let buf = archive.read_entry(&p.file)?;
         let dst = dir.join(format!("{}.dll", p.name));
         fs::write(&dst, &buf)?;
         items.push((p.clone(), dst));
@@ -1113,9 +1086,9 @@ fn extract_plugin_dlls_to(
     Ok(items)
 }
 
-/// Extract the `phase` plugins from the payload zip to `%TEMP%`, run their `up`
+/// Extract the `phase` plugins from the payload archive to `%TEMP%`, run their `up`
 /// in isolated child processes, then clean up. Used for the pre-install phase.
-fn run_zip_plugins(
+fn run_payload_plugins(
     ctx: &InstallCtx,
     phase: common::model::plugin_phase::PluginPhase,
 ) -> Result<()> {
@@ -1130,7 +1103,7 @@ fn run_zip_plugins(
         return Ok(());
     }
     let tmp = std::env::temp_dir().join(format!("iw-plugins-{}", std::process::id()));
-    let items: Vec<_> = extract_plugin_dlls_to(ctx.zip_bytes, &plugins, &tmp)?
+    let items: Vec<_> = extract_plugin_dlls_to(ctx.archive_bytes, &plugins, &tmp)?
         .into_iter()
         .map(|(p, dst)| {
             let inputs_json = common::plugin::inputs_json_for(&ctx.plugin_inputs, &p.name);
@@ -1144,17 +1117,17 @@ fn run_zip_plugins(
     res
 }
 
-/// Extract every plugin DLL from the payload zip into a fresh temp dir, returning
+/// Extract every plugin DLL from the payload archive into a fresh temp dir, returning
 /// the dir (caller removes it) and the `(entry, dll path)` pairs.
 fn extract_plugins_to_temp(
     payload: &InstallerPayload,
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
 ) -> Result<(
     PathBuf,
     Vec<(common::model::plugin_entry::PluginEntry, PathBuf)>,
 )> {
     let tmp = std::env::temp_dir().join(format!("iw-feat-{}", std::process::id()));
-    let items = extract_plugin_dlls_to(zip_bytes, &payload.plugins, &tmp)?;
+    let items = extract_plugin_dlls_to(archive_bytes, &payload.plugins, &tmp)?;
     Ok((tmp, items))
 }
 
@@ -1209,7 +1182,7 @@ fn feature_catalog_json(all: &[String], active: &[String]) -> String {
 /// fatal. Empty when the build declares no features.
 fn resolve_active_features(
     payload: &InstallerPayload,
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
     install_dir: &Path,
     data_dir: &Path,
     requires_admin: bool,
@@ -1223,7 +1196,7 @@ fn resolve_active_features(
 
     let mut deltas: Vec<FeatureSelection> = Vec::new();
     if !payload.plugins.is_empty() {
-        match extract_plugins_to_temp(payload, zip_bytes) {
+        match extract_plugins_to_temp(payload, archive_bytes) {
             Ok((tmp, items)) => {
                 let mut base_ctx = PluginContext::for_install(payload, install_dir, requires_admin);
                 base_ctx.data_dir = data_dir.to_string_lossy().into_owned();
@@ -1303,7 +1276,7 @@ pub fn resolve_and_filter(
     let previously_installed = prior.unwrap_or_default();
     let active = resolve_active_features(
         &loaded.payload,
-        loaded.zip(),
+        loaded.archive(),
         install_dir,
         &data_dir,
         requires_admin,
@@ -1383,7 +1356,7 @@ pub fn extract_ui_plugins(
     payload: &InstallerPayload,
     install_dir: &Path,
     self_exe: &Path,
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
 ) -> Option<UiPlugins> {
     let ui: Vec<&common::model::plugin_entry::PluginEntry> =
         payload.plugins.iter().filter(|p| p.ui).collect();
@@ -1396,18 +1369,19 @@ pub fn extract_ui_plugins(
         return None;
     }
     let tmp = TempDirGuard(dir.clone());
-    let mut archive = match ZipArchive::new(Cursor::new(zip_bytes)) {
+    let archive = match PayloadArchive::open(archive_bytes) {
         Ok(a) => a,
         Err(e) => {
-            common::log::warn(format!("plugin pages: open payload zip failed: {e:#}"));
+            common::log::warn(format!("plugin pages: open payload archive failed: {e:#}"));
             return None;
         }
     };
     let mut plugins = Vec::new();
     for p in ui {
         let dst = dir.join(format!("{}.dll", p.name));
-        let extracted =
-            read_zip_entry(&mut archive, &p.file).and_then(|buf| Ok(fs::write(&dst, &buf)?));
+        let extracted = archive
+            .read_entry(&p.file)
+            .and_then(|buf| Ok(fs::write(&dst, &buf)?));
         match extracted {
             Ok(()) => plugins.push((p.clone(), dst)),
             Err(e) => {
@@ -1584,9 +1558,9 @@ const VERIFY_REPAIR_ATTEMPTS: usize = 2;
 /// Re-stage each corrupt file from the payload and move it back into place,
 /// leaving the backups intact so rollback stays possible. Patch entries are
 /// re-applied against the backed-up previous version; full/new files come from
-/// `full/<rel>` in the zip.
+/// `full/<rel>` in the archive.
 fn repair_corrupt(
-    zip_bytes: &[u8],
+    archive_bytes: &[u8],
     kind: PayloadKind,
     manifest: &Manifest,
     staged_dir: &Path,
@@ -1597,17 +1571,15 @@ fn repair_corrupt(
     corrupt
         .par_iter()
         .map_init(
-            || ZipArchive::new(Cursor::new(zip_bytes)),
+            || PayloadArchive::open(archive_bytes),
             |archive, rel| -> Result<()> {
                 let Some(entry) = manifest.files.get(rel) else {
                     return Ok(());
                 };
-                let archive = archive
-                    .as_mut()
-                    .map_err(|e| anyhow::anyhow!("open embedded zip: {e}"))?;
+                let archive = archive.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
 
                 // Patch input = the backup from commit time. Absent for new
-                // files, which ship in full and fall through to the zip.
+                // files, which ship in full and fall through to the archive.
                 let old = long_path(&backup_dir.join(staged_name(rel)));
                 let staged_path = staged_dir.join(staged_name(rel));
                 let _ = fs::remove_file(&staged_path);
@@ -1838,22 +1810,8 @@ mod tests {
         assert_eq!(fs::read(app.join("b.txt")).unwrap(), b"LIVE");
     }
 
-    // Build a one-entry payload zip with `full/<rel>` = `content`, the way the
-    // installer expects to read it back.
-    fn full_zip(rel: &str, content: &[u8]) -> Vec<u8> {
-        use zip::write::SimpleFileOptions;
-        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        zip.start_file(
-            format!("{}{}", FULL_PREFIX, rel),
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
-        )
-        .unwrap();
-        std::io::Write::write_all(&mut zip, content).unwrap();
-        zip.finish().unwrap().into_inner()
-    }
-
     // A file that verifies as corrupt after commit is rewritten from the payload
-    // (full file in the zip) instead of triggering a rollback.
+    // (full file in the archive) instead of triggering a rollback.
     #[test]
     fn repair_rewrites_corrupt_file_from_payload() {
         let base = tempfile::tempdir().unwrap();
@@ -1865,7 +1823,7 @@ mod tests {
         fs::create_dir_all(&backup).unwrap();
 
         let good = b"GOOD-CONTENT";
-        let zip = full_zip("foo.txt", good);
+        let payload_bytes = payload_with(&[("foo.txt", good)]);
 
         // Committed file landed corrupt; manifest expects the good hash.
         fs::write(app.join("foo.txt"), b"CORRUPTED").unwrap();
@@ -1896,7 +1854,7 @@ mod tests {
         assert_eq!(corrupt, vec!["foo.txt".to_string()]);
 
         repair_corrupt(
-            &zip,
+            &payload_bytes,
             PayloadKind::Full,
             &manifest,
             &staged,
@@ -2059,20 +2017,19 @@ mod tests {
             .collect()
     }
 
-    /// Payload zip holding `full/<rel>` for each file, the way `stage_file`
+    /// Payload archive holding `full/<rel>` for each file, the way `stage_file`
     /// reads it back.
-    fn zip_with(files: &[(&str, &[u8])]) -> Vec<u8> {
-        use zip::write::SimpleFileOptions;
-        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        for (rel, content) in files {
-            zip.start_file(
-                format!("{}{}", FULL_PREFIX, rel),
-                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
-            )
-            .unwrap();
-            std::io::Write::write_all(&mut zip, content).unwrap();
-        }
-        zip.finish().unwrap().into_inner()
+    fn payload_with(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let names: Vec<String> = files
+            .iter()
+            .map(|(rel, _)| format!("{FULL_PREFIX}{rel}"))
+            .collect();
+        let entries: Vec<(&str, &[u8])> = names
+            .iter()
+            .zip(files)
+            .map(|(name, (_, content))| (name.as_str(), *content))
+            .collect();
+        crate::archive::tests::payload_with(&entries)
     }
 
     /// A minimal Full payload whose manifest matches `files` exactly: no
@@ -2108,14 +2065,14 @@ mod tests {
     fn run_install(
         dir: &Path,
         payload: &InstallerPayload,
-        zip: &[u8],
+        payload_bytes: &[u8],
         cancel: Arc<AtomicBool>,
         on_progress: common::ProgressFn,
     ) -> Result<Installed> {
         install(&InstallCtx {
             install_dir: dir.to_path_buf(),
             payload,
-            zip_bytes: zip,
+            archive_bytes: payload_bytes,
             cancel,
             on_progress,
             plugin_inputs: Default::default(),
@@ -2135,9 +2092,19 @@ mod tests {
     }
 
     /// Run with a throwaway recorder, for tests that do not assert on progress.
-    fn install_quiet(dir: &Path, payload: &InstallerPayload, zip: &[u8]) -> Result<Installed> {
+    fn install_quiet(
+        dir: &Path,
+        payload: &InstallerPayload,
+        payload_bytes: &[u8],
+    ) -> Result<Installed> {
         let (_log, prog) = progress_recorder();
-        run_install(dir, payload, zip, Arc::new(AtomicBool::new(false)), prog)
+        run_install(
+            dir,
+            payload,
+            payload_bytes,
+            Arc::new(AtomicBool::new(false)),
+            prog,
+        )
     }
 
     // A fresh full install writes every manifest file with the exact payload
@@ -2148,11 +2115,17 @@ mod tests {
         let app = d.path().join("app");
         let files: &[(&str, &[u8])] = &[("bin/app.exe", b"EXE-BYTES"), ("data/readme.txt", b"HI")];
         let payload = full_payload(files);
-        let zip = zip_with(files);
+        let payload_bytes = payload_with(files);
 
         let (log, prog) = progress_recorder();
-        let lock =
-            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        let lock = run_install(
+            &app,
+            &payload,
+            &payload_bytes,
+            Arc::new(AtomicBool::new(false)),
+            prog,
+        )
+        .unwrap();
         drop(lock);
 
         assert_eq!(fs::read(app.join("bin/app.exe")).unwrap(), b"EXE-BYTES");
@@ -2174,13 +2147,19 @@ mod tests {
         let app = d.path().join("app");
         let files: &[(&str, &[u8])] = &[("a.txt", b"SAME")];
         let payload = full_payload(files);
-        let zip = zip_with(files);
+        let payload_bytes = payload_with(files);
 
-        drop(install_quiet(&app, &payload, &zip).unwrap());
+        drop(install_quiet(&app, &payload, &payload_bytes).unwrap());
 
         let (log, prog) = progress_recorder();
-        let lock =
-            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        let lock = run_install(
+            &app,
+            &payload,
+            &payload_bytes,
+            Arc::new(AtomicBool::new(false)),
+            prog,
+        )
+        .unwrap();
         drop(lock);
 
         let msgs = messages(&log);
@@ -2201,9 +2180,9 @@ mod tests {
         let files: &[(&str, &[u8])] = &[("new.txt", b"NEW")];
         let mut payload = full_payload(files);
         payload.manifest.deleted_files = vec!["old.txt".into(), "../escape.txt".into()];
-        let zip = zip_with(files);
+        let payload_bytes = payload_with(files);
 
-        drop(install_quiet(&app, &payload, &zip).unwrap());
+        drop(install_quiet(&app, &payload, &payload_bytes).unwrap());
 
         assert!(!app.join("old.txt").exists());
         assert_eq!(fs::read(app.join("new.txt")).unwrap(), b"NEW");
@@ -2214,13 +2193,13 @@ mod tests {
     #[test]
     fn install_purges_unknown_files_only_when_opted_in() {
         let files: &[(&str, &[u8])] = &[("keep.txt", b"K")];
-        let zip = zip_with(files);
+        let payload_bytes = payload_with(files);
 
         let d = tempfile::tempdir().unwrap();
         let app = d.path().join("app");
         fs::create_dir_all(&app).unwrap();
         fs::write(app.join("stray.txt"), b"S").unwrap();
-        drop(install_quiet(&app, &full_payload(files), &zip).unwrap());
+        drop(install_quiet(&app, &full_payload(files), &payload_bytes).unwrap());
         assert!(app.join("stray.txt").exists(), "not purged by default");
 
         let d2 = tempfile::tempdir().unwrap();
@@ -2229,7 +2208,7 @@ mod tests {
         fs::write(app2.join("stray.txt"), b"S").unwrap();
         let mut purging = full_payload(files);
         purging.purge_unknown_files = true;
-        drop(install_quiet(&app2, &purging, &zip).unwrap());
+        drop(install_quiet(&app2, &purging, &payload_bytes).unwrap());
         assert!(!app2.join("stray.txt").exists(), "purged when opted in");
     }
 
@@ -2252,7 +2231,7 @@ mod tests {
         let plan = plan_deletions(&InstallCtx {
             install_dir: app.clone(),
             payload: &payload,
-            zip_bytes: &zip_with(files),
+            archive_bytes: &payload_with(files),
             cancel: Arc::new(AtomicBool::new(false)),
             on_progress: progress_recorder().1,
             plugin_inputs: Default::default(),
@@ -2284,7 +2263,7 @@ mod tests {
         let plan = plan_deletions(&InstallCtx {
             install_dir: app.clone(),
             payload: &payload,
-            zip_bytes: &zip_with(files),
+            archive_bytes: &payload_with(files),
             cancel: Arc::new(AtomicBool::new(false)),
             on_progress: progress_recorder().1,
             plugin_inputs: Default::default(),
@@ -2312,23 +2291,25 @@ mod tests {
         let app = d.path().join("app");
         let files: &[(&str, &[u8])] = &[("../escape.txt", b"BAD")];
         let payload = full_payload(files);
-        let zip = zip_with(files);
+        // PakLib refuses to even write such an entry; the manifest check must
+        // reject the path before the archive is consulted.
+        let payload_bytes = payload_with(&[]);
 
-        let err = expect_err(install_quiet(&app, &payload, &zip));
+        let err = expect_err(install_quiet(&app, &payload, &payload_bytes));
         assert!(format!("{err:#}").contains("unsafe path component in manifest"));
         assert!(!app.join(".installer_tmp").exists());
     }
 
-    // Zip content that does not match the manifest hash fails the install and
+    // Archive content that does not match the manifest hash fails the install and
     // leaves nothing committed.
     #[test]
-    fn install_fails_on_zip_manifest_hash_mismatch() {
+    fn install_fails_on_archive_manifest_hash_mismatch() {
         let d = tempfile::tempdir().unwrap();
         let app = d.path().join("app");
         let payload = full_payload(&[("a.txt", b"EXPECTED")]);
-        let zip = zip_with(&[("a.txt", b"DIFFERENT")]);
+        let payload_bytes = payload_with(&[("a.txt", b"DIFFERENT")]);
 
-        let err = expect_err(install_quiet(&app, &payload, &zip));
+        let err = expect_err(install_quiet(&app, &payload, &payload_bytes));
         assert!(format!("{err:#}").contains("hash mismatch for a.txt"));
         assert!(!app.join("a.txt").exists());
         assert!(!app.join(".installer_tmp").exists());
@@ -2342,9 +2323,9 @@ mod tests {
         let mut payload = full_payload(&[("a.txt", b"A")]);
         payload.kind = PayloadKind::Patch;
         payload.from_version = None;
-        let zip = zip_with(&[("a.txt", b"A")]);
+        let payload_bytes = payload_with(&[("a.txt", b"A")]);
 
-        let err = expect_err(install_quiet(&app, &payload, &zip));
+        let err = expect_err(install_quiet(&app, &payload, &payload_bytes));
         assert!(format!("{err:#}").contains("patch payload missing from_version"));
     }
 
@@ -2358,13 +2339,13 @@ mod tests {
         let app = d.path().join("app");
         let files: &[(&str, &[u8])] = &[("a.txt", b"NEW")];
         let payload = full_payload(files);
-        let zip = zip_with(files);
+        let payload_bytes = payload_with(files);
 
         let (_log, prog) = progress_recorder();
         let err = expect_err(run_install(
             &app,
             &payload,
-            &zip,
+            &payload_bytes,
             Arc::new(AtomicBool::new(true)),
             prog,
         ));
@@ -2387,9 +2368,9 @@ mod tests {
         payload.from_version = Some("1.0".into());
         // A product id that is not installed, so the lookup finds no version.
         payload.product_id = format!("installway-not-installed-{}", std::process::id());
-        let zip = zip_with(&[("a.txt", b"A")]);
+        let payload_bytes = payload_with(&[("a.txt", b"A")]);
 
-        let err = expect_err(install_quiet(&app, &payload, &zip));
+        let err = expect_err(install_quiet(&app, &payload, &payload_bytes));
 
         let mismatch = err
             .downcast_ref::<VersionMismatch>()
@@ -2413,7 +2394,7 @@ mod tests {
 
         let files: &[(&str, &[u8])] = &[("a.txt", b"NEW")];
         let payload = full_payload(files);
-        let zip = zip_with(files);
+        let payload_bytes = payload_with(files);
 
         // One manifest entry, so tripping the flag on the first progress tick
         // lands deterministically in the commit loop's cancel check.
@@ -2423,7 +2404,7 @@ mod tests {
             trip.store(true, Ordering::Relaxed);
         });
 
-        let err = expect_err(run_install(&app, &payload, &zip, cancel, prog));
+        let err = expect_err(run_install(&app, &payload, &payload_bytes, cancel, prog));
 
         let text = format!("{err:#}");
         assert!(text.contains("cancelled by user"), "{text}");
@@ -2443,15 +2424,15 @@ mod tests {
         let app = d.path().join("app");
         let files: &[(&str, &[u8])] = &[("a.txt", b"A")];
         let payload = full_payload(files);
-        let zip = zip_with(files);
+        let payload_bytes = payload_with(files);
 
-        let held = install_quiet(&app, &payload, &zip).unwrap();
-        let err = expect_err(install_quiet(&app, &payload, &zip));
+        let held = install_quiet(&app, &payload, &payload_bytes).unwrap();
+        let err = expect_err(install_quiet(&app, &payload, &payload_bytes));
         assert!(format!("{err:#}").contains("already in progress"));
         drop(held);
 
         // Released: a later run succeeds again.
-        drop(install_quiet(&app, &payload, &zip).unwrap());
+        drop(install_quiet(&app, &payload, &payload_bytes).unwrap());
     }
 
     // An empty manifest is a valid no-op install: it still succeeds and reports
@@ -2461,11 +2442,17 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let app = d.path().join("app");
         let payload = full_payload(&[]);
-        let zip = zip_with(&[]);
+        let payload_bytes = payload_with(&[]);
 
         let (log, prog) = progress_recorder();
-        let lock =
-            run_install(&app, &payload, &zip, Arc::new(AtomicBool::new(false)), prog).unwrap();
+        let lock = run_install(
+            &app,
+            &payload,
+            &payload_bytes,
+            Arc::new(AtomicBool::new(false)),
+            prog,
+        )
+        .unwrap();
         drop(lock);
 
         assert_eq!(
