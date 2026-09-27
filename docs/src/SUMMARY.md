@@ -13,6 +13,7 @@
 - [Patch installers](building/patch.md)
 - [The config file](building/config.md)
 - [Packaging without the Rust toolchain](building/toolchain.md)
+- [Portable kit and Docker images](building/ci.md)
 
 # Customizing the installer
 

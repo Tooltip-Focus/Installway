@@ -21,3 +21,6 @@ keys
 
 # local test installer build (scripts/test-installer.ps1)
 /test-build/
+# portable kit build output (scripts/build-kit.ps1)
+/dist
+/ci/docker/kit
