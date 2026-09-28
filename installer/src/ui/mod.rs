@@ -261,6 +261,7 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
         purge_unknown_files: false,
         skip_license: false,
         skip_path: false,
+        allow_force_path_window_state: false,
         install_dir_restriction: InstallDirRestriction::Enforce,
         uninstall_dir_policy: Default::default(),
         default_install_dir: None,

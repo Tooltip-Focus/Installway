@@ -23,6 +23,7 @@ The optional positional `<install-dir>` sets the target directory for
 | `--lang <code>` | Force the UI language, for example `fr`. See below. |
 | `--ignore-desktop-shortcuts` | Do not create desktop shortcuts, in any mode. See [Shortcuts](../packaging/shortcuts.md#suppressing-shortcuts-at-install-time). |
 | `--ignore-start-menu-shortcuts` | Do not create Start Menu shortcuts, in any mode. |
+| `--force-show-path-window` | Show the Choose-location page on a first interactive install even if the build hid it with `--skip-path`. Honored only when the build set `--allow-force-path-window-state`, otherwise ignored. See [Wizard pages and install location](../packaging/wizard.md#showing-the-choose-location-page-on-demand). |
 
 The installer also accepts internal, hidden flags (`--elevated-worker`,
 `--run-plugin`) that it passes to its own subprocesses for elevation and

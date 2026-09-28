@@ -80,6 +80,11 @@ struct Cli {
     #[arg(long)]
     ignore_start_menu_shortcuts: bool,
 
+    /// Show the Choose-location page even if the build set `skip_path`.
+    /// Honored only when the build set `allow_force_path_window_state`.
+    #[arg(long)]
+    force_show_path_window: bool,
+
     /// Dev-only: render one UI view with sample data, no payload needed
     /// (`license` | `choose` | `progress` | `done` | `error` | `minimal`).
     #[cfg(debug_assertions)]
@@ -168,7 +173,7 @@ fn run(cli: Cli) -> Result<()> {
         return ui::preview(view, translator);
     }
 
-    let loaded = payload::load_and_verify()?;
+    let mut loaded = payload::load_and_verify()?;
     let launch = cli.launch;
 
     // Determine analytics context now that payload is loaded (version + operation known).
@@ -284,6 +289,11 @@ fn run(cli: Cli) -> Result<()> {
     // new payload asks for it. First install always uses the full wizard.
     if already_installed && loaded.payload.upgrade_minimal_ui {
         return ui::run_minimal(loaded, default_path, launch, translator);
+    }
+
+    // Lifts only the build-time `skip_path`: an existing install still skips Choose.
+    if cli.force_show_path_window && loaded.payload.allow_force_path_window_state {
+        loaded.payload.skip_path = false;
     }
 
     #[cfg(feature = "hintway")]

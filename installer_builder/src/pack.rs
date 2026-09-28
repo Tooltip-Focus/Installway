@@ -68,6 +68,13 @@ pub fn run(args: &PackArgs) -> Result<()> {
     // Record how upgrades seed the active feature base (sticky vs. override).
     manifest.feature_mode = args.feature_mode;
 
+    if args.allow_force_path_window_state && !args.skip_path {
+        eprintln!(
+            "warning: --allow-force-path-window-state has no effect without --skip-path \
+             (the Choose-location page is already shown)"
+        );
+    }
+
     let license_text = load_license(args)?;
     let banners = Banners::read(args.banner.as_deref(), args.banner_dark.as_deref())?;
     let associations = parse_assocs(&args.assoc, &args.product_id)?;
@@ -224,6 +231,7 @@ fn sign_payload(
         purge_unknown_files: args.purge_unknown_files,
         skip_license: args.skip_license,
         skip_path: args.skip_path,
+        allow_force_path_window_state: args.allow_force_path_window_state,
         install_dir_restriction: args.install_dir_restriction,
         uninstall_dir_policy: args.uninstall_dir_policy,
         default_install_dir: args.default_install_dir.clone(),

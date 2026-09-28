@@ -24,8 +24,8 @@ default, or fails with a message naming the missing key if it is required.
 - **The `assoc` list.** A CLI `--assoc` list replaces the file's list
   entirely when given. It does not merge.
 - **Booleans** (`force_reinstall`, `purge_unknown_files`, `skip_license`,
-  `skip_path`, `upgrade_minimal_ui`, `show_uninstall_complete`,
-  `reuse_stub`). Either source can turn them on.
+  `skip_path`, `allow_force_path_window_state`, `upgrade_minimal_ui`,
+  `show_uninstall_complete`, `reuse_stub`). Either source can turn them on.
 - **Tables** (`[[shortcut]]`, `[[registry]]`, `[[plugin]]`, `[[feature]]`)
   and `feature_mode` are config-file only. There are no CLI equivalents.
 
@@ -81,6 +81,7 @@ one of `pub_key` / `pub_key_literal` is also required. An invalid
 | `default_install_dir` | string | `%LOCALAPPDATA%\Programs\<product>` | Install path the UI proposes. `%VAR%` env tokens are expanded. |
 | `skip_license` | bool | `false` | Hide the License page. |
 | `skip_path` | bool | `false` | Hide the Choose-location page. |
+| `allow_force_path_window_state` | bool | `false` | Let the setup's `--force-show-path-window` flag show the page hidden by `skip_path`. See [Wizard pages and install location](../packaging/wizard.md#showing-the-choose-location-page-on-demand). |
 | `install_dir_restriction` | string | `enforce` | Whether a fresh interactive install may target a non-empty folder: `enforce`, `default_dir_only`, or `bypass`. See [Wizard pages and install location](../packaging/wizard.md). |
 | `uninstall_dir_policy` | string | `purge` | What the uninstaller removes from the install folder: `purge` or `tracked`. See [Uninstall](../running/uninstall.md#the-install-folder). |
 | `launch_option` | string | `checked` | The "launch now" checkbox on the final page: `checked`, `unchecked`, or `hidden`. |
