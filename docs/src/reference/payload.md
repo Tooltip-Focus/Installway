@@ -52,6 +52,7 @@ serializer-determinism trap.
 | `force_reinstall` | `bool` | Dev: rewrite all, remove orphans, skip the from-version check. |
 | `purge_unknown_files` | `bool` | Full installs: remove unknown or leftover files. Ignored for patches. |
 | `skip_license`, `skip_path` | `bool` | Trim the wizard. |
+| `allow_force_path_window_state` | `bool` | The runtime `--force-show-path-window` flag may show the page hidden by `skip_path`. Default `false`. |
 | `install_dir_restriction` | `Enforce`, `DefaultDirOnly`, or `Bypass` | Whether a fresh interactive install may target a non-empty folder. Default `Enforce`. |
 | `uninstall_dir_policy` | `Purge` or `Tracked` | What the uninstaller removes from the install folder. Default `Purge`. |
 | `default_install_dir` | `Option<String>` | Proposed path; `%VAR%` tokens are expanded. |

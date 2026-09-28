@@ -126,6 +126,11 @@ pub struct PackCli {
     #[arg(long)]
     pub skip_path: bool,
 
+    /// Let the setup be run with `--force-show-path-window` to show the
+    /// Choose-location page hidden by `--skip-path`. Off by default.
+    #[arg(long)]
+    pub allow_force_path_window_state: bool,
+
     /// Non-empty-folder guard on the Choose-location page: `enforce` (block a
     /// fresh install into any non-empty folder), `default-dir-only` (allow only
     /// the build-time default dir to be non-empty) or `bypass` (allow any).
@@ -303,6 +308,8 @@ pub struct PackFile {
     pub skip_license: bool,
     #[serde(default)]
     pub skip_path: bool,
+    #[serde(default)]
+    pub allow_force_path_window_state: bool,
     pub install_dir_restriction: Option<String>,
     pub uninstall_dir_policy: Option<String>,
     #[serde(default)]
@@ -359,6 +366,7 @@ pub struct PackArgs {
     pub purge_unknown_files: bool,
     pub skip_license: bool,
     pub skip_path: bool,
+    pub allow_force_path_window_state: bool,
     pub install_dir_restriction: InstallDirRestriction,
     pub uninstall_dir_policy: UninstallDirPolicy,
     pub upgrade_minimal_ui: bool,
@@ -469,6 +477,8 @@ impl PackArgs {
             purge_unknown_files: cli.purge_unknown_files || file.purge_unknown_files,
             skip_license: cli.skip_license || file.skip_license,
             skip_path: cli.skip_path || file.skip_path,
+            allow_force_path_window_state: cli.allow_force_path_window_state
+                || file.allow_force_path_window_state,
             install_dir_restriction: parse_choice(
                 cli.install_dir_restriction.or(file.install_dir_restriction),
             )?,
@@ -828,6 +838,7 @@ mod tests {
             purge_unknown_files: false,
             skip_license: false,
             skip_path: false,
+            allow_force_path_window_state: false,
             install_dir_restriction: None,
             uninstall_dir_policy: None,
             upgrade_minimal_ui: false,
@@ -1229,6 +1240,25 @@ force_reinstall = true
         assert_eq!(
             format!("{err:#}"),
             "plugin #1 ('a'): unknown phase 'nope' (pre-install | post-install)"
+        );
+    }
+
+    #[test]
+    fn allow_force_path_window_state_defaults_off_and_merges() {
+        assert!(!resolve_with("").unwrap().allow_force_path_window_state);
+        assert!(
+            resolve_with("\nallow_force_path_window_state = true\n")
+                .unwrap()
+                .allow_force_path_window_state
+        );
+        let (_dir, cfg) = write_cfg(SAMPLE);
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        cli.allow_force_path_window_state = true;
+        assert!(
+            PackArgs::resolve(cli)
+                .unwrap()
+                .allow_force_path_window_state
         );
     }
 

@@ -60,6 +60,10 @@ pub struct InstallerPayload {
     /// Hide the Choose-location page; install straight to the default path.
     #[serde(default)]
     pub skip_path: bool,
+    /// Let the runtime `--force-show-path-window` flag bring back the
+    /// Choose-location page hidden by [`skip_path`](Self::skip_path).
+    #[serde(default)]
+    pub allow_force_path_window_state: bool,
     /// Whether a fresh interactive install may target a non-empty folder.
     /// Defaults to [`InstallDirRestriction::Enforce`]; see that type's docs.
     #[serde(default)]
@@ -136,6 +140,7 @@ impl Default for InstallerPayload {
             purge_unknown_files: true,
             skip_license: true,
             skip_path: false,
+            allow_force_path_window_state: true,
             install_dir_restriction: InstallDirRestriction::DefaultDirOnly,
             uninstall_dir_policy: UninstallDirPolicy::Tracked,
             default_install_dir: Some(r"%LOCALAPPDATA%\Programs\P".into()),

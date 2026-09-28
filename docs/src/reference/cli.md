@@ -67,6 +67,7 @@ wins. Required fields are checked after merging. See
 | `--default-install-dir <DIR>` | `%LOCALAPPDATA%\Programs\<product>` | Proposed install path. `%VAR%` tokens are expanded. |
 | `--skip-license` | Off | Hide the License page. |
 | `--skip-path` | Off | Hide the Choose-location page. |
+| `--allow-force-path-window-state` | Off | Let the setup's `--force-show-path-window` flag show the page hidden by `--skip-path`. See [Wizard pages and install location](../packaging/wizard.md#showing-the-choose-location-page-on-demand). |
 | `--install-dir-restriction <enforce\|default-dir-only\|bypass>` | `enforce` | Non-empty-folder guard for fresh interactive installs. See [Wizard pages and install location](../packaging/wizard.md#the-non-empty-folder-guard). |
 | `--uninstall-dir-policy <purge\|tracked>` | `purge` | What the uninstaller removes from the install folder. See [Uninstall](../running/uninstall.md#the-install-folder). |
 | `--launch-option <checked\|unchecked\|hidden>` | `checked` | State of the final-page "launch now" checkbox. |

@@ -14,8 +14,9 @@ All options below work on the CLI and as
 |---|---|
 | `--skip-license` | Hide the License page. |
 | `--skip-path` | Hide the Choose-location page; install straight to the default location. When the license is still shown, its button reads Install. |
+| `--allow-force-path-window-state` | Let the setup be run with `--force-show-path-window` to bring back the Choose-location page hidden by `--skip-path`. Off by default. |
 
-With both flags, the wizard goes straight to Progress on launch:
+With both skip flags, the wizard goes straight to Progress on launch:
 
 ```pwsh
 installer_builder.exe pack `
@@ -26,6 +27,36 @@ installer_builder.exe pack `
     --priv-key .\keys\priv.key --pub-key .\keys\pub.key `
     --out .\dist\setup-myapp-1.0.exe
 ```
+
+### Showing the Choose-location page on demand
+
+`--skip-path` suits most users, but support staff or advanced users sometimes
+need to install elsewhere. Build with both flags:
+
+```pwsh
+installer_builder.exe pack ... --skip-path --allow-force-path-window-state
+```
+
+The setup still hides the Choose-location page by default, and shows it when
+launched with the runtime flag:
+
+```pwsh
+setup-myapp-1.0.exe --force-show-path-window
+```
+
+- Without `--allow-force-path-window-state` at build time,
+  `--force-show-path-window` is silently ignored.
+- It only lifts `--skip-path`. A reinstall or upgrade still skips the page
+  (see below).
+- It has no effect on `--silent` and `--minimal`, which have no wizard; pass
+  the target folder as their positional argument instead.
+- The page shown this way applies the usual
+  [non-empty-folder guard](#the-non-empty-folder-guard).
+- In [toolchain-free mode](../building/toolchain.md), the prebuilt stub must
+  be recent enough to know the flag; an older stub rejects it.
+
+Building with `--allow-force-path-window-state` but without `--skip-path`
+prints a warning: the page is already shown, so the flag has nothing to do.
 
 ## The proposed install location
 

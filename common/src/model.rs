@@ -112,6 +112,7 @@ mod tests {
         assert!(back.purge_unknown_files);
         assert!(back.skip_license);
         assert!(!back.skip_path);
+        assert!(back.allow_force_path_window_state);
         assert_eq!(
             back.install_dir_restriction,
             InstallDirRestriction::DefaultDirOnly
