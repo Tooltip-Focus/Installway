@@ -9,11 +9,12 @@ use anyhow::{Context, Result, bail};
 use common::model::file_entry::FileEntry;
 use common::model::manifest::Manifest;
 use common::model::patch_info::PatchInfo;
-use common::pak::{Compression, Writer, WriterOptions};
+use common::pak::{Compression, SourceFile, Writer, WriterOptions};
 use common::utils::{bytes_blake3, collect_files, file_blake3, generate_patch};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 const PATCHES_PREFIX: &str = "patches/";
@@ -56,6 +57,7 @@ pub(crate) fn build_full(
     exe: Option<&str>,
     version: &str,
     plugins: &[PayloadJob],
+    pak_workers: Option<NonZeroU32>,
 ) -> Result<(Vec<u8>, Manifest)> {
     println!("Scanning {}", input.display());
     let files = collect_files(input)?;
@@ -82,7 +84,7 @@ pub(crate) fn build_full(
         .collect();
 
     let full_size: u64 = entries.values().map(|e| e.size).sum();
-    let archive_bytes = write_payload(input, &files, &HashMap::new(), plugins)?;
+    let archive_bytes = write_payload(input, &files, &HashMap::new(), plugins, pak_workers)?;
 
     let manifest = Manifest {
         version: version.to_string(),
@@ -106,6 +108,7 @@ pub(crate) fn build_patch(
     exe: Option<&str>,
     version: &str,
     plugins: &[PayloadJob],
+    pak_workers: Option<NonZeroU32>,
 ) -> Result<(Vec<u8>, Manifest)> {
     // Warn up front if hdiffz is missing: patching still works but ships full
     // files instead of HDiffPatch deltas.
@@ -249,7 +252,7 @@ pub(crate) fn build_patch(
         entries.insert(w.rel, w.entry);
     }
 
-    let archive_bytes = write_payload(new_input, &full_paths, &patch_paths, plugins)?;
+    let archive_bytes = write_payload(new_input, &full_paths, &patch_paths, plugins, pak_workers)?;
 
     let manifest = Manifest {
         version: version.to_string(),
@@ -295,12 +298,12 @@ fn compression_for(name: &str) -> Compression {
 /// span files and the installer stages files in parallel, so PakLib's maximum
 /// 64 MiB block costs no parallelism and saves ~58 MB over 1 MiB blocks. Zstd
 /// 20 then lands ~1% under the former ZIP payload, ~11% faster to install (21+
-/// saves ~1 MB more for a slower build). A zero minimum saving keeps every block
-/// that shrinks at all; incompressible ones are still stored raw.
+/// saves ~1 MB more for a slower build). Blocks saving under 2% stay raw: on
+/// that corpus they cost 208 bytes but spare a decompression at install time.
 const WRITER_OPTIONS: WriterOptions = WriterOptions {
     block_size: 64 * 1024 * 1024,
     zstd_level: 20,
-    minimum_saving: 0.0,
+    minimum_saving: 0.02,
 };
 
 /// Build the payload archive: `full_paths` under `full/<rel>`, `patch_paths`
@@ -311,6 +314,7 @@ fn write_payload(
     full_paths: &[String],
     patch_paths: &HashMap<String, PathBuf>,
     extra: &[PayloadJob],
+    pak_workers: Option<NonZeroU32>,
 ) -> Result<Vec<u8>> {
     let mut jobs: Vec<PayloadJob> =
         Vec::with_capacity(full_paths.len() + patch_paths.len() + extra.len());
@@ -323,14 +327,25 @@ fn write_payload(
     jobs.extend(extra.iter().cloned());
     jobs.sort_by(|a, b| a.0.cmp(&b.0));
 
+    // PakLib caps the request at the CPU count; mirror it for the log line.
+    let cpus = std::thread::available_parallelism().map_or(1, usize::from);
+    let workers = pak_workers.map_or(cpus, |n| cpus.min(n.get() as usize));
+    println!("PakLib compression: {workers} worker(s)");
+
     let temp = tempfile::tempdir().context("create payload temp dir")?;
     let output = temp.path().join("payload.pak");
     let mut writer = Writer::create(&output, WRITER_OPTIONS).context("create payload archive")?;
-    for (name, source) in &jobs {
-        writer
-            .add_file(source, name, compression_for(name))
-            .with_context(|| format!("add {} to payload", source.display()))?;
-    }
+    let sources: Vec<SourceFile<'_>> = jobs
+        .iter()
+        .map(|(name, source)| SourceFile {
+            source,
+            archive_path: name,
+            compression: compression_for(name),
+        })
+        .collect();
+    writer
+        .add_files_parallel(&sources, pak_workers)
+        .context("compress payload files")?;
     writer.finalize().context("finalize payload archive")?;
     fs::read(&output).with_context(|| format!("read {}", output.display()))
 }

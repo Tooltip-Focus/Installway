@@ -57,7 +57,8 @@ and file associations and `%EXE%` tokens cannot resolve.
 2. Scans `--input`, hashes every file with BLAKE3, and compresses the set into
    the [PakLib](../reference/payload.md#payload-archive-layout) payload archive.
    Already-compressed media formats are stored verbatim; everything else is
-   compressed with zstd at level 20 in blocks of up to 64 MiB.
+   compressed with zstd at level 20 in blocks of up to 64 MiB, on every CPU
+   (`--pak-workers N` caps the thread count). Blocks saving under 2% stay raw.
 3. Builds the signed manifest and metadata, and signs the exact JSON bytes
    with Ed25519.
 4. Produces the installer stub and the uninstaller, either through

@@ -14,6 +14,7 @@ use common::model::registry_value::RegistryValue;
 use common::model::shortcut_entry::ShortcutEntry;
 use common::model::uninstall_dir_policy::UninstallDirPolicy;
 use serde::Deserialize;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -111,6 +112,10 @@ pub struct PackCli {
     /// remove orphans).
     #[arg(long)]
     pub force_reinstall: bool,
+
+    /// Maximum payload compression threads. Omit to use every CPU.
+    #[arg(long, value_name = "N")]
+    pub pak_workers: Option<NonZeroU32>,
 
     /// Remove unknown/leftover files (not in this build) on a Full install, so
     /// an upgrade or reinstall from a full version leaves a clean directory.
@@ -302,6 +307,7 @@ pub struct PackFile {
     pub min_installer_version: Option<String>,
     #[serde(default)]
     pub force_reinstall: bool,
+    pub pak_workers: Option<NonZeroU32>,
     #[serde(default)]
     pub purge_unknown_files: bool,
     #[serde(default)]
@@ -363,6 +369,7 @@ pub struct PackArgs {
     pub assoc: Vec<String>,
     pub min_installer_version: String,
     pub force_reinstall: bool,
+    pub pak_workers: Option<NonZeroU32>,
     pub purge_unknown_files: bool,
     pub skip_license: bool,
     pub skip_path: bool,
@@ -474,6 +481,7 @@ impl PackArgs {
                 .unwrap_or_else(|| "1.0.0".to_string()),
             // Boolean flags: either source can turn them on.
             force_reinstall: cli.force_reinstall || file.force_reinstall,
+            pak_workers: cli.pak_workers.or(file.pak_workers),
             purge_unknown_files: cli.purge_unknown_files || file.purge_unknown_files,
             skip_license: cli.skip_license || file.skip_license,
             skip_path: cli.skip_path || file.skip_path,
@@ -835,6 +843,7 @@ mod tests {
             assoc: Vec::new(),
             min_installer_version: None,
             force_reinstall: false,
+            pak_workers: None,
             purge_unknown_files: false,
             skip_license: false,
             skip_path: false,
@@ -868,6 +877,7 @@ priv_key = 'keys/priv.key'
 out = 'dist/setup.exe'
 assoc = ['.myx:Doc']
 force_reinstall = true
+pak_workers = 4
 ";
 
     fn write_cfg(body: &str) -> (tempfile::TempDir, PathBuf) {
@@ -891,6 +901,7 @@ force_reinstall = true
         assert_eq!(r.assoc, vec![".myx:Doc".to_string()]);
         assert_eq!(r.min_installer_version, "1.0.0"); // default, absent in file
         assert!(r.force_reinstall); // from file
+        assert_eq!(r.pak_workers, NonZeroU32::new(4));
     }
 
     /// CLI value wins over the file value.

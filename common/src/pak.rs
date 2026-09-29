@@ -11,6 +11,7 @@
 use std::ffi::{CStr, c_char, c_void};
 use std::io::{self, Read};
 use std::marker::PhantomData;
+use std::num::NonZeroU32;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::NonNull;
@@ -19,7 +20,7 @@ use std::ptr::NonNull;
 // keeps it linked into binaries that use nothing else from it.
 use zstd_sys as _;
 
-/// How [`Writer::add_file`] stores one entry.
+/// How a [`Writer`] stores one entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Compression {
     /// Raw bytes, for data that is already compressed.
@@ -60,6 +61,18 @@ struct PakWriterOptions {
     checksum_entries: u8,
     reserved: [u8; 3],
 }
+
+#[repr(C)]
+struct PakSourceFile {
+    source_path: *const u16,
+    archive_path_utf8: *const c_char,
+    archive_path_size: usize,
+    compression_policy: u8,
+    reserved: [u8; 7],
+}
+
+// Mirrors `static_assert(sizeof(pak_source_file) == 32)` in PakLib's CAbi.cpp.
+const _: () = assert!(std::mem::size_of::<PakSourceFile>() == 32);
 
 enum ArchiveHandle {}
 enum FileHandle {}
@@ -102,6 +115,13 @@ unsafe extern "C" {
         archive_path_utf8: *const c_char,
         archive_path_size: usize,
         compression_policy: u8,
+        out_error: *mut PakError,
+    ) -> u16;
+    fn pak_writer_add_files_parallel(
+        writer: *mut WriterHandle,
+        files: *const PakSourceFile,
+        file_count: usize,
+        worker_count: u32,
         out_error: *mut PakError,
     ) -> u16;
     fn pak_writer_finalize(writer: *mut WriterHandle, out_error: *mut PakError) -> u16;
@@ -247,6 +267,13 @@ pub struct WriterOptions {
     pub minimum_saving: f32,
 }
 
+/// One file for [`Writer::add_files_parallel`].
+pub struct SourceFile<'a> {
+    pub source: &'a Path,
+    pub archive_path: &'a str,
+    pub compression: Compression,
+}
+
 /// Writes a new archive to disk; nothing is readable until [`Writer::finalize`].
 pub struct Writer {
     raw: NonNull<WriterHandle>,
@@ -296,6 +323,42 @@ impl Writer {
         check(status, detail)
     }
 
+    /// Append `files` in order, compressing them and their blocks on up to
+    /// `workers` threads (`None`: every CPU). The archive is byte-identical to
+    /// calling [`Writer::add_file`] for each file. A failure leaves the writer
+    /// unusable: drop it.
+    pub fn add_files_parallel(
+        &mut self,
+        files: &[SourceFile<'_>],
+        workers: Option<NonZeroU32>,
+    ) -> io::Result<()> {
+        let wide_sources: Vec<Vec<u16>> = files.iter().map(|file| wide(file.source)).collect();
+        let descriptors: Vec<PakSourceFile> = files
+            .iter()
+            .zip(&wide_sources)
+            .map(|(file, source)| PakSourceFile {
+                source_path: source.as_ptr(),
+                archive_path_utf8: file.archive_path.as_ptr().cast(),
+                archive_path_size: file.archive_path.len(),
+                compression_policy: file.compression.policy(),
+                reserved: [0; 7],
+            })
+            .collect();
+        let mut detail = PakError::default();
+        // SAFETY: every descriptor points into `wide_sources` or `files`, which
+        // outlive the call; paths are NUL-terminated or carry their length.
+        let status = unsafe {
+            pak_writer_add_files_parallel(
+                self.raw.as_ptr(),
+                descriptors.as_ptr(),
+                descriptors.len(),
+                workers.map_or(0, NonZeroU32::get),
+                &mut detail,
+            )
+        };
+        check(status, detail)
+    }
+
     /// Write the index and footer. Dropping without finalizing discards the
     /// partial output.
     pub fn finalize(self) -> io::Result<()> {
@@ -316,35 +379,71 @@ impl Drop for Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    const OPTIONS: WriterOptions = WriterOptions {
+        block_size: 64 * 1024,
+        zstd_level: 3,
+        minimum_saving: 0.02,
+    };
+
+    /// A compressible multi-block text, a stored copy of its start and an
+    /// empty file, written under `dir`: (text, [(source, name, compression)]).
+    fn fixture(dir: &Path) -> (Vec<u8>, Vec<(PathBuf, &'static str, Compression)>) {
+        let big: Vec<u8> = (0..300_000u32).map(|i| (i / 7 % 26) as u8 + b'a').collect();
+        std::fs::write(dir.join("big.txt"), &big).unwrap();
+        std::fs::write(dir.join("raw.bin"), &big[..5000]).unwrap();
+        std::fs::write(dir.join("empty.bin"), b"").unwrap();
+        let files = vec![
+            (dir.join("big.txt"), "a/big.txt", Compression::Automatic),
+            (dir.join("raw.bin"), "raw.bin", Compression::Stored),
+            (dir.join("empty.bin"), "empty.bin", Compression::Automatic),
+        ];
+        (big, files)
+    }
+
+    fn write_sequential(output: &Path, files: &[(PathBuf, &str, Compression)]) {
+        let mut writer = Writer::create(output, OPTIONS).unwrap();
+        for (source, name, compression) in files {
+            writer.add_file(source, name, *compression).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    #[test]
+    fn parallel_writer_matches_sequential() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, files) = fixture(dir.path());
+        let sequential = dir.path().join("sequential.pak");
+        write_sequential(&sequential, &files);
+        let expected = std::fs::read(&sequential).unwrap();
+
+        let sources: Vec<SourceFile<'_>> = files
+            .iter()
+            .map(|(source, name, compression)| SourceFile {
+                source,
+                archive_path: name,
+                compression: *compression,
+            })
+            .collect();
+        for workers in [None, NonZeroU32::new(1), NonZeroU32::new(3)] {
+            let output = dir.path().join("parallel.pak");
+            let mut writer = Writer::create(&output, OPTIONS).unwrap();
+            writer.add_files_parallel(&sources, workers).unwrap();
+            writer.finalize().unwrap();
+            assert!(
+                std::fs::read(&output).unwrap() == expected,
+                "{workers:?} worker(s)"
+            );
+        }
+    }
 
     #[test]
     fn round_trips_files_through_memory() {
         let dir = tempfile::tempdir().unwrap();
-        let big: Vec<u8> = (0..300_000u32).map(|i| (i / 7 % 26) as u8 + b'a').collect();
-        std::fs::write(dir.path().join("big.txt"), &big).unwrap();
-        std::fs::write(dir.path().join("raw.bin"), &big[..5000]).unwrap();
-        std::fs::write(dir.path().join("empty.bin"), b"").unwrap();
-
+        let (big, files) = fixture(dir.path());
         let output = dir.path().join("out.pak");
-        let mut writer = Writer::create(
-            &output,
-            WriterOptions {
-                block_size: 64 * 1024,
-                zstd_level: 3,
-                minimum_saving: 0.0,
-            },
-        )
-        .unwrap();
-        for (source, name, compression) in [
-            ("big.txt", "a/big.txt", Compression::Automatic),
-            ("raw.bin", "raw.bin", Compression::Stored),
-            ("empty.bin", "empty.bin", Compression::Automatic),
-        ] {
-            writer
-                .add_file(&dir.path().join(source), name, compression)
-                .unwrap();
-        }
-        writer.finalize().unwrap();
+        write_sequential(&output, &files);
 
         let bytes = std::fs::read(&output).unwrap();
         // Compressed: the whole archive is far smaller than its content.
