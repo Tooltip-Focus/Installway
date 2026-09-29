@@ -90,6 +90,7 @@ one of `pub_key` / `pub_key_literal` is also required. An invalid
 | `min_installer_version` | string | `1.0.0` | Minimum installer stub version allowed to run this payload. |
 | `purge_unknown_files` | bool | `false` | On a full install over an existing copy, remove files not in this build. Ignored for patches. |
 | `force_reinstall` | bool | `false` | Dev: rewrite all files, remove orphans, skip the from-version check. |
+| `pak_workers` | integer | every CPU | Maximum payload compression threads, 1 or more. |
 | `feature_mode` | string | `sticky` | How an upgrade seeds the active feature set: `sticky` or `override`. See [Feature packs](../packaging/features.md). |
 
 ### Tables

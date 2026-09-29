@@ -55,12 +55,14 @@ pub fn run(args: &PackArgs) -> Result<()> {
             args.exe.as_deref(),
             &args.to_version,
             &plugin_files,
+            args.pak_workers,
         )?,
         None => build_full(
             &args.input,
             args.exe.as_deref(),
             &args.to_version,
             &plugin_files,
+            args.pak_workers,
         )?,
     };
     // Tag files with their feature pack in the manifest (the archive keeps every file).

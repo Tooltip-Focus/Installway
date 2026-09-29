@@ -45,7 +45,7 @@ pub(crate) mod tests {
             common::pak::WriterOptions {
                 block_size: 64 * 1024,
                 zstd_level: 1,
-                minimum_saving: 0.0,
+                minimum_saving: 0.02,
             },
         )
         .unwrap();

@@ -93,7 +93,8 @@ struct PatchInfo {
 The payload is a [PakLib](https://github.com/Tooltip-Focus/PakLib) archive:
 independent zstd blocks of up to 64 MiB (level 20) that never span two files,
 so the installer decodes files in parallel straight from the memory-mapped
-exe. Already-compressed media and HDiffPatch patches are stored raw.
+exe. Already-compressed media and HDiffPatch patches are stored raw, as is any
+block that zstd shrinks by less than 2%.
 
 Full files live under `full/<rel>`; binary patches under
 `patches/<blake3(rel)>.patch`. The installer reads `PatchInfo.file` verbatim as
