@@ -128,6 +128,8 @@ impl Default for InstallerPayload {
             associations: vec![FileAssoc {
                 ext: ".x".into(),
                 description: "X".into(),
+                icon: r"res\doc.ico".into(),
+                icon_index: -101,
             }],
             shortcuts: vec![ShortcutEntry {
                 dir: r"%DESKTOP%".into(),

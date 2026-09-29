@@ -209,7 +209,7 @@ fn finalize(
         common::assoc::register(
             &payload.product_id,
             &exe_str,
-            &payload.associations,
+            &expand_assocs(payload, install_dir),
             requires_admin,
         );
     }
@@ -397,6 +397,32 @@ fn expand_registry(payload: &InstallerPayload, install_dir: &Path) -> Vec<Regist
         .collect()
 }
 
+/// Resolve each association's icon template into an absolute path.
+fn expand_assocs(payload: &InstallerPayload, install_dir: &Path) -> Vec<FileAssoc> {
+    let tk = Tokens::new(payload, install_dir);
+    payload
+        .associations
+        .iter()
+        .map(|a| {
+            let icon = common::utils::expand_env(&tk.base(a.icon_template()));
+            FileAssoc {
+                ext: a.ext.clone(),
+                description: a.description.clone(),
+                icon: under_install_dir(install_dir, icon),
+                icon_index: a.icon_index,
+            }
+        })
+        .collect()
+}
+
+fn under_install_dir(install_dir: &Path, path: String) -> String {
+    if Path::new(&path).is_absolute() {
+        path
+    } else {
+        install_dir.join(&path).to_string_lossy().replace('/', "\\")
+    }
+}
+
 /// Resolve each declared shortcut's token templates against this install into
 /// absolute `dir` / `target` strings (plus the verbatim `args`). Location tokens:
 /// `%DESKTOP%` / `%START_MENU%` resolve to the All-Users location when the install
@@ -481,20 +507,10 @@ fn expand_shortcuts(
             ));
             continue;
         }
-        // A relative target hangs off the install dir.
-        let t = sub(&s.target);
-        let target = {
-            let p = Path::new(&t);
-            if p.is_absolute() {
-                t
-            } else {
-                install_dir.join(&t).to_string_lossy().replace('/', "\\")
-            }
-        };
         out.push(ShortcutEntry {
             dir,
             name: s.name.clone(),
-            target,
+            target: under_install_dir(install_dir, sub(&s.target)),
             args: sub(&s.args),
             feature: String::new(),
         });
@@ -777,6 +793,40 @@ mod tests {
         assert_eq!(out[0].dir, r"C:\Apps\MyApp\sub");
         assert_eq!(out[0].target, r"C:\Apps\MyApp\a.exe");
         assert_eq!(out[0].args, "--name P --v 1.1");
+    }
+
+    #[test]
+    fn expand_assocs_resolves_icon_paths() {
+        let dir = Path::new(r"C:\Apps\MyApp");
+        let assoc = |icon: &str, icon_index| FileAssoc {
+            ext: ".myx".into(),
+            description: "Doc".into(),
+            icon: icon.into(),
+            icon_index,
+        };
+        let p = InstallerPayload {
+            associations: vec![
+                assoc("", 0),
+                assoc(r"%INSTALL_DIR%\res\doc.ico", 0),
+                assoc("res/doc.dll", 2),
+                assoc(r"D:\icons\x.dll", -101),
+            ],
+            ..Default::default()
+        };
+        let out = expand_assocs(&p, dir);
+        let icons: Vec<&str> = out.iter().map(|a| a.icon.as_str()).collect();
+        assert_eq!(
+            icons,
+            [
+                r"C:\Apps\MyApp\a.exe",
+                r"C:\Apps\MyApp\res\doc.ico",
+                r"C:\Apps\MyApp\res\doc.dll",
+                r"D:\icons\x.dll",
+            ]
+        );
+        assert_eq!(out[2].icon_index, 2);
+        assert_eq!(out[3].icon_index, -101);
+        assert_eq!(out[0].ext, ".myx");
     }
 
     #[test]

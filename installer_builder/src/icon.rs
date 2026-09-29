@@ -30,6 +30,12 @@ impl ExeIcons {
         self.group_icons.as_table().map_or(0, |t| t.entries().len())
     }
 
+    pub fn has_group_id(&self, id: u32) -> bool {
+        self.group_icons
+            .as_table()
+            .is_some_and(|t| t.get(ResourceEntryName::ID(id)).is_some())
+    }
+
     /// Number of individual icon images (distinct `RT_ICON` ids).
     pub fn icon_count(&self) -> usize {
         self.icons.as_table().map_or(0, |t| t.entries().len())
@@ -152,6 +158,8 @@ mod tests {
         let extracted = extract_from_exe(&source).unwrap().expect("icons present");
         assert_eq!(extracted.group_count(), 1);
         assert_eq!(extracted.icon_count(), 1);
+        assert!(extracted.has_group_id(1));
+        assert!(!extracted.has_group_id(2));
 
         let target = dir.path().join("target.exe");
         std::fs::copy(std::env::current_exe().unwrap(), &target).unwrap();
