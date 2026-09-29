@@ -22,7 +22,8 @@ default, or fails with a message naming the missing key if it is required.
 - **Scalars and paths.** The CLI value wins; otherwise the file value;
   otherwise the default.
 - **The `assoc` list.** A CLI `--assoc` list replaces the file's list
-  entirely when given. It does not merge.
+  entirely when given. It does not merge. `[[assoc]]` tables, which can pick
+  the icon, are config-file only.
 - **Booleans** (`force_reinstall`, `purge_unknown_files`, `skip_license`,
   `skip_path`, `allow_force_path_window_state`, `upgrade_minimal_ui`,
   `show_uninstall_complete`, `reuse_stub`). Either source can turn them on.
@@ -77,7 +78,7 @@ one of `pub_key` / `pub_key_literal` is also required. An invalid
 | `license` | path | built-in placeholder | UTF-8 EULA text shown on the License page. |
 | `banner` | path | flat gray header | PNG painted across the wizard header. See [Branding](../packaging/branding.md). |
 | `banner_dark` | path | same as `banner` | Dark-theme variant of `banner` for the WinUI wizard. Needs `banner`. See [Branding](../packaging/branding.md#dark-theme-variant). |
-| `assoc` | array | `[]` | File associations, entries of the form `".ext:Description"`. |
+| `assoc` | array | `[]` | File associations: `".ext:Description"` strings and/or `[[assoc]]` tables with an icon choice. See [File associations](../packaging/associations.md). |
 | `default_install_dir` | string | `%LOCALAPPDATA%\Programs\<product>` | Install path the UI proposes. `%VAR%` env tokens are expanded. |
 | `skip_license` | bool | `false` | Hide the License page. |
 | `skip_path` | bool | `false` | Hide the Choose-location page. |

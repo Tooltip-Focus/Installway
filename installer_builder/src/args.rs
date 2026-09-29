@@ -234,6 +234,23 @@ pub struct ShortcutFileEntry {
     pub feature: String,
 }
 
+/// One `assoc` entry: `".ext:Description"` or an `[[assoc]]` table.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssocEntry {
+    Short(String),
+    Full(AssocTable),
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AssocTable {
+    pub ext: String,
+    pub description: String,
+    pub icon: Option<String>,
+    pub icon_index: Option<i32>,
+    pub icon_id: Option<u32>,
+}
+
 /// One `[[plugin]]` table from the config file. Converted + validated into a
 /// [`ResolvedPlugin`] by [`build_plugins`].
 #[derive(Deserialize, Debug)]
@@ -302,8 +319,9 @@ pub struct PackFile {
     pub license: Option<PathBuf>,
     pub banner: Option<PathBuf>,
     pub banner_dark: Option<PathBuf>,
+    /// Raw so [`build_assoc_entries`] can report precise errors.
     #[serde(default)]
-    pub assoc: Vec<String>,
+    pub assoc: Vec<toml::Value>,
     pub min_installer_version: Option<String>,
     #[serde(default)]
     pub force_reinstall: bool,
@@ -366,7 +384,7 @@ pub struct PackArgs {
     pub license: Option<PathBuf>,
     pub banner: Option<PathBuf>,
     pub banner_dark: Option<PathBuf>,
-    pub assoc: Vec<String>,
+    pub assoc: Vec<AssocEntry>,
     pub min_installer_version: String,
     pub force_reinstall: bool,
     pub pak_workers: Option<NonZeroU32>,
@@ -471,9 +489,9 @@ impl PackArgs {
 
             // CLI list replaces the file list when present.
             assoc: if cli.assoc.is_empty() {
-                file.assoc
+                build_assoc_entries(file.assoc)?
             } else {
-                cli.assoc
+                cli.assoc.into_iter().map(AssocEntry::Short).collect()
             },
             min_installer_version: cli
                 .min_installer_version
@@ -772,24 +790,86 @@ fn validate_product_id(id: &str) -> Result<()> {
     }
 }
 
-/// Parse `--assoc ".ext:Description"` entries into `FileAssoc`s.
+fn build_assoc_entries(raw: Vec<toml::Value>) -> Result<Vec<AssocEntry>> {
+    raw.into_iter()
+        .enumerate()
+        .map(|(i, v)| match v {
+            toml::Value::String(s) => Ok(AssocEntry::Short(s)),
+            toml::Value::Table(_) => v
+                .try_into::<AssocTable>()
+                .map(AssocEntry::Full)
+                .with_context(|| format!("assoc #{}", i + 1)),
+            other => bail!(
+                "assoc #{}: expected \".ext:Description\" or a table, got {}",
+                i + 1,
+                other.type_str()
+            ),
+        })
+        .collect()
+}
+
+/// Parse `assoc` entries into `FileAssoc`s.
 /// Extension is normalized to a leading dot; description may contain colons.
-pub(crate) fn parse_assocs(raw: &[String], product_id: &str) -> Result<Vec<FileAssoc>> {
+pub(crate) fn parse_assocs(raw: &[AssocEntry], product_id: &str) -> Result<Vec<FileAssoc>> {
     let mut out = Vec::with_capacity(raw.len());
-    for s in raw {
-        let (ext, desc) = s
-            .split_once(':')
-            .ok_or_else(|| anyhow!("bad --assoc '{}': expected \".ext:Description\"", s))?;
-        let ext = common::assoc::normalize_ext(ext);
-        if ext == "." {
-            bail!("bad --assoc '{}': empty extension", s);
-        }
-        let description = desc.trim().to_string();
-        let progid = common::assoc::progid_for(product_id, &ext);
-        println!("Association: {} -> {} ({})", ext, progid, description);
-        out.push(FileAssoc { ext, description });
+    for (i, entry) in raw.iter().enumerate() {
+        let a = match entry {
+            AssocEntry::Short(s) => {
+                let (ext, desc) = s
+                    .split_once(':')
+                    .ok_or_else(|| anyhow!("bad --assoc '{}': expected \".ext:Description\"", s))?;
+                FileAssoc {
+                    ext: assoc_ext(ext).with_context(|| format!("bad --assoc '{s}'"))?,
+                    description: desc.trim().to_string(),
+                    ..Default::default()
+                }
+            }
+            AssocEntry::Full(t) => {
+                assoc_from_table(t).with_context(|| format!("assoc #{}", i + 1))?
+            }
+        };
+        let progid = common::assoc::progid_for(product_id, &a.ext);
+        println!(
+            "Association: {} -> {} ({}) icon {},{}",
+            a.ext,
+            progid,
+            a.description,
+            a.icon_template(),
+            a.icon_index
+        );
+        out.push(a);
     }
     Ok(out)
+}
+
+fn assoc_ext(raw: &str) -> Result<String> {
+    let ext = common::assoc::normalize_ext(raw);
+    if ext == "." {
+        bail!("empty extension");
+    }
+    Ok(ext)
+}
+
+fn assoc_from_table(t: &AssocTable) -> Result<FileAssoc> {
+    let ext = assoc_ext(&t.ext)?;
+    let icon_index = match (t.icon_index, t.icon_id) {
+        (Some(_), Some(_)) => bail!("{ext}: set icon_index or icon_id, not both"),
+        (Some(i), None) if i < 0 => {
+            bail!("{ext}: icon_index must be >= 0 (use icon_id for a resource id)")
+        }
+        (Some(i), None) => i,
+        (None, Some(id)) => match i32::try_from(id) {
+            Ok(id) if id > 0 => -id,
+            _ => bail!("{ext}: icon_id must be 1..={}", i32::MAX),
+        },
+        (None, None) => 0,
+    };
+    Ok(FileAssoc {
+        ext,
+        description: t.description.trim().to_string(),
+        icon: t.icon.as_deref().unwrap_or("").trim().to_string(),
+        icon_index,
+    })
 }
 
 fn convert_reg_value(kind: RegistryKind, v: &toml::Value) -> Option<RegistryValue> {
@@ -898,7 +978,7 @@ pak_workers = 4
         assert_eq!(r.product_id, "myapp");
         assert_eq!(r.publisher, "Acme");
         assert_eq!(r.hintway_tenant_id.as_deref(), Some("tenant-123"));
-        assert_eq!(r.assoc, vec![".myx:Doc".to_string()]);
+        assert_eq!(r.assoc, vec![AssocEntry::Short(".myx:Doc".to_string())]);
         assert_eq!(r.min_installer_version, "1.0.0"); // default, absent in file
         assert!(r.force_reinstall); // from file
         assert_eq!(r.pak_workers, NonZeroU32::new(4));
@@ -914,7 +994,7 @@ pak_workers = 4
         cli.assoc = vec![".zzz:Other".to_string()];
         let r = PackArgs::resolve(cli).unwrap();
         assert_eq!(r.product, "override"); // CLI over file
-        assert_eq!(r.assoc, vec![".zzz:Other".to_string()]); // CLI list replaces file list
+        assert_eq!(r.assoc, vec![AssocEntry::Short(".zzz:Other".to_string())]); // CLI list replaces file list
         assert_eq!(r.publisher, "Acme"); // untouched, from file
     }
 
@@ -948,7 +1028,7 @@ pak_workers = 4
 
     #[test]
     fn parse_assocs_valid_and_colon_in_desc() {
-        let v = parse_assocs(&[".myx:My Doc".to_string(), ".a:b:c".to_string()], "Prod").unwrap();
+        let v = parse_assocs(&short(&[".myx:My Doc", ".a:b:c"]), "Prod").unwrap();
         assert_eq!(v[0].ext, ".myx");
         assert_eq!(v[0].description, "My Doc");
         // split_once on the first ':' -> description keeps the rest.
@@ -958,8 +1038,67 @@ pak_workers = 4
 
     #[test]
     fn parse_assocs_rejects_bad() {
-        assert!(parse_assocs(&["noColon".to_string()], "P").is_err());
-        assert!(parse_assocs(&[":nodesc".to_string()], "P").is_err()); // empty ext
+        assert!(parse_assocs(&short(&["noColon"]), "P").is_err());
+        assert!(parse_assocs(&short(&[":nodesc"]), "P").is_err()); // empty ext
+    }
+
+    fn short(v: &[&str]) -> Vec<AssocEntry> {
+        v.iter().map(|s| AssocEntry::Short(s.to_string())).collect()
+    }
+
+    // SAMPLE without its `assoc` line: TOML forbids it next to `[[assoc]]`.
+    fn resolve_assoc(extra: &str) -> Result<Vec<FileAssoc>> {
+        let (_dir, cfg) = write_cfg(&format!(
+            "{}{extra}",
+            SAMPLE.replace("assoc = ['.myx:Doc']\n", "")
+        ));
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        let r = PackArgs::resolve(cli)?;
+        parse_assocs(&r.assoc, &r.product_id)
+    }
+
+    #[test]
+    fn assoc_tables_parse_icon() {
+        let v = resolve_assoc(
+            "\n[[assoc]]\next='MYX'\ndescription=' My Doc '\n\
+             [[assoc]]\next='.a'\ndescription='A'\nicon='res\\doc.dll'\nicon_index=2\n\
+             [[assoc]]\next='.b'\ndescription='B'\nicon_id=101\n",
+        )
+        .unwrap();
+        assert_eq!(v[0].ext, ".myx");
+        assert_eq!(v[0].description, "My Doc");
+        assert_eq!(v[0].icon, "");
+        assert_eq!(v[0].icon_index, 0);
+        assert_eq!(v[1].icon, r"res\doc.dll");
+        assert_eq!(v[1].icon_index, 2);
+        assert_eq!(v[2].icon_index, -101);
+    }
+
+    #[test]
+    fn assoc_strings_and_tables_mix() {
+        let v = resolve_assoc(
+            "assoc = ['.old:Old', { ext = '.new', description = 'New', icon_index = 1 }]\n",
+        )
+        .unwrap();
+        assert_eq!(v[0].ext, ".old");
+        assert_eq!(v[0].icon_index, 0);
+        assert_eq!(v[1].ext, ".new");
+        assert_eq!(v[1].icon_index, 1);
+    }
+
+    #[test]
+    fn assoc_tables_reject_bad() {
+        let t = |body: &str| resolve_assoc(&format!("\n[[assoc]]\n{body}\n"));
+        assert!(t("ext='.a'\ndescription='A'\nicon_index=1\nicon_id=5").is_err());
+        assert!(t("ext='.a'\ndescription='A'\nicon_index=-1").is_err());
+        assert!(t("ext='.a'\ndescription='A'\nicon_id=0").is_err());
+        assert!(t("ext='.a'\ndescription='A'\nicon_id=4294967295").is_err());
+        assert!(t("ext=''\ndescription='A'").is_err());
+        let err = t("ext='.a'\ndescription='A'\nicon_idx=1").unwrap_err();
+        assert!(format!("{err:#}").contains("icon_idx"), "got: {err:#}");
+        assert!(t("ext='.a'").is_err());
+        assert!(resolve_assoc("assoc = [1]\n").is_err());
     }
 
     /// Unknown keys in the config are rejected (typo guard).

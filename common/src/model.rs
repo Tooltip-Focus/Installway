@@ -35,6 +35,7 @@ pub(crate) fn default_true() -> bool {
 mod tests {
     use super::choice_option::ChoiceOption;
     use super::choice_style::ChoiceStyle;
+    use super::file_assoc::FileAssoc;
     use super::install_dir_restriction::InstallDirRestriction;
     use super::install_info::InstallInfo;
     use super::installer_payload::InstallerPayload;
@@ -91,6 +92,16 @@ mod tests {
     }
 
     #[test]
+    fn assoc_parses_old_json_without_icon() {
+        let a: FileAssoc = serde_json::from_str(r#"{"ext":".x","description":"X"}"#).unwrap();
+        assert_eq!(a.icon, "");
+        assert_eq!(a.icon_template(), FileAssoc::DEFAULT_ICON);
+        assert_eq!(a.icon_index, 0);
+        let s = serde_json::to_string(&a).unwrap();
+        assert_eq!(s, r#"{"ext":".x","description":"X"}"#);
+    }
+
+    #[test]
     fn payload_roundtrips() {
         let p = InstallerPayload {
             hintway_tenant_id: Some("tenant-123".into()),
@@ -126,6 +137,8 @@ mod tests {
         assert!(back.show_uninstall_complete);
         assert_eq!(back.launch_option, LaunchOption::Unchecked);
         assert_eq!(back.associations.len(), 1);
+        assert_eq!(back.associations[0].icon, r"res\doc.ico");
+        assert_eq!(back.associations[0].icon_index, -101);
         assert_eq!(back.shortcuts.len(), 1);
         assert_eq!(back.shortcuts[0].dir, r"%DESKTOP%");
         assert_eq!(back.shortcuts[0].args, "--flag");

@@ -8,7 +8,7 @@
 //! ```text
 //! Software\Classes\.myx                       (default) = "MyApp.myx"
 //! Software\Classes\MyApp.myx                  (default) = "<description>"
-//! Software\Classes\MyApp.myx\DefaultIcon      (default) = "<exe>",0
+//! Software\Classes\MyApp.myx\DefaultIcon      (default) = "<icon>",<icon_index>
 //! Software\Classes\MyApp.myx\shell\open\command (default) = "<exe>" "%1"
 //! ```
 
@@ -53,7 +53,7 @@ pub fn stale(prior: &[FileAssoc], current: &[FileAssoc]) -> Vec<FileAssoc> {
 /// Register associations. `machine` writes under `HKLM\Software\Classes`
 /// (system-wide, needs admin) instead of `HKCU\Software\Classes`, so a
 /// machine-wide install is visible to every usern not just the (elevated) admin
-/// account that ran the installer.
+/// account that ran the installer. Each `icon` must already be expanded.
 pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc], machine: bool) {
     if assocs.is_empty() {
         return;
@@ -71,7 +71,7 @@ pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc], machine:
         if let Some(h) =
             create_registry_key(root, &format!(r"Software\Classes\{}\DefaultIcon", progid))
         {
-            set_default(h, &format!("\"{}\",0", exe_path));
+            set_default(h, &format!("\"{}\",{}", a.icon, a.icon_index));
             close(h);
         }
         if let Some(h) = create_registry_key(
@@ -87,7 +87,10 @@ pub fn register(product_id: &str, exe_path: &str, assocs: &[FileAssoc], machine:
             close(h);
         }
 
-        crate::log::info(format!("associated {} -> {} ({})", ext, progid, exe_path));
+        crate::log::info(format!(
+            "associated {} -> {} ({}, icon {},{})",
+            ext, progid, exe_path, a.icon, a.icon_index
+        ));
     }
     notify_assoc_changed();
 }
@@ -155,6 +158,7 @@ mod tests {
         FileAssoc {
             ext: ext.to_string(),
             description: format!("{ext} doc"),
+            ..Default::default()
         }
     }
 

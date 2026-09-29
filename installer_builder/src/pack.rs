@@ -25,6 +25,7 @@ use common::model::plugin_entry::PluginEntry;
 use common::model::signed_payload::SignedPayload;
 use common::utils::{bytes_blake3, copy_retry, file_blake3};
 use ed25519_dalek::{Signer, SigningKey};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -80,6 +81,8 @@ pub fn run(args: &PackArgs) -> Result<()> {
     let license_text = load_license(args)?;
     let banners = Banners::read(args.banner.as_deref(), args.banner_dark.as_deref())?;
     let associations = parse_assocs(&args.assoc, &args.product_id)?;
+    let icons = extract_app_icons(args);
+    check_assoc_icons(args, &associations, icons.as_ref());
 
     let signed_json = sign_payload(
         args,
@@ -96,7 +99,6 @@ pub fn run(args: &PackArgs) -> Result<()> {
     let stub = resolve_stub(args, pub_key_hex.as_deref())?;
     println!("Stub: {}", stub.display());
 
-    let icons = extract_app_icons(args);
     let uninstaller_bytes = prepare_uninstaller(args, icons.as_ref())?;
 
     assemble_output(
@@ -277,6 +279,81 @@ fn resolve_stub(args: &PackArgs, pub_key_hex: Option<&str>) -> Result<PathBuf> {
             args.reuse_stub,
         ),
     }
+}
+
+/// Warn (never fail) when a packaged association icon is missing or lacks the
+/// index / resource id. Icons outside the package are not checked.
+fn check_assoc_icons(args: &PackArgs, assocs: &[FileAssoc], app_icons: Option<&ExeIcons>) {
+    let app_exe = args.exe.as_deref().map(|e| args.input.join(e));
+    let mut parsed: HashMap<PathBuf, Result<Option<ExeIcons>, String>> = HashMap::new();
+    for a in assocs {
+        let Some(path) = packaged_icon_path(&args.input, args.exe.as_deref(), a.icon_template())
+        else {
+            continue;
+        };
+        let what = format!("association {} icon {}", a.ext, path.display());
+        if !path.is_file() {
+            eprintln!("warning: {what} not found in the package");
+            continue;
+        }
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("ico"))
+        {
+            if a.icon_index != 0 {
+                eprintln!(
+                    "warning: {what}: an .ico file only has icon 0 (got {})",
+                    a.icon_index
+                );
+            }
+            continue;
+        }
+        let icons = if app_exe.as_ref() == Some(&path) {
+            Ok(app_icons)
+        } else {
+            parsed
+                .entry(path.clone())
+                .or_insert_with(|| {
+                    crate::icon::extract_from_exe(&path).map_err(|e| format!("{e:#}"))
+                })
+                .as_ref()
+                .map(Option::as_ref)
+                .map_err(String::as_str)
+        };
+        match icons {
+            Ok(Some(icons)) if a.icon_index >= 0 => {
+                if a.icon_index as usize >= icons.group_count() {
+                    eprintln!(
+                        "warning: {what}: icon_index {} out of range ({} icon(s))",
+                        a.icon_index,
+                        icons.group_count()
+                    );
+                }
+            }
+            Ok(Some(icons)) => {
+                let id = a.icon_index.unsigned_abs();
+                if !icons.has_group_id(id) {
+                    eprintln!("warning: {what}: no icon with resource id {id}");
+                }
+            }
+            Ok(None) => eprintln!("warning: {what} has no icon resources"),
+            Err(e) => eprintln!("warning: {what}: {e}"),
+        }
+    }
+}
+
+/// Association icon path inside the package, `None` if outside it.
+fn packaged_icon_path(input: &Path, exe: Option<&str>, icon: &str) -> Option<PathBuf> {
+    let rel = if icon == FileAssoc::DEFAULT_ICON {
+        exe?
+    } else {
+        icon.strip_prefix("%INSTALL_DIR%")
+            .map_or(icon, |r| r.trim_start_matches(['\\', '/']))
+    };
+    if rel.is_empty() || rel.contains('%') || Path::new(rel).is_absolute() {
+        return None;
+    }
+    Some(input.join(rel))
 }
 
 /// Pull the icon resources from the packaged exe (best-effort: a failure only
@@ -460,5 +537,21 @@ mod tests {
             tmp_out_path(Path::new("dist/setup.exe")),
             Path::new("dist/setup.exe.tmp")
         );
+    }
+
+    #[test]
+    fn packaged_icon_path_maps_into_input() {
+        let input = Path::new("build");
+        let p = |icon| packaged_icon_path(input, Some("app.exe"), icon);
+        assert_eq!(p("%EXE%"), Some(input.join("app.exe")));
+        assert_eq!(
+            p(r"%INSTALL_DIR%\res\doc.ico"),
+            Some(input.join(r"res\doc.ico"))
+        );
+        assert_eq!(p(r"res\doc.dll"), Some(input.join(r"res\doc.dll")));
+        assert_eq!(p(r"%SystemRoot%\system32\shell32.dll"), None);
+        assert_eq!(p(r"C:\Windows\x.dll"), None);
+        assert_eq!(p("%INSTALL_DIR%"), None);
+        assert_eq!(packaged_icon_path(input, None, "%EXE%"), None);
     }
 }
