@@ -15,7 +15,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 const FULL_PREFIX: &str = "full/";
@@ -227,60 +227,94 @@ fn check_preconditions(ctx: &InstallCtx<'_>) -> Result<()> {
     )
 }
 
+/// Runs `work` on every item across the rayon pool, largest first: each idle
+/// worker takes the largest item left, so a big file starts at once instead of
+/// finishing the phase alone while every other core waits. `init` builds each
+/// worker's state, as with `map_init`. Results come back in `items` order.
+fn largest_first<T, S, R>(
+    items: &[T],
+    size: impl Fn(&T) -> u64,
+    init: impl Fn() -> S + Sync,
+    work: impl Fn(&mut S, &T) -> R + Sync,
+) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+{
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    // Stable: equal sizes keep their `items` order.
+    order.sort_by_key(|&index| std::cmp::Reverse(size(&items[index])));
+    let next = AtomicUsize::new(0);
+    let mut results: Vec<(usize, R)> = rayon::broadcast(|_| {
+        let mut state = None;
+        let mut results = Vec::new();
+        while let Some(&index) = order.get(next.fetch_add(1, Ordering::Relaxed)) {
+            let state = state.get_or_insert_with(&init);
+            results.push((index, work(state, &items[index])));
+        }
+        results
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+    results.sort_unstable_by_key(|&(index, _)| index);
+    results.into_iter().map(|(_, result)| result).collect()
+}
+
 /// PHASE 1: build every new/changed file under `temp.staged`, verified by hash.
 /// The live install is not touched, so cancelling or crashing here leaves it
 /// intact. Returns the sorted set of relative paths that need committing; files
 /// already correct on disk are hash-skipped and left out of it.
 ///
-/// Files are independent, so staging fans out across cores; `map_init` gives
-/// each worker its own archive view over the shared mmap slice (one index
+/// Files are independent, so staging fans out across cores, largest first;
+/// each worker has its own archive view over the shared mmap slice (one index
 /// parse per core, not per file).
 fn stage_all(ctx: &InstallCtx<'_>, temp: &TempAreas, total_bytes: u64) -> Result<Vec<String>> {
     let done = Arc::new(AtomicU64::new(0));
 
-    // Deterministic order - easier UX and reproducible.
+    // Sorted by name: files of equal size start in that order, and results
+    // (hence the first error reported) come back in it.
     let mut entries: Vec<(&String, &common::model::file_entry::FileEntry)> =
         ctx.payload.manifest.files.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
 
-    let staged: Vec<Result<Option<String>>> = entries
-        .par_iter()
-        .map_init(
-            || PayloadArchive::open(ctx.archive_bytes),
-            |archive, &(rel, entry)| -> Result<Option<String>> {
-                if ctx.cancel.load(Ordering::Relaxed) {
-                    bail!("cancelled by user");
-                }
+    let staged: Vec<Result<Option<String>>> = largest_first(
+        &entries,
+        |&(_, entry)| entry.size,
+        || PayloadArchive::open(ctx.archive_bytes),
+        |archive, &(rel, entry)| -> Result<Option<String>> {
+            if ctx.cancel.load(Ordering::Relaxed) {
+                bail!("cancelled by user");
+            }
 
-                safe_rel(rel).inspect_err(|e| {
-                    common::log::error(format!("rejected path: {e:#}"));
-                })?;
+            safe_rel(rel).inspect_err(|e| {
+                common::log::error(format!("rejected path: {e:#}"));
+            })?;
 
-                let dest = long_path(&ctx.install_dir.join(rel));
-                (ctx.on_progress)(done.load(Ordering::Relaxed), total_bytes, rel);
+            let dest = long_path(&ctx.install_dir.join(rel));
+            (ctx.on_progress)(done.load(Ordering::Relaxed), total_bytes, rel);
 
-                // Hash-skip if already correct (disabled in force_reinstall).
-                if dest.exists()
-                    && !ctx.payload.force_reinstall
-                    && let Ok(h) = hash_file(&dest)
-                    && h == entry.hash
-                {
-                    common::log::info(format!("skip (hash match): {}", rel));
-                    done.fetch_add(entry.size, Ordering::Relaxed);
-                    (ctx.on_progress)(done.load(Ordering::Relaxed), total_bytes, rel);
-                    return Ok(None);
-                }
-
-                let archive = archive.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
-                let staged_path = temp.staged.join(staged_name(rel));
-                stage_file(archive, ctx.payload.kind, rel, entry, &dest, &staged_path)?;
-
+            // Hash-skip if already correct (disabled in force_reinstall).
+            if dest.exists()
+                && !ctx.payload.force_reinstall
+                && let Ok(h) = hash_file(&dest)
+                && h == entry.hash
+            {
+                common::log::info(format!("skip (hash match): {}", rel));
                 done.fetch_add(entry.size, Ordering::Relaxed);
                 (ctx.on_progress)(done.load(Ordering::Relaxed), total_bytes, rel);
-                Ok(Some(rel.clone()))
-            },
-        )
-        .collect();
+                return Ok(None);
+            }
+
+            let archive = archive.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
+            let staged_path = temp.staged.join(staged_name(rel));
+            stage_file(archive, ctx.payload.kind, rel, entry, &dest, &staged_path)?;
+
+            done.fetch_add(entry.size, Ordering::Relaxed);
+            (ctx.on_progress)(done.load(Ordering::Relaxed), total_bytes, rel);
+            Ok(Some(rel.clone()))
+        },
+    );
 
     // Surface the first staging error (cancel included); live install untouched.
     let mut to_commit: Vec<String> = Vec::new();
@@ -1501,9 +1535,11 @@ fn find_corrupt(
     committed: &[String],
     cancel: &AtomicBool,
 ) -> Vec<String> {
-    let outcomes: Vec<(String, VerifyOutcome, Duration)> = committed
-        .par_iter()
-        .filter_map(|rel| {
+    let outcomes: Vec<(String, VerifyOutcome, Duration)> = largest_first(
+        committed,
+        |rel| manifest.files.get(rel).map_or(0, |entry| entry.size),
+        || (),
+        |_, rel| {
             if cancel.load(Ordering::Relaxed) {
                 return None;
             }
@@ -1512,8 +1548,11 @@ fn find_corrupt(
             let t = Instant::now();
             let outcome = verify_one(&path, &entry.hash, VERIFY_STALL);
             Some((rel.clone(), outcome, t.elapsed()))
-        })
-        .collect();
+        },
+    )
+    .into_iter()
+    .flatten()
+    .collect();
 
     let mut corrupt = Vec::new();
     let mut deferred = Vec::new();
@@ -1663,6 +1702,39 @@ pub fn verify_install(data_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn largest_first_runs_big_items_first_and_keeps_input_order() {
+        let items = [3u64, 100, 1, 50, 50];
+        let started = std::sync::Mutex::new(Vec::new());
+        // One worker makes the processing order observable.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let results = pool.install(|| {
+            largest_first(
+                &items,
+                |&size| size,
+                || (),
+                |_, &size| {
+                    started.lock().unwrap().push(size);
+                    size * 2
+                },
+            )
+        });
+        assert_eq!(results, [6, 200, 2, 100, 100]);
+        assert_eq!(started.into_inner().unwrap(), [100, 50, 50, 3, 1]);
+
+        // Every item runs exactly once across the whole pool.
+        let results = largest_first(
+            &(0..1000u64).collect::<Vec<_>>(),
+            |&n| n % 7,
+            || (),
+            |_, &n| n,
+        );
+        assert_eq!(results, (0..1000u64).collect::<Vec<_>>());
+    }
 
     #[test]
     fn dirs_to_create_lists_only_missing_dirs() {
