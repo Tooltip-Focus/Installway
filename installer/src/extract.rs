@@ -16,7 +16,7 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const FULL_PREFIX: &str = "full/";
 
@@ -387,7 +387,7 @@ fn plan_deletions(ctx: &InstallCtx<'_>) -> Vec<String> {
 /// `write_journal`: every failure path rolls the install back to its previous
 /// state before returning, leaving the caller to clear the temp dir. On success
 /// the journal is dropped so recovery won't fire on the next launch.
-fn commit_and_verify(
+fn commit_and_validate(
     ctx: &InstallCtx<'_>,
     temp: &TempAreas,
     to_commit: &[String],
@@ -416,12 +416,12 @@ fn commit_and_verify(
         return Err(e).context("install failed and was rolled back");
     }
 
-    if let Err(e) = verify_and_repair(ctx, temp, to_commit, total_bytes) {
+    if let Err(e) = validate_and_repair(ctx, temp, to_commit, total_bytes) {
         rollback(&temp.root, &ctx.install_dir, to_commit, deleted);
         return Err(e);
     }
 
-    // Verified - drop the journal so recovery won't fire.
+    // Validated - drop the journal so recovery won't fire.
     let _ = fs::remove_file(journal_path(&temp.root));
 
     if !deleted.is_empty() {
@@ -430,10 +430,19 @@ fn commit_and_verify(
     Ok(())
 }
 
-/// Re-read each committed file from disk to catch corruption from the
-/// write/rename itself (bad sector, FS glitch). Still inside the transaction,
-/// backups intact, so the caller can still roll back on any error from here.
-fn verify_and_repair(
+/// Validate that every staged file landed at its final path.
+///
+/// Full payload bytes were already checked against the manifest's BLAKE3 while
+/// they were streamed to `staged/`; patch output is likewise hashed before it
+/// is accepted. Commit then uses same-volume renames, which move the file
+/// object without copying or rewriting its contents. Re-hashing every final
+/// path here would therefore read the complete install a second time (and
+/// commonly trigger another antivirus scan) without validating any new byte
+/// transformation. Presence, file type and length are the properties that can
+/// change during commit, so keep the cheap checks here. Repairs pass through
+/// `stage_file` again, and `--verify-install` still performs a full content
+/// hash.
+fn validate_and_repair(
     ctx: &InstallCtx<'_>,
     temp: &TempAreas,
     to_commit: &[String],
@@ -446,77 +455,113 @@ fn verify_and_repair(
         total_bytes,
         &ctx.translator.get("install.progress_verifying"),
     );
-    common::log::info(format!("verifying {} committed file(s)", to_commit.len()));
-    let verify_started = Instant::now();
-    let mut corrupt = find_corrupt(&ctx.install_dir, manifest, to_commit, &ctx.cancel);
+    common::log::info(format!("validating {} committed file(s)", to_commit.len()));
+    let validation_started = Instant::now();
+    let mut invalid = invalid_committed_files(&ctx.install_dir, manifest, to_commit, &ctx.cancel);
     common::log::info(format!(
-        "verification finished in {:.1}s",
-        verify_started.elapsed().as_secs_f64()
+        "commit validation finished in {}ms",
+        validation_started.elapsed().as_millis()
     ));
 
-    // A cancel during the (potentially long) re-hash short-circuits the
-    // remaining files inside `find_corrupt`; the caller rolls back so the live
-    // install returns to its previous version rather than half-committed.
+    // A cancel during validation short-circuits the remaining files; the
+    // caller rolls back so the live install returns to its previous version
+    // rather than half-committed.
     if ctx.cancel.load(Ordering::Relaxed) {
-        common::log::warn("cancelled by user during verification - rolling back");
+        common::log::warn("cancelled by user during validation - rolling back");
         bail!("cancelled by user");
     }
 
-    // Repair before a full rollback: corrupt content is reproducible from
-    // the payload, and rewriting to a fresh location dodges transient
-    // glitches. Backups stay untouched so rollback remains possible.
-    if !corrupt.is_empty() {
+    // Repair before a full rollback: invalid content is reproducible from the
+    // payload, and rewriting to a fresh location dodges transient glitches.
+    // Backups stay untouched so rollback remains possible.
+    if !invalid.is_empty() {
         common::log::warn(format!(
-            "{} file(s) failed post-install verification - attempting repair from payload",
-            corrupt.len()
+            "{} file(s) failed post-install validation - attempting repair from payload",
+            invalid.len()
         ));
-        for attempt in 1..=VERIFY_REPAIR_ATTEMPTS {
+        for attempt in 1..=REPAIR_ATTEMPTS {
             (ctx.on_progress)(
                 total_bytes,
                 total_bytes,
                 &ctx.translator.get("install.progress_repairing"),
             );
-            let repair = repair_corrupt(
+            let repair = repair_invalid_files(
                 ctx.archive_bytes,
                 ctx.payload.kind,
                 manifest,
                 &temp.staged,
                 &temp.backup,
                 &ctx.install_dir,
-                &corrupt,
+                &invalid,
             );
             if let Err(e) = repair {
                 common::log::error(format!("repair attempt {} failed: {e:#}", attempt));
                 break;
             }
-            corrupt = find_corrupt(&ctx.install_dir, manifest, &corrupt, &ctx.cancel);
-            if corrupt.is_empty() {
+            invalid = invalid_committed_files(&ctx.install_dir, manifest, &invalid, &ctx.cancel);
+            if invalid.is_empty() {
                 common::log::info(format!("repair succeeded on attempt {}", attempt));
                 break;
             }
             common::log::warn(format!(
-                "{} file(s) still corrupt after repair attempt {}",
-                corrupt.len(),
+                "{} file(s) still invalid after repair attempt {}",
+                invalid.len(),
                 attempt
             ));
         }
     }
 
-    // Repair exhausted and still corrupt - the caller rolls back to the
+    // Repair exhausted and files are still invalid - the caller rolls back to the
     // previous version.
-    if !corrupt.is_empty() {
+    if !invalid.is_empty() {
         common::log::error(format!(
-            "post-install verification failed for {} file(s) after repair - rolling back",
-            corrupt.len()
+            "post-install validation failed for {} file(s) after repair - rolling back",
+            invalid.len()
         ));
         bail!(
-            "{} installed file(s) failed verification and could not be repaired; \
+            "{} installed file(s) failed validation and could not be repaired; \
              the install was rolled back to the previous version",
-            corrupt.len()
+            invalid.len()
         );
     }
-    common::log::info(format!("verified {} committed file(s)", to_commit.len()));
+    common::log::info(format!("validated {} committed file(s)", to_commit.len()));
     Ok(())
+}
+
+/// Return committed paths that did not land as a regular file of the manifest
+/// size. Content was already BLAKE3-verified in `stage_file`; commit only
+/// renames that same file object, so a second content pass is redundant.
+fn invalid_committed_files(
+    install_dir: &Path,
+    manifest: &Manifest,
+    committed: &[String],
+    cancel: &AtomicBool,
+) -> Vec<String> {
+    committed
+        .par_iter()
+        .filter_map(|rel| {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            let issue = match manifest.files.get(rel) {
+                None => Some("missing from manifest".to_string()),
+                Some(entry) => match fs::metadata(long_path(&install_dir.join(rel))) {
+                    Ok(metadata) if !metadata.is_file() => Some("not a regular file".to_string()),
+                    Ok(metadata) if metadata.len() != entry.size => Some(format!(
+                        "wrong size: expected {}, got {}",
+                        entry.size,
+                        metadata.len()
+                    )),
+                    Ok(_) => None,
+                    Err(e) => Some(format!("missing or unreadable: {e}")),
+                },
+            };
+            issue.map(|issue| {
+                common::log::warn(format!("{rel} invalid after commit: {issue}"));
+                rel.clone()
+            })
+        })
+        .collect()
 }
 
 /// A completed [`install`]. `install::run` keeps it alive across its metadata
@@ -607,7 +652,7 @@ pub fn install(ctx: &InstallCtx<'_>) -> Result<Installed> {
         // returns without clearing the temp dir, as it always has.
         write_journal(&temp.root, &to_commit, &deleted)?;
 
-        if let Err(e) = commit_and_verify(ctx, &temp, &to_commit, &deleted, total_bytes) {
+        if let Err(e) = commit_and_validate(ctx, &temp, &to_commit, &deleted, total_bytes) {
             cleanup(&temp.root);
             return Err(e);
         }
@@ -877,15 +922,8 @@ fn run_hdiff(old: &Path, patch: &Path, out: &Path) -> bool {
 }
 
 fn hash_file(path: &Path) -> Result<String> {
-    hash_file_progress(path, &AtomicU64::new(0))
-}
-
-/// Like [`hash_file`] but adds each chunk's byte count to `progress`, so a
-/// watcher can tell a slow-but-advancing read from a fully stalled one.
-fn hash_file_progress(path: &Path, progress: &AtomicU64) -> Result<String> {
-    // Streaming read, not mmap: mmap-hashing a just-written file stalls behind
-    // Defender's on-access scan, and a flaky-disk fault surfaces as an
-    // un-catchable in-page exception. A plain read returns a normal `io::Error`.
+    // Streaming read, not mmap: a flaky-disk fault must surface as a normal
+    // `io::Error`, not an uncatchable in-page exception.
     let mut f = File::open(path).map_err(|e| anyhow::anyhow!("{}", io_msg("opening", path, &e)))?;
     let mut hasher = blake3::Hasher::new();
     let mut buf = vec![0u8; 1024 * 1024];
@@ -897,65 +935,8 @@ fn hash_file_progress(path: &Path, progress: &AtomicU64) -> Result<String> {
             break;
         }
         hasher.update(&buf[..n]);
-        progress.fetch_add(n as u64, Ordering::Relaxed);
     }
     Ok(hasher.finalize().to_hex().to_string())
-}
-
-/// Hash `path` on a helper thread, giving up if the read makes no progress for
-/// `stall`. Progress-based rather than a total timeout, so a huge file on a slow
-/// disk is fine as long as bytes keep flowing, while a read wedged behind
-/// antivirus isn't. The abandoned thread drains on its own. `None` means stalled.
-fn hash_within(path: &Path, stall: Duration) -> Option<Result<String>> {
-    use std::sync::mpsc::RecvTimeoutError;
-    let (tx, rx) = std::sync::mpsc::channel();
-    let progress = Arc::new(AtomicU64::new(0));
-    let p = path.to_path_buf();
-    let prog = progress.clone();
-    std::thread::spawn(move || {
-        let _ = tx.send(hash_file_progress(&p, &prog));
-    });
-    let mut last_bytes = 0u64;
-    let mut last_advance = Instant::now();
-    let tick = Duration::from_secs(2).min(stall);
-    loop {
-        match rx.recv_timeout(tick) {
-            Ok(r) => return Some(r),
-            Err(RecvTimeoutError::Disconnected) => return None,
-            Err(RecvTimeoutError::Timeout) => {
-                let now = progress.load(Ordering::Relaxed);
-                if now != last_bytes {
-                    last_bytes = now;
-                    last_advance = Instant::now();
-                } else if last_advance.elapsed() >= stall {
-                    return None;
-                }
-            }
-        }
-    }
-}
-
-enum VerifyOutcome {
-    Match,
-    Mismatch {
-        got: String,
-    },
-    Missing,
-    /// Read stalled (no progress within the stall window).
-    Slow,
-    /// File exists but couldn't be read.
-    Error(String),
-}
-
-/// Hash one file, abandoning if the read stalls for `stall`, and classify it.
-fn verify_one(path: &Path, expected: &str, stall: Duration) -> VerifyOutcome {
-    match hash_within(path, stall) {
-        Some(Ok(got)) if got == expected => VerifyOutcome::Match,
-        Some(Ok(got)) => VerifyOutcome::Mismatch { got },
-        Some(Err(_)) if !path.exists() => VerifyOutcome::Missing,
-        Some(Err(e)) => VerifyOutcome::Error(format!("{e:#}")),
-        None => VerifyOutcome::Slow,
-    }
 }
 
 // ---- Two-phase commit primitives --------------------------------------
@@ -1462,152 +1443,23 @@ fn cleanup(temp_dir: &Path) {
     common::utils::remove_dir_retry(temp_dir);
 }
 
-/// No-progress window before pass 1 gives up on a file and defers it to pass 2.
-/// A stall window, not a size-dependent total: a large file streaming off a slow
-/// disk keeps advancing and never trips it; a read stuck behind antivirus does.
-const VERIFY_STALL: Duration = Duration::from_secs(30);
-/// More patient stall window for the pass-2 re-test.
-const VERIFY_RETRY_STALL: Duration = Duration::from_secs(90);
+/// Repair passes over the invalid set before falling back to a full rollback.
+const REPAIR_ATTEMPTS: usize = 2;
 
-/// Short hash prefix for log lines.
-fn short(h: &str) -> &str {
-    &h[..16.min(h.len())]
-}
-
-enum Verdict {
-    Ok,
-    Corrupt,
-    Unconfirmed,
-}
-
-/// Classify a verify outcome, logging the reason. `retry` selects the pass-2
-/// wording (a still-unconfirmed file is a non-fatal "proceeding", not "retry").
-fn classify(rel: &str, expected: &str, outcome: VerifyOutcome, retry: bool) -> Verdict {
-    match outcome {
-        VerifyOutcome::Match => Verdict::Ok,
-        VerifyOutcome::Mismatch { got } => {
-            common::log::warn(format!(
-                "{rel} corrupt after writing (expected {}, got {})",
-                short(expected),
-                short(&got)
-            ));
-            Verdict::Corrupt
-        }
-        VerifyOutcome::Missing => {
-            common::log::warn(format!("{rel} missing after writing"));
-            Verdict::Corrupt
-        }
-        VerifyOutcome::Slow if retry => {
-            common::log::warn(format!(
-                "{rel} could not be verified (antivirus or slow disk) - proceeding without re-verification"
-            ));
-            Verdict::Unconfirmed
-        }
-        VerifyOutcome::Slow => {
-            common::log::warn(format!(
-                "{rel} stalled while verifying (antivirus or slow disk) - will retry"
-            ));
-            Verdict::Unconfirmed
-        }
-        VerifyOutcome::Error(e) if retry => {
-            common::log::warn(format!(
-                "{rel} could not be verified ({e}) - proceeding without re-verification"
-            ));
-            Verdict::Unconfirmed
-        }
-        VerifyOutcome::Error(e) => {
-            common::log::warn(format!("{rel} unreadable ({e}) - will retry"));
-            Verdict::Unconfirmed
-        }
-    }
-}
-
-/// Re-hash each committed file and return those that don't match the manifest
-/// (corrupt, missing, or unreadable). Parallel; used inside the transaction.
-///
-/// `cancel` lets a user-requested cancel short-circuit the remaining files: the
-/// re-hash reads every installed byte again and can be slow (AV scanning a fresh
-/// `.exe`, a slow/network disk), so once cancel is set, pending files are skipped
-/// rather than hashed. The caller re-checks the flag and rolls back.
-fn find_corrupt(
-    install_dir: &Path,
-    manifest: &Manifest,
-    committed: &[String],
-    cancel: &AtomicBool,
-) -> Vec<String> {
-    let outcomes: Vec<(String, VerifyOutcome, Duration)> = largest_first(
-        committed,
-        |rel| manifest.files.get(rel).map_or(0, |entry| entry.size),
-        || (),
-        |_, rel| {
-            if cancel.load(Ordering::Relaxed) {
-                return None;
-            }
-            let entry = manifest.files.get(rel)?;
-            let path = long_path(&install_dir.join(rel));
-            let t = Instant::now();
-            let outcome = verify_one(&path, &entry.hash, VERIFY_STALL);
-            Some((rel.clone(), outcome, t.elapsed()))
-        },
-    )
-    .into_iter()
-    .flatten()
-    .collect();
-
-    let mut corrupt = Vec::new();
-    let mut deferred = Vec::new();
-    for (rel, outcome, elapsed) in outcomes {
-        let expected = manifest
-            .files
-            .get(&rel)
-            .map(|e| e.hash.as_str())
-            .unwrap_or("");
-        match classify(&rel, expected, outcome, false) {
-            Verdict::Ok if elapsed >= Duration::from_secs(5) => {
-                common::log::info(format!("verified {rel} ({:.1}s)", elapsed.as_secs_f64()));
-            }
-            Verdict::Ok => common::log::info(format!("verified {rel}")),
-            Verdict::Corrupt => corrupt.push(rel),
-            Verdict::Unconfirmed => deferred.push(rel),
-        }
-    }
-
-    for rel in deferred {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        let Some(entry) = manifest.files.get(&rel) else {
-            continue;
-        };
-        let path = long_path(&install_dir.join(&rel));
-        let outcome = verify_one(&path, &entry.hash, VERIFY_RETRY_STALL);
-        match classify(&rel, &entry.hash, outcome, true) {
-            Verdict::Ok => common::log::info(format!("verified {rel} on retry")),
-            Verdict::Corrupt => corrupt.push(rel),
-            Verdict::Unconfirmed => {}
-        }
-    }
-
-    corrupt
-}
-
-/// Repair passes over the corrupt set before falling back to a full rollback.
-const VERIFY_REPAIR_ATTEMPTS: usize = 2;
-
-/// Re-stage each corrupt file from the payload and move it back into place,
+/// Re-stage each invalid file from the payload and move it back into place,
 /// leaving the backups intact so rollback stays possible. Patch entries are
 /// re-applied against the backed-up previous version; full/new files come from
 /// `full/<rel>` in the archive.
-fn repair_corrupt(
+fn repair_invalid_files(
     archive_bytes: &[u8],
     kind: PayloadKind,
     manifest: &Manifest,
     staged_dir: &Path,
     backup_dir: &Path,
     install_dir: &Path,
-    corrupt: &[String],
+    invalid: &[String],
 ) -> Result<()> {
-    corrupt
+    invalid
         .par_iter()
         .map_init(
             || PayloadArchive::open(archive_bytes),
@@ -1734,6 +1586,43 @@ mod tests {
             |_, &n| n,
         );
         assert_eq!(results, (0..1000u64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn commit_validation_checks_presence_type_and_size_without_rehashing() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("ok.bin"), b"1234").unwrap();
+        fs::write(dir.path().join("wrong-size.bin"), b"12").unwrap();
+        fs::create_dir(dir.path().join("directory.bin")).unwrap();
+
+        let mut manifest = Manifest::fallback("1.0", None);
+        for rel in ["ok.bin", "wrong-size.bin", "directory.bin", "missing.bin"] {
+            manifest.files.insert(rel.into(), feat_entry(None, 4));
+        }
+        let committed = manifest.files.keys().cloned().collect::<Vec<_>>();
+        let mut invalid =
+            invalid_committed_files(dir.path(), &manifest, &committed, &AtomicBool::new(false));
+        invalid.sort();
+
+        assert_eq!(invalid, ["directory.bin", "missing.bin", "wrong-size.bin"]);
+    }
+
+    #[test]
+    fn commit_validation_honours_cancellation() {
+        let mut manifest = Manifest::fallback("1.0", None);
+        manifest
+            .files
+            .insert("missing.bin".into(), feat_entry(None, 1));
+
+        assert!(
+            invalid_committed_files(
+                Path::new("unused"),
+                &manifest,
+                &["missing.bin".into()],
+                &AtomicBool::new(true),
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -1882,10 +1771,10 @@ mod tests {
         assert_eq!(fs::read(app.join("b.txt")).unwrap(), b"LIVE");
     }
 
-    // A file that verifies as corrupt after commit is rewritten from the payload
-    // (full file in the archive) instead of triggering a rollback.
+    // A file with invalid post-commit metadata is rewritten from the payload
+    // instead of triggering a rollback.
     #[test]
-    fn repair_rewrites_corrupt_file_from_payload() {
+    fn repair_rewrites_invalid_file_from_payload() {
         let base = tempfile::tempdir().unwrap();
         let app = base.path().join("app");
         let temp = app.join(".installer_tmp");
@@ -1922,21 +1811,25 @@ mod tests {
         };
 
         let no_cancel = AtomicBool::new(false);
-        let corrupt = find_corrupt(&app, &manifest, &["foo.txt".to_string()], &no_cancel);
-        assert_eq!(corrupt, vec!["foo.txt".to_string()]);
+        let invalid =
+            invalid_committed_files(&app, &manifest, &["foo.txt".to_string()], &no_cancel);
+        assert_eq!(invalid, vec!["foo.txt".to_string()]);
 
-        repair_corrupt(
+        repair_invalid_files(
             &payload_bytes,
             PayloadKind::Full,
             &manifest,
             &staged,
             &backup,
             &app,
-            &corrupt,
+            &invalid,
         )
         .unwrap();
 
-        assert!(find_corrupt(&app, &manifest, &["foo.txt".to_string()], &no_cancel).is_empty());
+        assert!(
+            invalid_committed_files(&app, &manifest, &["foo.txt".to_string()], &no_cancel)
+                .is_empty()
+        );
         assert_eq!(fs::read(app.join("foo.txt")).unwrap(), good);
     }
 
