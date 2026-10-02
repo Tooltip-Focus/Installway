@@ -423,8 +423,8 @@ fn under_install_dir(install_dir: &Path, path: String) -> String {
     }
 }
 
-/// Resolve each declared shortcut's token templates against this install into
-/// absolute `dir` / `target` strings (plus the verbatim `args`). Location tokens:
+/// Resolve each declared shortcut's token templates against this install into an
+/// expanded `name` and absolute `dir` / `target` strings (plus `args`). Location tokens:
 /// `%DESKTOP%` / `%START_MENU%` resolve to the All-Users location when the install
 /// is machine-wide and the per-user one otherwise; `%COMMON_DESKTOP%` /
 /// `%COMMON_START_MENU%` force All-Users and `%USER_DESKTOP%` / `%USER_START_MENU%`
@@ -509,7 +509,7 @@ fn expand_shortcuts(
         }
         out.push(ShortcutEntry {
             dir,
-            name: s.name.clone(),
+            name: common::paths::sanitize_component(&sub(&s.name)),
             target: under_install_dir(install_dir, sub(&s.target)),
             args: sub(&s.args),
             feature: String::new(),
@@ -783,7 +783,7 @@ mod tests {
         let dir = Path::new(r"C:\Apps\MyApp");
         let p = payload_with(vec![ShortcutEntry {
             dir: r"%INSTALL_DIR%\sub".into(),
-            name: "Tool".into(),
+            name: "%PRODUCT% Tool".into(),
             target: "%EXE%".into(),
             args: "--name %PRODUCT% --v %VERSION%".into(),
             feature: String::new(),
@@ -791,6 +791,7 @@ mod tests {
         let out = expand_shortcuts(&p, dir, false, ShortcutOptions::default());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].dir, r"C:\Apps\MyApp\sub");
+        assert_eq!(out[0].name, "P Tool");
         assert_eq!(out[0].target, r"C:\Apps\MyApp\a.exe");
         assert_eq!(out[0].args, "--name P --v 1.1");
     }

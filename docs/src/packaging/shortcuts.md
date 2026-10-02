@@ -35,7 +35,7 @@ build with a message naming the entry. A non-empty `feature` that no
 
 ## Tokens
 
-`dir`, `target`, and `args` are templates expanded at install time, so they
+`dir`, `name`, `target`, and `args` are templates expanded at install time, so they
 can reference the chosen install directory:
 
 | Token | Expands to |
