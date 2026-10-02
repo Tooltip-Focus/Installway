@@ -5,7 +5,8 @@ pub struct ShortcutEntry {
     /// Directory the `.lnk` is placed in. Tokens: `%DESKTOP%`, `%START_MENU%`
     /// (per-user Programs), `%INSTALL_DIR%`, plus `%VAR%` env vars.
     pub dir: String,
-    /// Shortcut file name, without the `.lnk` extension (also the label).
+    /// Shortcut file name template, without the `.lnk` extension (also the label).
+    /// Product and version tokens are expanded at install time.
     pub name: String,
     /// Shortcut target. A relative path resolves against the install dir (the
     /// product exe); same tokens as `dir` are expanded.

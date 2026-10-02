@@ -47,7 +47,7 @@ serializer-determinism trap.
 | `license_text` | `Option<String>` | EULA shown on the License page. |
 | `associations` | `Vec<FileAssoc>` | File types to register under `Software\Classes`. Each has `ext`, `description`, and optional `icon` (token template, empty means the main exe) and `icon_index` (`>= 0` an index, `< 0` a negated resource id; default `0`). |
 | `plugins` | `Vec<PluginEntry>` | Bundled [plugins](../packaging/plugins.md) and their phases. |
-| `shortcuts` | `Vec<ShortcutEntry>` | [Shortcuts](../packaging/shortcuts.md) to create. `dir`, `target`, and `args` are token templates. None are created unless declared. |
+| `shortcuts` | `Vec<ShortcutEntry>` | [Shortcuts](../packaging/shortcuts.md) to create. `dir`, `name`, `target`, and `args` are token templates. None are created unless declared. |
 | `registry` | `Vec<RegistryEntry>` | Free-form [registry entries](../packaging/registry.md). Key and value are token templates. |
 | `force_reinstall` | `bool` | Dev: rewrite all, remove orphans, skip the from-version check. |
 | `purge_unknown_files` | `bool` | Full installs: remove unknown or leftover files. Ignored for patches. |
