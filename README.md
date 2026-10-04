@@ -9,9 +9,11 @@ instead of full re-downloads. No proprietary scripting language to learn, no
 MSI runtime, no admin rights required - just a native, antivirus-friendly
 `.exe` your users can double-click and trust.
 
+Use WinUI by default, with a fallback to Win32 on unsupported versions.
+
 ## Screenshots
 
-<img width="1033" height="827" alt="Sample App Software Installation Progress" src="https://github.com/user-attachments/assets/f1091106-b147-427f-b278-45e645cf522b" />
+<img width="1024" height="1024" alt="Installway in action" src="https://github.com/user-attachments/assets/09049821-34c0-4918-89f4-686c47ed19fc" />
 
 ## Documentation
 
