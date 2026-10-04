@@ -13,6 +13,8 @@ Use WinUI by default, with a fallback to Win32 on unsupported versions.
 
 ## Screenshots
 
+<img width="1024" height="1024" alt="Github2" src="https://github.com/user-attachments/assets/6be2d0d0-704b-47d5-afb1-8d7a68ff1aab" />
+
 <img width="1024" height="1024" alt="Installway in action" src="https://github.com/user-attachments/assets/09049821-34c0-4918-89f4-686c47ed19fc" />
 
 ## Documentation
