@@ -46,10 +46,13 @@ install directory, then `%LOCALAPPDATA%\Programs\<product>`.
 ### Language selection
 
 The UI language is resolved in this order: `--lang`, then `INSTALLWAY_LANG`,
-then the OS display language, then English. Supported languages: English
-(`en`), French (`fr`), Italian (`it`). An unsupported code falls back to
-English. The resolved code is passed to [plugins](../packaging/plugins.md)
-as `ctx->lang`.
+then the OS display language, then English. Supported languages are the
+files in
+[`common/locales/`](https://github.com/Tooltip-Focus/Installway/tree/main/common/locales),
+one `<code>.toml` per language, picked up at build time. Translations are
+powered by [Localeway](https://localeway.app/). An unsupported code
+falls back to English. The resolved code is passed to the elevated worker and
+to [plugins](../packaging/plugins.md) as `ctx->lang`.
 
 ## Uninstaller (`uninstall.exe`)
 

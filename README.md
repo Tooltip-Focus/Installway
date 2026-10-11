@@ -48,6 +48,9 @@ Jump to:
 - **A modern, native interface**: a DPI-aware Win32 wizard out of the box,
   and plugins can add their own custom pages for licensing steps,
   configuration screens, or anything else your install needs.
+- **Speaks your users' language**: the installer and uninstaller follow the
+  Windows display language, with translations powered by
+  [Localeway](https://localeway.app/).
 - **No admin rights needed**: per-user installs, shortcuts, file
   associations and an Add/Remove Programs entry, all without an elevation
   prompt.

@@ -25,6 +25,8 @@ const LIBRARIES: [&str; 2] = ["pak_c_api", "xxhash"];
 const TRIPLET: &str = "x64-windows-static";
 
 fn main() {
+    embed_locales();
+
     // `common::pak` only exists on Windows, like the installer itself.
     if std::env::var_os("CARGO_CFG_WINDOWS").is_none() {
         return;
@@ -36,6 +38,28 @@ fn main() {
         None => build_submodule(),
     };
     link(&build);
+}
+
+/// Write `OUT_DIR/locales.rs`: one `(code, include_str!(...))` entry per
+/// `locales/<code>.toml`, so adding a language is just dropping in a file.
+fn embed_locales() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+    // A directory is scanned whole: adding or editing any locale reruns this.
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .expect("read common/locales")
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+        .collect();
+    files.sort();
+    let mut src = String::from("&[\n");
+    for path in &files {
+        let code = path.file_stem().unwrap().to_str().unwrap().to_ascii_lowercase();
+        src += &format!("    ({code:?}, include_str!({:?})),\n", path.display().to_string());
+    }
+    src += "]\n";
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("locales.rs");
+    std::fs::write(out, src).expect("write locales.rs");
 }
 
 /// Configure and build `pak_c_api` from the submodule into `OUT_DIR`.

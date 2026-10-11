@@ -4,7 +4,7 @@
 window_title = "{product} {version} - Setup"
 header = "Install {product} {version}"
 sub_full = "Welcome - fresh installation"
-sub_patch = "Update {from} → {to}"
+sub_patch = "Update {from} to {to}"
 license_accept = "I accept the terms of the license agreement"
 choose_label = "Install location:"
 browse = "Browse..."
@@ -71,3 +71,4 @@ fatal_caption = "Uninstall error"
 uac_cancelled = "Administrator rights are required to uninstall this application."
 spawn_failed = "Failed to spawn finalize step: {err}"
 schedule_deletion = "Schedule self deletion"
+

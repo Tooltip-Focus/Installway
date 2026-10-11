@@ -4,7 +4,8 @@
 //! Multi-language string lookup.
 //!
 //! Locales are TOML files under `common/locales/`, embedded at compile time
-//! via `include_str!`. Each locale is a flat key -> string map after parsing
+//! via `include_str!` (`build.rs` lists every `<code>.toml` there, so a new
+//! language needs no code change). Each locale is a flat key -> string map after parsing
 //!
 //! Detection on Windows uses `GetUserDefaultLocaleName` and takes the first
 //! 2 ISO-639 chars (`"en-US"` -> `"en"`). A `--lang <code>` CLI flag and the
@@ -16,11 +17,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use windows::Win32::Globalization::GetUserDefaultLocaleName;
 
-const EN: &str = include_str!("../locales/en.toml");
-const FR: &str = include_str!("../locales/fr.toml");
-const IT: &str = include_str!("../locales/it.toml");
-
-const SUPPORTED: &[(&str, &str)] = &[("en", EN), ("fr", FR), ("it", IT)];
+/// Every `locales/<code>.toml`, collected by `build.rs`.
+const SUPPORTED: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/locales.rs"));
 const DEFAULT_LANG: &str = "en";
 
 static TABLES: OnceLock<HashMap<&'static str, HashMap<String, String>>> = OnceLock::new();
@@ -82,31 +80,20 @@ impl Translator {
             .next()
             .unwrap_or(code)
             .to_ascii_lowercase();
-        for (c, _) in SUPPORTED {
-            if *c == two {
-                return Self { lang: c };
-            }
-        }
-        Self { lang: DEFAULT_LANG }
+        SUPPORTED
+            .iter()
+            .find(|(c, _)| *c == two)
+            .map_or_else(Self::default, |(c, _)| Self { lang: c })
     }
 
-    /// Detect from CLI args (`--lang <code>`), env (`INSTALLWAY_LANG`),
-    /// then OS user locale, then default.
-    pub fn detect(args: &[String]) -> Self {
-        if let Some(idx) = args.iter().position(|a| a == "--lang")
-            && let Some(c) = args.get(idx + 1)
-        {
-            return Self::for_lang(c);
-        }
-        if let Ok(c) = std::env::var("INSTALLWAY_LANG")
-            && !c.is_empty()
-        {
-            return Self::for_lang(&c);
-        }
-        if let Some(c) = os_user_locale() {
-            return Self::for_lang(&c);
-        }
-        Self { lang: DEFAULT_LANG }
+    /// Resolve the UI language: the `--lang` value if given, else env
+    /// (`INSTALLWAY_LANG`), then OS user locale, then default.
+    pub fn detect(lang: Option<&str>) -> Self {
+        let env = || std::env::var("INSTALLWAY_LANG").ok().filter(|c| !c.is_empty());
+        lang.map(str::to_owned)
+            .or_else(env)
+            .or_else(os_user_locale)
+            .map_or_else(Self::default, |c| Self::for_lang(&c))
     }
 
     pub fn lang(&self) -> &'static str {
@@ -171,7 +158,16 @@ mod tests {
         assert_eq!(Translator::for_lang("fr").lang(), "fr");
         assert_eq!(Translator::for_lang("fr-FR").lang(), "fr");
         assert_eq!(Translator::for_lang("EN").lang(), "en");
-        assert_eq!(Translator::for_lang("de").lang(), "en"); // unknown -> default
+        assert_eq!(Translator::for_lang("de-CH").lang(), "de");
+        assert_eq!(Translator::for_lang("xx").lang(), "en"); // unknown -> default
+    }
+
+    #[test]
+    fn every_locale_parses() {
+        // tables() maps an unparsable file to an empty table.
+        for (code, _) in SUPPORTED {
+            assert!(!tables()[code].is_empty(), "{code}.toml is invalid or empty");
+        }
     }
 
     #[test]
@@ -193,7 +189,6 @@ mod tests {
 
     #[test]
     fn detect_arg_overrides_everything() {
-        let args = vec!["--lang".to_string(), "fr".to_string()];
-        assert_eq!(Translator::detect(&args).lang(), "fr");
+        assert_eq!(Translator::detect(Some("fr")).lang(), "fr");
     }
 }

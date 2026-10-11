@@ -125,9 +125,14 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let translator = common::i18n::Translator::detect(cli.lang.as_deref());
+    // Record the resolved language process-wide so plugin contexts and the
+    // elevated worker (spawned with `--lang`) carry it.
+    translator.set_global();
+
     // Elevated worker: connect to the main-process pipe, do the install +
     // finalize, stream events back. Spawned via UAC by the main process; needs
-    // no payload/translator setup here (the worker resolves its own).
+    // no payload setup here.
     if let Some(pipe_name) = cli.elevated_worker.as_deref() {
         let code = match crate::elevation::run_as_worker(pipe_name) {
             Ok(()) => 0,
@@ -151,14 +156,6 @@ fn run(cli: Cli) -> Result<()> {
         );
         std::process::exit(code);
     }
-
-    // `--lang` wins; otherwise env (`INSTALLWAY_LANG`) then OS locale.
-    let translator = match &cli.lang {
-        Some(code) => common::i18n::Translator::for_lang(code),
-        None => common::i18n::Translator::detect(&[]),
-    };
-    // Record the resolved language process-wide so plugin contexts carry it.
-    translator.set_global();
 
     // Record the shortcut opt-outs process-wide.
     install::set_shortcut_options(install::ShortcutOptions {
