@@ -16,8 +16,8 @@ pub fn run_as_worker(pipe_name: &str) -> Result<()> {
     let handle = common::elevation::connect_pipe_client(pipe_name)?;
     let mut pipe = common::elevation::open_pipe_handle(handle);
 
-    let translator = common::i18n::Translator::detect(&[]);
-    translator.set_global();
+    // Resolved in `main::run` from the `--lang` the parent forwarded.
+    let translator = common::i18n::Translator::for_lang(common::i18n::current_lang());
 
     let line = common::elevation::read_line_unbuffered(&mut pipe)?;
     let cmd: InstallWorkerCommand = serde_json::from_str(line.trim())?;

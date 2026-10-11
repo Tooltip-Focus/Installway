@@ -7,8 +7,6 @@ use common::model::manifest::Manifest;
 use std::fs::File;
 
 pub fn run(pipe_name: &str) -> Result<()> {
-    common::i18n::Translator::detect(&[]).set_global();
-
     let handle = common::elevation::connect_pipe_client(pipe_name)?;
     let mut pipe = common::elevation::open_pipe_handle(handle);
 

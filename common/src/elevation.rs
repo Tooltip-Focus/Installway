@@ -223,7 +223,11 @@ pub fn open_pipe_handle(handle: windows::Win32::Foundation::HANDLE) -> std::fs::
 /// cancelled UAC or an OS error occurred.
 pub fn spawn_elevated_worker(pipe_name: &str) -> Result<()> {
     let exe = std::env::current_exe()?;
-    let args = format!("--elevated-worker \"{}\"", pipe_name);
+    // Forward the resolved UI language so the worker's messages match the parent's.
+    let args = format!(
+        "--elevated-worker \"{pipe_name}\" --lang {}",
+        crate::i18n::current_lang()
+    );
 
     let result = unsafe {
         ShellExecuteW(

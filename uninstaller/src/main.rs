@@ -33,6 +33,10 @@ struct Cli {
     #[arg(long)]
     silent: bool,
 
+    /// Override the UI language (2-letter ISO code, e.g. `fr`).
+    #[arg(long)]
+    lang: Option<String>,
+
     /// Internal: run as the elevated worker, streaming events back over the
     /// named pipe whose name is given here. Spawned via UAC by the main process.
     #[arg(long, hide = true, value_name = "PIPE")]
@@ -92,17 +96,11 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    // Collect argv including the binary name (index 0) so that clap can use it
-    // in any error messages.
-    let argv: Vec<String> = std::env::args().collect();
+    let cli = Cli::parse();
 
-    // Language detection uses the original user-visible arguments (no argv[0]).
-    let translator = common::i18n::Translator::detect(argv.get(1..).unwrap_or_default());
-
+    let translator = common::i18n::Translator::detect(cli.lang.as_deref());
     translator.set_global();
     ui::set_translator(translator);
-
-    let cli = Cli::parse_from(&argv);
 
     // Elevated worker: performs the uninstall with admin rights, streaming
     // events back via the named pipe. Spawned via UAC by the main process.

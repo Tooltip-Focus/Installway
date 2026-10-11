@@ -1,10 +1,10 @@
-# Français
+# English (default / fallback)
 
 [install]
 window_title = "{product} {version} - Installation"
 header = "Installer {product} {version}"
 sub_full = "Bienvenue - nouvelle installation"
-sub_patch = "Mise à jour {from} → {to}"
+sub_patch = "Mise à jour de {from} vers {to}"
 license_accept = "J'accepte les termes du contrat de licence"
 choose_label = "Emplacement d'installation :"
 browse = "Parcourir..."
@@ -51,7 +51,7 @@ uac_cancelled = "Des droits administrateur sont requis pour installer dans ce do
 [uninstall]
 title = "Désinstaller {product}"
 subtitle = "Version {version}"
-confirm = "Voulez-vous vraiment supprimer {product} {version} de :\n{path}\n\nTous les fichiers du produit, ses raccourcis et l'entrée dans Applications installées seront supprimés."
+confirm = "Voulez-vous vraiment supprimer {product} {version} de :\n{path}\n\nTous les fichiers du produit, ses raccourcis et l'entrée dans Ajout/Suppression de programmes seront supprimés."
 yes = "Oui, désinstaller"
 no = "Non"
 removing = "Suppression de {file}"
@@ -71,3 +71,4 @@ fatal_caption = "Erreur de désinstallation"
 uac_cancelled = "Des droits administrateur sont requis pour désinstaller cette application."
 spawn_failed = "Échec du lancement de l'étape finale : {err}"
 schedule_deletion = "Prévision de l'auto-suppression"
+

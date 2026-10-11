@@ -39,6 +39,14 @@ pub fn available() -> bool {
             common::log::info("running inside a launcher's package; using the Win32 UI");
             return false;
         }
+        // ponytail: Reactor has no FlowDirection, so WinUI content can't be
+        // mirrored; the Win32 UI is, via SetProcessDefaultLayout. Drop this
+        // once Reactor exposes FlowDirection.
+        let lang = common::i18n::current_lang();
+        if common::i18n::Translator::for_lang(lang).is_rtl() {
+            common::log::info(format!("right-to-left language {lang}; using the Win32 UI"));
+            return false;
+        }
         if !runtime::bind() {
             common::log::info("no suitable Windows App Runtime; using the Win32 UI");
             return false;
