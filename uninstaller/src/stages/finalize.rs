@@ -95,18 +95,20 @@ fn clear_app_dir(data_dir: &Path) {
         }
     };
     let dir = Path::new(&info.install_dir);
-    match info.uninstall_dir_policy {
-        UninstallDirPolicy::Tracked => cleanup::remove_created_dirs(&info),
+    if info.uninstall_dir_policy == UninstallDirPolicy::Purge {
         // Recursive: the tamper check keeps a corrupted `installer_info.json`
         // from turning this into a profile-folder wipe.
-        UninstallDirPolicy::Purge if cleanup::safe_app_dir(dir) => {
-            common::utils::remove_dir_retry(dir)
+        if !cleanup::safe_app_dir(dir) {
+            common::log::warn(format!(
+                "refusing to remove suspicious app dir: {}",
+                dir.display()
+            ));
+            return;
         }
-        UninstallDirPolicy::Purge => common::log::warn(format!(
-            "refusing to remove suspicious app dir: {}",
-            dir.display()
-        )),
+        common::utils::remove_dir_retry(dir);
     }
+    // Both policies prune only empty directories recorded as installer-created.
+    cleanup::remove_created_dirs(&info);
 }
 
 /// Remove the data dir we launched from (we run from the %TEMP% copy), then
@@ -150,16 +152,35 @@ fn schedule_self_delete_on_reboot() {
 mod tests {
     use super::*;
 
-    fn record(data_dir: &Path, app_dir: &Path, policy: UninstallDirPolicy) {
+    fn record(data_dir: &Path, app_dir: &Path, policy: UninstallDirPolicy, created_dirs: &[&Path]) {
         let app_dir = app_dir.to_string_lossy().into_owned();
         let info = InstallInfo {
             install_dir: app_dir.clone(),
             uninstall_dir_policy: policy,
-            created_dirs: vec![app_dir],
+            created_dirs: created_dirs
+                .iter()
+                .map(|dir| dir.to_string_lossy().into_owned())
+                .collect(),
             ..Default::default()
         };
         let json = serde_json::to_string(&info).unwrap();
         fs::write(data_dir.join(InstallInfo::FILE), json).unwrap();
+    }
+
+    fn purge_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("data");
+        let parent_dir = temp.path().join("Legrand");
+        let app_dir = parent_dir.join("XLPro");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&app_dir).unwrap();
+        record(
+            &data_dir,
+            &app_dir,
+            UninstallDirPolicy::Purge,
+            &[&parent_dir, &app_dir],
+        );
+        (temp, data_dir, parent_dir, app_dir)
     }
 
     #[test]
@@ -175,13 +196,40 @@ mod tests {
         assert!(app_dir.join("user.txt").exists());
 
         // Tracked: a created dir still holding a foreign file stays.
-        record(&data_dir, &app_dir, UninstallDirPolicy::Tracked);
+        record(
+            &data_dir,
+            &app_dir,
+            UninstallDirPolicy::Tracked,
+            &[&app_dir],
+        );
         clear_app_dir(&data_dir);
         assert!(app_dir.join("user.txt").exists());
 
         // Purge: the whole dir goes, content included.
-        record(&data_dir, &app_dir, UninstallDirPolicy::Purge);
+        record(&data_dir, &app_dir, UninstallDirPolicy::Purge, &[&app_dir]);
         clear_app_dir(&data_dir);
         assert!(!app_dir.exists());
+    }
+
+    #[test]
+    fn purge_removes_empty_parent_created_by_installer() {
+        let (_temp, data_dir, parent_dir, app_dir) = purge_fixture();
+        fs::write(app_dir.join("app.exe"), b"x").unwrap();
+
+        clear_app_dir(&data_dir);
+
+        assert!(!app_dir.exists());
+        assert!(!parent_dir.exists());
+    }
+
+    #[test]
+    fn purge_keeps_nonempty_parent_created_by_installer() {
+        let (_temp, data_dir, parent_dir, app_dir) = purge_fixture();
+        fs::write(parent_dir.join("keep.txt"), b"user data").unwrap();
+
+        clear_app_dir(&data_dir);
+
+        assert!(!app_dir.exists());
+        assert!(parent_dir.join("keep.txt").exists());
     }
 }
