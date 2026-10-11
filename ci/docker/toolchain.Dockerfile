@@ -25,7 +25,7 @@ RUN curl -fSL -o vs_buildtools.exe https://aka.ms/vs/17/release/vs_buildtools.ex
 
 # Git, for vcpkg: PakLib pins its zstd/xxHash with a builtin-baseline, which
 # needs a full vcpkg clone.
-ARG MINGIT_VERSION=2.47.1
+ARG MINGIT_VERSION=2.56.0
 RUN curl -fSL -o mingit.zip https://github.com/git-for-windows/git/releases/download/v%MINGIT_VERSION%.windows.1/MinGit-%MINGIT_VERSION%-64-bit.zip `
     && mkdir C:\mingit && tar -xf mingit.zip -C C:\mingit && del /q mingit.zip
 

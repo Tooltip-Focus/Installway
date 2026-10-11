@@ -47,8 +47,8 @@ fn tables() -> &'static HashMap<&'static str, HashMap<String, String>> {
         let mut all = HashMap::new();
         for (code, src) in SUPPORTED {
             let mut flat = HashMap::new();
-            if let Ok(v) = src.parse::<toml::Value>() {
-                flatten(&v, "", &mut flat);
+            if let Ok(t) = src.parse::<toml::Table>() {
+                flatten(&toml::Value::Table(t), "", &mut flat);
             }
             all.insert(*code, flat);
         }
@@ -96,7 +96,11 @@ impl Translator {
     /// Resolve the UI language: the `--lang` value if given, else env
     /// (`INSTALLWAY_LANG`), then OS user locale, then default.
     pub fn detect(lang: Option<&str>) -> Self {
-        let env = || std::env::var("INSTALLWAY_LANG").ok().filter(|c| !c.is_empty());
+        let env = || {
+            std::env::var("INSTALLWAY_LANG")
+                .ok()
+                .filter(|c| !c.is_empty())
+        };
         lang.map(str::to_owned)
             .or_else(env)
             .or_else(os_user_locale)
@@ -190,7 +194,10 @@ mod tests {
     fn every_locale_parses() {
         // tables() maps an unparsable file to an empty table.
         for (code, _) in SUPPORTED {
-            assert!(!tables()[code].is_empty(), "{code}.toml is invalid or empty");
+            assert!(
+                !tables()[code].is_empty(),
+                "{code}.toml is invalid or empty"
+            );
         }
     }
 

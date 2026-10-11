@@ -4,13 +4,14 @@
 use crate::args::KeygenArgs;
 use anyhow::{Context, Result};
 use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 use std::fs;
 
 pub fn run(args: &KeygenArgs) -> Result<()> {
     fs::create_dir_all(&args.out).context("create out dir")?;
 
-    let mut csprng = OsRng;
+    let mut csprng = UnwrapErr(SysRng);
     let signing = SigningKey::generate(&mut csprng);
     let verifying = signing.verifying_key();
 
