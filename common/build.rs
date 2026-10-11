@@ -54,8 +54,16 @@ fn embed_locales() {
     files.sort();
     let mut src = String::from("&[\n");
     for path in &files {
-        let code = path.file_stem().unwrap().to_str().unwrap().to_ascii_lowercase();
-        src += &format!("    ({code:?}, include_str!({:?})),\n", path.display().to_string());
+        let code = path
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase();
+        src += &format!(
+            "    ({code:?}, include_str!({:?})),\n",
+            path.display().to_string()
+        );
     }
     src += "]\n";
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("locales.rs");
