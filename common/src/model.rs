@@ -72,6 +72,7 @@ mod tests {
         assert!(p.associations.is_empty());
         assert!(p.shortcuts.is_empty());
         assert!(p.license_text.is_none());
+        assert!(p.license_texts.is_empty());
         assert_eq!(p.kind, PayloadKind::Full);
     }
 
@@ -102,16 +103,35 @@ mod tests {
     }
 
     #[test]
+    fn license_for_falls_back_to_default() {
+        let mut p = InstallerPayload::default();
+        p.license_texts.insert("fr".into(), "FR".into());
+        assert_eq!(p.license_for("de"), None);
+        p.license_text = Some("DEFAULT".into());
+        assert_eq!(p.license_for("fr"), Some("FR"));
+        assert_eq!(p.license_for("de"), Some("DEFAULT"));
+        p.license_texts.insert("fr".into(), String::new());
+        assert_eq!(p.license_for("fr"), None);
+        p.license_text = Some(String::new());
+        assert_eq!(p.license_for("de"), None);
+    }
+
+    #[test]
     fn payload_roundtrips() {
-        let p = InstallerPayload {
+        let mut p = InstallerPayload {
             hintway_tenant_id: Some("tenant-123".into()),
             ..Default::default()
         };
+        p.license_texts.insert("fr".into(), "Licence".into());
         let s = serde_json::to_string(&p).unwrap();
         let back: InstallerPayload = serde_json::from_str(&s).unwrap();
         assert_eq!(back.publisher, "Pub");
         assert_eq!(back.product_id, "P_id");
         assert_eq!(back.hintway_tenant_id.as_deref(), Some("tenant-123"));
+        assert_eq!(
+            back.license_texts.get("fr").map(String::as_str),
+            Some("Licence")
+        );
         assert_eq!(back.registry.len(), 1);
         assert_eq!(back.registry[0].kind, RegistryKind::Dword);
         assert_eq!(back.registry[0].value, RegistryValue::Int(42));

@@ -249,10 +249,13 @@ fn run(cli: Cli) -> Result<()> {
         // the archive index, so a payload this stub cannot read (a stub from
         // before PakLib payloads) fails the builder's self-verify.
         archive::PayloadArchive::open(loaded.archive())?;
-        let license = match &loaded.payload.license_text {
+        let mut license = match &loaded.payload.license_text {
             Some(t) => format!("custom ({} bytes)", t.len()),
             None => "built-in placeholder".to_string(),
         };
+        for (lang, t) in &loaded.payload.license_texts {
+            license += &format!(", {lang} ({} bytes)", t.len());
+        }
         println!(
             "OK: {} {} -> {} (payload {} bytes verified)\nLicense: {}",
             match loaded.payload.kind {

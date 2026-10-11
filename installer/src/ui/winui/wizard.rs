@@ -278,8 +278,7 @@ fn content(model: &Model, set: &SetState<Model>) -> Element {
 /// A grid, not a stack: the EULA must absorb the leftover height, or the scroll
 /// viewer sizes to its content and pushes the checkbox off-window.
 fn license_view(model: &Model, set: &SetState<Model>) -> Element {
-    let text = with_payload(|p| p.license_text.clone())
-        .filter(|t| !t.is_empty())
+    let text = with_payload(|p| p.license_for(tr().lang()).map(str::to_owned))
         .unwrap_or_else(|| LOREM.to_string());
     let accepted = model.license_accepted;
     grid(vec![

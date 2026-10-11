@@ -45,6 +45,7 @@ serializer-determinism trap.
 | `created_at_unix` | `i64` | |
 | `manifest` | `Manifest` | The per-file table; see below. |
 | `license_text` | `Option<String>` | EULA shown on the License page. |
+| `license_texts` | `BTreeMap<String, String>` | EULA translations by UI language code; picked over `license_text` for that language. |
 | `associations` | `Vec<FileAssoc>` | File types to register under `Software\Classes`. Each has `ext`, `description`, and optional `icon` (token template, empty means the main exe) and `icon_index` (`>= 0` an index, `< 0` a negated resource id; default `0`). |
 | `plugins` | `Vec<PluginEntry>` | Bundled [plugins](../packaging/plugins.md) and their phases. |
 | `shortcuts` | `Vec<ShortcutEntry>` | [Shortcuts](../packaging/shortcuts.md) to create. `dir`, `name`, `target`, and `args` are token templates. None are created unless declared. |

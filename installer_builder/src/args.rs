@@ -14,6 +14,7 @@ use common::model::registry_value::RegistryValue;
 use common::model::shortcut_entry::ShortcutEntry;
 use common::model::uninstall_dir_policy::UninstallDirPolicy;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
@@ -88,6 +89,13 @@ pub struct PackCli {
     /// Optional path to a  license text file shown on the License page.
     #[arg(long)]
     pub license: Option<PathBuf>,
+
+    /// License translation for one UI language, format `LANG=FILE` (e.g.
+    /// `fr=EULA-fr.txt`). Repeatable. Shown instead of `--license` when the
+    /// installer runs in that language. Overrides the same language from the
+    /// config file's `licenses` table.
+    #[arg(long = "license-lang", value_name = "LANG=FILE")]
+    pub license_lang: Vec<String>,
 
     /// Optional PNG painted across the installer's header strip (replacing the
     /// default flat gray card).
@@ -317,6 +325,9 @@ pub struct PackFile {
     pub from_version: Option<String>,
     pub exe: Option<String>,
     pub license: Option<PathBuf>,
+    /// License translations: `{ fr = "EULA-fr.txt", ... }`.
+    #[serde(default)]
+    pub licenses: BTreeMap<String, PathBuf>,
     pub banner: Option<PathBuf>,
     pub banner_dark: Option<PathBuf>,
     /// Raw so [`build_assoc_entries`] can report precise errors.
@@ -382,6 +393,8 @@ pub struct PackArgs {
     pub from_version: Option<String>,
     pub exe: Option<String>,
     pub license: Option<PathBuf>,
+    /// License translations by validated 2-letter language code.
+    pub licenses: BTreeMap<String, PathBuf>,
     pub banner: Option<PathBuf>,
     pub banner_dark: Option<PathBuf>,
     pub assoc: Vec<AssocEntry>,
@@ -479,6 +492,7 @@ impl PackArgs {
             from_dir: cli.from_dir.or(file.from_dir),
             from_version: cli.from_version.or(file.from_version),
             license: cli.license.or(file.license),
+            licenses: build_licenses(file.licenses, cli.license_lang)?,
             banner: cli.banner.or(file.banner),
             banner_dark: cli.banner_dark.or(file.banner_dark),
             default_install_dir: cli.default_install_dir.or(file.default_install_dir),
@@ -587,6 +601,32 @@ impl Choice for PluginPhase {
 /// the payload falls back to when the field is missing.
 fn parse_choice<T: Choice>(v: Option<String>) -> Result<T> {
     v.map_or_else(|| Ok(T::default()), |word| T::from_word(&word))
+}
+
+/// Merge the config `licenses` table with `--license-lang LANG=FILE` (CLI
+/// wins per language). Codes must name a bundled UI locale, so a typo fails
+/// here instead of silently never showing.
+fn build_licenses(
+    file: BTreeMap<String, PathBuf>,
+    cli: impl IntoIterator<Item = String>,
+) -> Result<BTreeMap<String, PathBuf>> {
+    let cli = cli.into_iter().map(|s| {
+        s.split_once('=')
+            .map(|(lang, path)| (lang.to_string(), PathBuf::from(path.trim())))
+            .ok_or_else(|| anyhow!("bad --license-lang '{s}': expected LANG=FILE"))
+    });
+    file.into_iter()
+        .map(Ok)
+        .chain(cli)
+        .map(|entry| {
+            let (lang, path) = entry?;
+            let code = lang.trim().to_ascii_lowercase();
+            if common::i18n::Translator::for_lang(&code).lang() != code {
+                bail!("license language '{lang}' is not a supported UI language");
+            }
+            Ok((code, path))
+        })
+        .collect()
 }
 
 /// Convert + validate `[[feature]]` entries. Ids must be non-empty, unique
@@ -918,6 +958,7 @@ mod tests {
             from_version: None,
             exe: None,
             license: None,
+            license_lang: Vec::new(),
             banner: None,
             banner_dark: None,
             assoc: Vec::new(),
@@ -1434,6 +1475,32 @@ pak_workers = 4
         );
         // Unknown value errors.
         assert!(resolve_with("\nlaunch_option = 'nope'\n").is_err());
+    }
+
+    #[test]
+    fn licenses_merge_file_and_cli() {
+        let (_dir, cfg) = write_cfg(&format!(
+            "{SAMPLE}licenses = {{ FR = 'fr.txt', de = 'de.txt' }}\n"
+        ));
+        let mut cli = empty_cli();
+        cli.config = Some(cfg);
+        cli.license_lang = vec!["de=cli-de.txt".into(), "ja=ja.txt".into()];
+        assert_eq!(
+            PackArgs::resolve(cli).unwrap().licenses,
+            BTreeMap::from([
+                ("de".into(), "cli-de.txt".into()),
+                ("fr".into(), "fr.txt".into()),
+                ("ja".into(), "ja.txt".into()),
+            ])
+        );
+
+        // Unknown language, missing '=': both rejected.
+        for bad in ["xx=a.txt", "fr"] {
+            assert!(
+                build_licenses(BTreeMap::new(), [bad.into()]).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     // SAMPLE without a priv_key line — used to test the literal-key path.

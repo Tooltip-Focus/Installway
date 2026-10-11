@@ -109,7 +109,7 @@ unsafe fn build_banner_header(hwnd: HWND, payload: &InstallerPayload) {
 
 /// License view: read-only EULA edit + "I accept" checkbox.
 unsafe fn build_license(hwnd: HWND, payload: &InstallerPayload) {
-    let license = payload.license_text.as_deref().unwrap_or(LOREM);
+    let license = payload.license_for(tr().lang()).unwrap_or(LOREM);
     let accept = tr().get("install.license_accept");
     unsafe {
         child_ex(
