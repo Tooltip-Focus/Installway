@@ -50,7 +50,9 @@ then the OS display language, then English. Supported languages are the
 files in
 [`common/locales/`](https://github.com/Tooltip-Focus/Installway/tree/main/common/locales),
 one `<code>.toml` per language, picked up at build time. Translations are
-powered by [Localeway](https://localeway.app/). An unsupported code
+powered by [Localeway](https://localeway.app/). A right-to-left language
+(Arabic, Hebrew...) mirrors the whole window and uses the Win32 UI, as the
+WinUI one cannot be mirrored yet. An unsupported code
 falls back to English. The resolved code is passed to the elevated worker and
 to [plugins](../packaging/plugins.md) as `ctx->lang`.
 

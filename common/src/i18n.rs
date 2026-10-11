@@ -15,7 +15,14 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use windows::Win32::Globalization::GetUserDefaultLocaleName;
+use windows::Win32::Globalization::{
+    GetLocaleInfoEx, GetUserDefaultLocaleName, LOCALE_IREADINGLAYOUT, LOCALE_RETURN_NUMBER,
+};
+use windows::Win32::UI::WindowsAndMessaging::SetProcessDefaultLayout;
+use windows::core::HSTRING;
+
+/// `SetProcessDefaultLayout` value that mirrors new windows.
+const LAYOUT_RTL: u32 = 1;
 
 /// Every `locales/<code>.toml`, collected by `build.rs`.
 const SUPPORTED: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/locales.rs"));
@@ -105,7 +112,24 @@ impl Translator {
     /// wins; later calls are no-ops. Call once at each process entry point,
     /// right after the translator is resolved.
     pub fn set_global(self) {
-        let _ = CURRENT_LANG.set(self.lang);
+        if CURRENT_LANG.set(self.lang).is_ok() && self.is_rtl() {
+            // Mirror every window this process creates from now on.
+            let _ = unsafe { SetProcessDefaultLayout(LAYOUT_RTL) };
+        }
+    }
+
+    /// Whether the language reads right to left, from Windows' own locale
+    /// data (`LOCALE_IREADINGLAYOUT` is 1 for Arabic, Hebrew, Persian...).
+    pub fn is_rtl(&self) -> bool {
+        let mut layout = [0u16; 2]; // a DWORD, with LOCALE_RETURN_NUMBER
+        let n = unsafe {
+            GetLocaleInfoEx(
+                &HSTRING::from(self.lang),
+                LOCALE_IREADINGLAYOUT | LOCALE_RETURN_NUMBER,
+                Some(&mut layout),
+            )
+        };
+        n > 0 && layout[0] == 1
     }
 
     /// Look up a key. Missing -> fall back to English -> key literal.
@@ -168,6 +192,13 @@ mod tests {
         for (code, _) in SUPPORTED {
             assert!(!tables()[code].is_empty(), "{code}.toml is invalid or empty");
         }
+    }
+
+    #[test]
+    fn rtl_comes_from_windows_locale_data() {
+        assert!(Translator::for_lang("ar").is_rtl());
+        assert!(!Translator::for_lang("en").is_rtl());
+        assert!(!Translator::for_lang("ja").is_rtl());
     }
 
     #[test]
