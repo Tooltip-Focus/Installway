@@ -25,7 +25,7 @@ use common::model::plugin_entry::PluginEntry;
 use common::model::signed_payload::SignedPayload;
 use common::utils::{bytes_blake3, copy_retry, file_blake3};
 use ed25519_dalek::{Signer, SigningKey};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -78,7 +78,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         );
     }
 
-    let license_text = load_license(args)?;
+    let licenses = load_licenses(args)?;
     let banners = Banners::read(args.banner.as_deref(), args.banner_dark.as_deref())?;
     let associations = parse_assocs(&args.assoc, &args.product_id)?;
     let icons = extract_app_icons(args);
@@ -90,7 +90,7 @@ pub fn run(args: &PackArgs) -> Result<()> {
         &archive_bytes,
         manifest,
         plugin_entries,
-        license_text,
+        licenses,
         associations,
     )?;
     println!("Payload: {} bytes", archive_bytes.len());
@@ -182,21 +182,39 @@ fn scan_plugins(plugins: &[ResolvedPlugin]) -> Result<(Vec<PluginEntry>, Vec<Pay
     Ok((entries, files))
 }
 
-/// Read + decode the optional license file (see [`decode_license`] for the
-/// encoding rules).
-fn load_license(args: &PackArgs) -> Result<Option<String>> {
-    let Some(p) = &args.license else {
-        return Ok(None);
-    };
+struct LoadedLicenses {
+    default: Option<String>,
+    translations: BTreeMap<String, String>,
+}
+
+/// Read + decode the default license and every per-language translation.
+fn load_licenses(args: &PackArgs) -> Result<LoadedLicenses> {
+    let default = args
+        .license
+        .as_deref()
+        .map(|p| read_license(p, ""))
+        .transpose()?;
+    let translations = args
+        .licenses
+        .iter()
+        .map(|(lang, p)| Ok((lang.clone(), read_license(p, &format!(" [{lang}]"))?)))
+        .collect::<Result<_>>()?;
+    Ok(LoadedLicenses {
+        default,
+        translations,
+    })
+}
+
+fn read_license(p: &Path, tag: &str) -> Result<String> {
     let bytes = fs::read(p).with_context(|| format!("read license file {}", p.display()))?;
     let text = decode_license(&bytes).with_context(|| format!("license file {}", p.display()))?;
     println!(
-        "License: {} ({} bytes) from {}",
+        "License{tag}: {} ({} bytes) from {}",
         trimmed_title(&text),
         text.len(),
         p.display()
     );
-    Ok(Some(text))
+    Ok(text)
 }
 
 /// Assemble the [`InstallerPayload`], serialize it and sign it. Returns the
@@ -207,7 +225,7 @@ fn sign_payload(
     archive_bytes: &[u8],
     manifest: Manifest,
     plugins: Vec<PluginEntry>,
-    license_text: Option<String>,
+    licenses: LoadedLicenses,
     associations: Vec<FileAssoc>,
 ) -> Result<String> {
     let payload = InstallerPayload {
@@ -229,7 +247,8 @@ fn sign_payload(
             .map(|d| d.as_secs() as i64)
             .unwrap_or_default(),
         manifest,
-        license_text,
+        license_text: licenses.default,
+        license_texts: licenses.translations,
         associations,
         force_reinstall: args.force_reinstall,
         purge_unknown_files: args.purge_unknown_files,

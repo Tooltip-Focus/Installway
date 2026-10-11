@@ -14,6 +14,7 @@ exe        = "myapp.exe"      # main executable, relative to input
 out        = "dist/setup-myapp-1.0.0.exe"
 
 # license = "EULA.txt"
+# licenses = { fr = "EULA-fr.txt", de = "EULA-de.txt" }
 # banner  = "branding/header.png"
 
 # Install analytics: uncomment to use the Hintway-enabled stub.

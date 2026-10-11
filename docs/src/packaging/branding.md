@@ -21,9 +21,27 @@ installer_builder.exe pack `
     --out .\dist\setup-myapp-1.0.exe
 ```
 
+### Translations
+
+The installer UI runs in the user's language, so the EULA can too. Add one
+file per language with `--license-lang <lang>=<path>` (repeatable), or a
+`licenses` table in the config file:
+
+```toml
+license  = "legal/EULA-en.txt"          # fallback for every other language
+licenses = { fr = "legal/EULA-fr.txt", de = "legal/EULA-de.txt" }
+```
+
+The installer shows the file for its UI language, falling back to `license`
+when that language has no entry. If neither is set, it uses the built-in
+placeholder. Language codes are the 2-letter UI locale codes (`fr`, `de`,
+`ja`...); an unsupported code fails the build. A CLI `--license-lang` wins
+over the config entry for the same language.
+
 The text rides inside the signed payload, so tampering with it invalidates
 the Ed25519 signature. `--verify` reports `License: custom (<bytes>)` or
-`License: built-in placeholder`.
+`License: built-in placeholder`, followed by each translation as
+`, fr (<bytes>)`.
 
 To hide the License page entirely, see
 [Wizard pages and install location](wizard.md).

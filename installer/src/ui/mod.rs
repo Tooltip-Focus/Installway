@@ -255,6 +255,7 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
             feature_mode: Default::default(),
         },
         license_text: None,
+        license_texts: Default::default(),
         associations: Vec::new(),
         shortcuts: Vec::new(),
         force_reinstall: false,

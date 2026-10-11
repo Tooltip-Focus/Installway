@@ -11,6 +11,7 @@ use crate::model::registry_value::RegistryValue;
 use crate::model::shortcut_entry::ShortcutEntry;
 use crate::model::uninstall_dir_policy::UninstallDirPolicy;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InstallerPayload {
@@ -38,6 +39,10 @@ pub struct InstallerPayload {
     /// `None` falls back to a built-in placeholder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license_text: Option<String>,
+    /// Per-language EULA translations, keyed by 2-letter UI language code
+    /// (`"fr"`). See [`license_for`](Self::license_for).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub license_texts: BTreeMap<String, String>,
     /// File-type associations to register under `HKCU\Software\Classes`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub associations: Vec<FileAssoc>,
@@ -100,6 +105,18 @@ pub struct InstallerPayload {
     pub active_features: Vec<String>,
 }
 
+impl InstallerPayload {
+    /// EULA to show for UI language `lang`: its translation, else the default
+    /// `license_text`. `None` (or empty) = built-in placeholder.
+    pub fn license_for(&self, lang: &str) -> Option<&str> {
+        self.license_texts
+            .get(lang)
+            .or(self.license_text.as_ref())
+            .map(String::as_str)
+            .filter(|t| !t.is_empty())
+    }
+}
+
 impl Default for InstallerPayload {
     fn default() -> Self {
         Self {
@@ -125,6 +142,7 @@ impl Default for InstallerPayload {
                 feature_mode: Default::default(),
             },
             license_text: None,
+            license_texts: BTreeMap::new(),
             associations: vec![FileAssoc {
                 ext: ".x".into(),
                 description: "X".into(),
