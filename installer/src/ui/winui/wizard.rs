@@ -14,6 +14,7 @@ use super::model::{
 };
 use super::plugin_page;
 use super::worker::{self, Feed};
+use crate::ui::license_markdown::{self, BUILT_IN_LICENSE, Block, BlockKind};
 use crate::ui::wizard_engine::Step;
 use common::model::launch_option::LaunchOption;
 use common::model::payload_kind::PayloadKind;
@@ -65,26 +66,6 @@ impl WizardApp {
         });
     }
 }
-
-/// Placeholder EULA, matching the Win32 wizard's so both previews agree.
-const LOREM: &str = "END USER LICENSE AGREEMENT - SAMPLE\r\n\r\n\
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod \
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, \
-quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo \
-consequat.\r\n\r\n\
-Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore \
-eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, \
-sunt in culpa qui officia deserunt mollit anim id est laborum.\r\n\r\n\
-Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium \
-doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore \
-veritatis et quasi architecto beatae vitae dicta sunt explicabo.\r\n\r\n\
-Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, \
-sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.\r\n\r\n\
-At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis \
-praesentium voluptatum deleniti atque corrupti quos dolores et quas molestias \
-excepturi sint occaecati cupiditate non provident, similique sunt in culpa \
-qui officia deserunt mollitia animi, id est laborum et dolorum fuga.\r\n\r\n\
-By clicking 'I accept' you agree to be bound by the terms above.";
 
 /// A unit handler that clones the model, mutates it, and commits.
 fn on(
@@ -279,14 +260,13 @@ fn content(model: &Model, set: &SetState<Model>) -> Element {
 /// viewer sizes to its content and pushes the checkbox off-window.
 fn license_view(model: &Model, set: &SetState<Model>) -> Element {
     let text = with_payload(|p| p.license_for(tr().lang()).map(str::to_owned))
-        .unwrap_or_else(|| LOREM.to_string());
+        .unwrap_or_else(|| BUILT_IN_LICENSE.to_string());
     let accepted = model.license_accepted;
     grid(vec![
         Element::from(card(
             scroll_viewer(
-                text_block(text)
-                    .wrap()
-                    .selectable()
+                vstack(markdown_blocks(&text))
+                    .spacing(8.0)
                     .padding(Thickness::uniform(16.0)),
             )
             .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto),
@@ -302,6 +282,73 @@ fn license_view(model: &Model, set: &SetState<Model>) -> Element {
     ])
     .rows([GridLength::STAR, GridLength::Auto])
     .into()
+}
+
+/// Render the shared Markdown model with native WinUI rich-text controls.
+/// Keeping one control per block lets headings use their own size while the
+/// surrounding StackPanel keeps paragraphs, lists and quotes in document order.
+fn markdown_blocks(source: &str) -> Vec<Element> {
+    license_markdown::parse(source)
+        .blocks
+        .into_iter()
+        .map(markdown_block)
+        .collect()
+}
+
+fn markdown_block(block: Block) -> Element {
+    let heading = block.heading_level();
+    let mut inlines = Vec::new();
+    let prefix = block.prefix();
+    if !prefix.is_empty() {
+        inlines.push(RichTextInline::Run(RichTextRun {
+            text: prefix,
+            is_bold: heading.is_some(),
+            is_italic: block.quote_depth > 0,
+        }));
+    }
+    for inline in block.inlines {
+        for (index, part) in inline.text.split('\n').enumerate() {
+            if index > 0 {
+                inlines.push(RichTextInline::LineBreak);
+            }
+            if part.is_empty() {
+                continue;
+            }
+            if let Some(uri) = &inline.link {
+                inlines.push(RichTextInline::Hyperlink(RichTextHyperlink {
+                    text: part.to_string(),
+                    uri: uri.clone(),
+                }));
+            } else {
+                inlines.push(RichTextInline::Run(RichTextRun {
+                    text: part.to_string(),
+                    is_bold: inline.bold || heading.is_some(),
+                    // Reactor currently exposes bold/italic on rich runs. Code
+                    // uses italic as the shared native fallback in both UIs.
+                    is_italic: inline.italic || inline.code || block.quote_depth > 0,
+                }));
+            }
+        }
+    }
+    let font_size = match heading {
+        Some(1) => 24.0,
+        Some(2) => 21.0,
+        Some(3) => 18.0,
+        Some(4) => 16.0,
+        Some(5 | 6) => 14.0,
+        _ if matches!(block.kind, BlockKind::Code) => 13.0,
+        _ if matches!(block.kind, BlockKind::Rule) => 10.0,
+        _ => 14.0,
+    };
+    let left = block.list_depth.saturating_sub(1) as f64 * 18.0;
+    Element::from(
+        RichTextBlock::new()
+            .paragraphs(RichText::single_paragraph(inlines))
+            .font_size(font_size)
+            .text_wrapping(TextWrapping::Wrap)
+            .is_text_selection_enabled(true)
+            .margin(Thickness::new(left, 0.0, 0.0, 0.0)),
+    )
 }
 
 fn choose_view(model: &Model, set: &SetState<Model>) -> Element {

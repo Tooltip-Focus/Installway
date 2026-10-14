@@ -35,12 +35,12 @@ pub struct InstallerPayload {
     pub payload_blake3: String,
     pub created_at_unix: i64,
     pub manifest: Manifest,
-    /// Optional EULA text shown on the License page of the installer UI.
+    /// Optional EULA source shown as CommonMark on the License page.
     /// `None` falls back to a built-in placeholder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license_text: Option<String>,
-    /// Per-language EULA translations, keyed by 2-letter UI language code
-    /// (`"fr"`). See [`license_for`](Self::license_for).
+    /// Per-language CommonMark EULA translations, keyed by 2-letter UI
+    /// language code (`"fr"`). See [`license_for`](Self::license_for).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub license_texts: BTreeMap<String, String>,
     /// File-type associations to register under `HKCU\Software\Classes`.
@@ -106,8 +106,8 @@ pub struct InstallerPayload {
 }
 
 impl InstallerPayload {
-    /// EULA to show for UI language `lang`: its translation, else the default
-    /// `license_text`. `None` (or empty) = built-in placeholder.
+    /// CommonMark EULA source for UI language `lang`: its translation, else
+    /// the default `license_text`. `None` (or empty) = built-in placeholder.
     pub fn license_for(&self, lang: &str) -> Option<&str> {
         self.license_texts
             .get(lang)

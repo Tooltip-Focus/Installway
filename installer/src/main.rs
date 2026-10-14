@@ -86,7 +86,8 @@ struct Cli {
     force_show_path_window: bool,
 
     /// Dev-only: render one UI view with sample data, no payload needed
-    /// (`license` | `choose` | `progress` | `done` | `error` | `minimal`).
+    /// (`license` | `choose` | `progress` | `done` | `error` | `minimal`),
+    /// optionally suffixed with `-win32` to force the legacy backend.
     #[cfg(debug_assertions)]
     #[arg(long)]
     preview: Option<String>,

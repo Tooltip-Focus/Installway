@@ -22,11 +22,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::Controls::BST_CHECKED;
+use windows::Win32::UI::Controls::RichEdit::{EN_LINK, ENLINK};
+use windows::Win32::UI::Controls::{BST_CHECKED, NMHDR};
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetDlgItem, MB_ICONWARNING, PostMessageW, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_CLOSE,
+    GetDlgItem, MB_ICONWARNING, PostMessageW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SendMessageW,
+    ShowWindow, WM_CLOSE, WM_LBUTTONUP,
 };
+use windows::core::{PCWSTR, w};
 
 fn current_phase() -> Phase {
     STATE.with(|s| {
@@ -35,6 +39,45 @@ fn current_phase() -> Phase {
             .map(|st| st.borrow().phase)
             .unwrap_or(Phase::License)
     })
+}
+
+/// Open a Markdown link clicked in the read-only RichEdit license control.
+pub(super) unsafe fn on_notify(hwnd: HWND, lparam: LPARAM) -> bool {
+    if lparam.0 == 0 {
+        return false;
+    }
+    let header = unsafe { &*(lparam.0 as *const NMHDR) };
+    if header.idFrom != super::ID_LICENSE_EDIT || header.code != EN_LINK {
+        return false;
+    }
+    let event = unsafe { std::ptr::read_unaligned(lparam.0 as *const ENLINK) };
+    if event.msg != WM_LBUTTONUP {
+        return true;
+    }
+    let uri = STATE.with(|state| {
+        state.borrow().as_ref().and_then(|state| {
+            state
+                .borrow()
+                .license_links
+                .iter()
+                .find(|link| event.chrg.cpMin >= link.start && event.chrg.cpMax <= link.end)
+                .map(|link| link.uri.clone())
+        })
+    });
+    if let Some(uri) = uri {
+        let uri_wide = common::utils::wide(&uri);
+        unsafe {
+            ShellExecuteW(
+                Some(hwnd),
+                w!("open"),
+                PCWSTR(uri_wide.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+    true
 }
 
 /// Stores the result of a background plugin-step query until the UI thread picks

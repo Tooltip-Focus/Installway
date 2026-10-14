@@ -14,11 +14,17 @@ use crate::ui::helpers::{
     self, CHECKBOX, ControlRect, DEFAULT_BUTTON, PUSH_BUTTON, child, child_ex, move_controls,
     set_static_icon,
 };
+use crate::ui::license_markdown::{self, BUILT_IN_LICENSE, LinkRange};
 use common::model::installer_payload::InstallerPayload;
 use common::model::payload_kind::PayloadKind;
+use std::ffi::CString;
 use std::path::Path;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Controls::PROGRESS_CLASSW;
+use windows::Win32::UI::Controls::RichEdit::{
+    CFE_LINK, CFM_LINK, CHARFORMAT2W, CHARRANGE, EM_EXSETSEL, EM_SETCHARFORMAT, EM_SETEVENTMASK,
+    EM_SETTEXTEX, ENM_LINK, MSFTEDIT_CLASS, SCF_SELECTION, SETTEXTEX, ST_DEFAULT,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::w;
 
@@ -34,25 +40,6 @@ const WS_VSCROLL: WINDOW_STYLE = WINDOW_STYLE(0x0020_0000);
 /// Scrollable read-only multiline text: the license and the error detail.
 const READ_ONLY_TEXT: WINDOW_STYLE =
     WINDOW_STYLE(WS_CLIPSIBLINGS.0 | WS_VSCROLL.0 | ES_MULTILINE | ES_READONLY | ES_LEFT);
-
-const LOREM: &str = "END USER LICENSE AGREEMENT - SAMPLE\r\n\r\n\
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod \
-tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, \
-quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo \
-consequat.\r\n\r\n\
-Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore \
-eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, \
-sunt in culpa qui officia deserunt mollit anim id est laborum.\r\n\r\n\
-Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium \
-doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore \
-veritatis et quasi architecto beatae vitae dicta sunt explicabo.\r\n\r\n\
-Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, \
-sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.\r\n\r\n\
-At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis \
-praesentium voluptatum deleniti atque corrupti quos dolores et quas molestias \
-excepturi sint occaecati cupiditate non provident, similique sunt in culpa \
-qui officia deserunt mollitia animi, id est laborum et dolorum fuga.\r\n\r\n\
-By clicking 'I accept' you agree to be bound by the terms above.";
 
 pub(super) unsafe fn build_controls(hwnd: HWND, payload: &InstallerPayload, default_path: &Path) {
     unsafe {
@@ -109,23 +96,86 @@ unsafe fn build_banner_header(hwnd: HWND, payload: &InstallerPayload) {
 
 /// License view: read-only EULA edit + "I accept" checkbox.
 unsafe fn build_license(hwnd: HWND, payload: &InstallerPayload) {
-    let license = payload.license_for(tr().lang()).unwrap_or(LOREM);
+    let license = payload.license_for(tr().lang()).unwrap_or(BUILT_IN_LICENSE);
     let accept = tr().get("install.license_accept");
     unsafe {
-        child_ex(
+        let edit = child_ex(
             hwnd,
             WS_EX_CLIENTEDGE,
-            w!("EDIT"),
-            license,
+            MSFTEDIT_CLASS,
+            "",
             READ_ONLY_TEXT,
             ID_LICENSE_EDIT,
         );
+        let links = set_license_markdown(edit, license);
+        STATE.with(|state| {
+            if let Some(state) = state.borrow().as_ref() {
+                state.borrow_mut().license_links = links;
+            }
+        });
         child(
             hwnd,
             w!("BUTTON"),
             &accept,
             WS_CLIPSIBLINGS | CHECKBOX,
             ID_ACCEPT_CHK,
+        );
+    }
+}
+
+unsafe fn set_license_markdown(edit: HWND, source: &str) -> Vec<LinkRange> {
+    unsafe {
+        let document = license_markdown::parse(source);
+        let (rtf, links) = license_markdown::to_rtf(&document);
+        let rtf = CString::new(rtf).expect("the RTF encoder escapes NUL characters");
+        let options = SETTEXTEX {
+            flags: ST_DEFAULT,
+            codepage: 65001,
+        };
+        SendMessageW(
+            edit,
+            EM_SETTEXTEX,
+            Some(WPARAM((&options as *const SETTEXTEX) as usize)),
+            Some(LPARAM(rtf.as_ptr() as isize)),
+        );
+
+        // CFE_LINK gives friendly-name links their native cursor and EN_LINK
+        // notifications. Their target URIs remain in `links`, not in the RTF.
+        let mut link_format = CHARFORMAT2W::default();
+        link_format.Base.cbSize = std::mem::size_of::<CHARFORMAT2W>() as u32;
+        link_format.Base.dwMask = CFM_LINK;
+        link_format.Base.dwEffects = CFE_LINK;
+        for link in &links {
+            select_rich_text(edit, link.start, link.end);
+            SendMessageW(
+                edit,
+                EM_SETCHARFORMAT,
+                Some(WPARAM(SCF_SELECTION as usize)),
+                Some(LPARAM((&link_format as *const CHARFORMAT2W) as isize)),
+            );
+        }
+        select_rich_text(edit, 0, 0);
+        SendMessageW(
+            edit,
+            EM_SETEVENTMASK,
+            Some(WPARAM(0)),
+            Some(LPARAM(ENM_LINK as isize)),
+        );
+        links
+    }
+}
+
+unsafe fn select_rich_text(edit: HWND, start: i32, end: i32) {
+    let range = CHARRANGE {
+        cpMin: start,
+        cpMax: end,
+    };
+    unsafe {
+        SendMessageW(
+            edit,
+            EM_EXSETSEL,
+            Some(WPARAM(0)),
+            Some(LPARAM((&range as *const CHARRANGE) as isize)),
         );
     }
 }
@@ -346,7 +396,6 @@ pub(super) unsafe fn apply_fonts(hwnd: HWND) {
             ID_STATUS_FILE,
             ID_ERROR_BOX,
             ID_CLOSE_BTN,
-            ID_LICENSE_EDIT,
             ID_ACCEPT_CHK,
             ID_NEXT_BTN,
             ID_BACK_BTN,
