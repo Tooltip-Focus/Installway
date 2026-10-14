@@ -3,6 +3,7 @@
 
 mod dest;
 mod helpers;
+mod license_markdown;
 pub mod minimal;
 pub mod win32;
 pub mod winui;
@@ -88,6 +89,15 @@ pub(crate) const SAMPLE_FILE: &str = "resources/app/node_modules/@company/design
 /// Dev-only: render one view with sample data.
 #[cfg(debug_assertions)]
 pub fn preview(view: &str, translator: common::i18n::Translator) -> Result<()> {
+    // Let developers compare both native renderers on machines where WinUI is
+    // available without changing the production backend selection.
+    if let Some(view) = view.strip_suffix("-win32") {
+        return if view == "minimal" {
+            minimal::preview(translator)
+        } else {
+            win32::preview(view, translator)
+        };
+    }
     if winui::available() {
         winui::preview(view, translator)?;
         return Ok(());
@@ -254,7 +264,28 @@ pub(crate) fn sample_payload(view: &str) -> InstallerPayload {
             default_features: Vec::new(),
             feature_mode: Default::default(),
         },
-        license_text: None,
+        license_text: view.starts_with("license").then(|| {
+            "# Terms and Conditions\n\n\
+             ## Markdown rendering demonstration\n\n\
+             This sample agreement contains **bold text**, *italic text* and `inline code`. \
+             Visit the [project website](https://example.com) for a clickable link example.\n\n\
+             > By continuing, you confirm that you have read this quotation.\n\
+             > It can span multiple lines.\n\n\
+             ### Your obligations\n\n\
+             1. Read these terms and conditions.\n\
+             2. Follow these rules:\n   \
+                - use the software responsibly;\n   \
+                - keep a backup of your data.\n\
+             3. Accept the terms or close this window.\n\n\
+             ---\n\n\
+             #### Additional information\n\n\
+             - `.txt` and `.md` files use exactly the same rendering path.\n\
+             - Images are ignored and tables remain plain text.\n\n\
+             ##### Small level-five heading\n\n\
+             ###### Small level-six heading\n\n\
+             End of the sample license."
+                .to_string()
+        }),
         license_texts: Default::default(),
         associations: Vec::new(),
         shortcuts: Vec::new(),

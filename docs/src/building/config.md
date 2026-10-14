@@ -75,8 +75,8 @@ one of `pub_key` / `pub_key_literal` is also required. An invalid
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `license` | path | built-in placeholder | UTF-8 EULA text shown on the License page. |
-| `licenses` | table | `{}` | Per-language EULA translations, `{ fr = "EULA-fr.txt" }`. See [Branding](../packaging/branding.md#translations). |
+| `license` | path | built-in placeholder | UTF-8 plain-text or CommonMark EULA shown on the License page. |
+| `licenses` | table | `{}` | Per-language EULA translations, `{ fr = "EULA-fr.md" }`. See [Branding](../packaging/branding.md#translations). |
 | `banner` | path | flat gray header | PNG painted across the wizard header. See [Branding](../packaging/branding.md). |
 | `banner_dark` | path | same as `banner` | Dark-theme variant of `banner` for the WinUI wizard. Needs `banner`. See [Branding](../packaging/branding.md#dark-theme-variant). |
 | `assoc` | array | `[]` | File associations: `".ext:Description"` strings and/or `[[assoc]]` tables with an icon choice. See [File associations](../packaging/associations.md). |
@@ -123,7 +123,7 @@ out        = "dist/setup-myapp-1.0.exe"
 priv_key = "keys/priv.key"
 pub_key  = "keys/pub.key"
 
-license = "legal/EULA-myapp-en.txt"
+license = "legal/EULA-myapp-en.md"
 banner  = "branding/header-1400x144.png"
 banner_dark = "branding/header-dark-1400x144.png"
 assoc   = [".myx:MyApp Document", ".myz:MyApp Archive"]

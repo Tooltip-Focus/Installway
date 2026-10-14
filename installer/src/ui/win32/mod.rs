@@ -14,6 +14,7 @@ mod views;
 
 use crate::payload::LoadedPayload;
 use crate::ui::helpers;
+use crate::ui::license_markdown::LinkRange;
 use anyhow::Result;
 #[cfg(debug_assertions)]
 use common::model::choice_option::ChoiceOption;
@@ -118,6 +119,8 @@ pub(super) struct UiState {
     pub card_brush: HBRUSH,
     pub error_brush: HBRUSH,
     pub license_accepted: bool,
+    /// Clickable Markdown links and their RichEdit character ranges.
+    pub license_links: Vec<LinkRange>,
     pub chosen_path: Option<PathBuf>,
     /// Runtime-built controls for plugin-contributed pages (empty with no UI
     /// plugins). See [`plugin_pages`].
@@ -306,6 +309,9 @@ unsafe fn create_window(
 ) -> Result<HWND> {
     unsafe {
         helpers::init_progress_class();
+        // RICHEDIT50W is provided by Msftedit.dll and is used for the single
+        // Markdown-rendered license path (for both `.txt` and `.md` sources).
+        let _ = windows::Win32::System::LibraryLoader::LoadLibraryW(w!("Msftedit.dll"));
 
         let font_normal = helpers::create_font("Segoe UI", 16, FW_NORMAL.0 as i32);
         let font_bold = helpers::create_font("Segoe UI", 16, FW_SEMIBOLD.0 as i32);
@@ -338,6 +344,7 @@ unsafe fn create_window(
             card_brush,
             error_brush,
             license_accepted: false,
+            license_links: Vec::new(),
             chosen_path: Some(default_path.to_path_buf()),
             plugin_fields: Vec::new(),
             header_text: String::new(),
@@ -799,6 +806,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         .map(|st| st.borrow().error_brush.0 as isize)
                         .unwrap_or(0)
                 }));
+            }
+            LRESULT(DefWindowProcW(hwnd, msg, wparam, lparam).0)
+        },
+        WM_NOTIFY => unsafe {
+            if handlers::on_notify(hwnd, lparam) {
+                return LRESULT(0);
             }
             LRESULT(DefWindowProcW(hwnd, msg, wparam, lparam).0)
         },

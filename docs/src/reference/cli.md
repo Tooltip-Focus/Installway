@@ -60,7 +60,7 @@ wins. Required fields are checked after merging. See
 
 | Option | Default | Description |
 |---|---|---|
-| `--license <FILE>` | Built-in placeholder | UTF-8 EULA shown on the License page. |
+| `--license <FILE>` | Built-in placeholder | UTF-8 plain-text or CommonMark EULA shown on the License page. |
 | `--license-lang <LANG=FILE>` | None | EULA translation for one UI language. Repeatable. See [Branding](../packaging/branding.md#translations). |
 | `--banner <FILE.png>` | Flat gray header | PNG painted across the wizard header. Author at 1400 x 144 px; see [Branding](../packaging/branding.md#header-banner). |
 | `--banner-dark <FILE.png>` | Same as `--banner` | Dark-theme variant of `--banner`, shown by the WinUI wizard when Windows runs dark (with light title text). Needs `--banner`; see [Branding](../packaging/branding.md#dark-theme-variant). |

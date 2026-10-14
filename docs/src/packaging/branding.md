@@ -8,15 +8,21 @@ required. All are driven from `pack`, on the CLI or in the
 
 ## License text
 
-Pass `--license <path>` and the UTF-8 text in that file becomes the EULA shown
-on the installer's License page. Without it, the page shows a built-in
-placeholder text.
+Pass `--license <path>` and the UTF-8 plain text or CommonMark in that file becomes the
+EULA shown on the installer's License page. Both `.txt` and `.md` use the same
+CommonMark renderer, so existing plain-text files remain supported without a
+configuration change. Paragraphs, headings (levels 1–6), ordered and unordered
+lists (including nested lists), block quotes, emphasis, strong text, inline and
+fenced code, thematic breaks and links are supported. Clickable links are
+limited to `http`, `https` and `mailto`. Images are ignored, table syntax stays
+plain text, and raw HTML is displayed rather than interpreted. Without a
+license file, the page shows a built-in placeholder text.
 
 ```pwsh
 installer_builder.exe pack `
     --product "My App" --product-id myapp --publisher "My Company" --to-version 1.0 `
     --input .\build\myapp --exe myapp.exe `
-    --license .\legal\EULA-myapp-en.txt `
+    --license .\legal\EULA-myapp-en.md `
     --priv-key .\keys\priv.key --pub-key .\keys\pub.key `
     --out .\dist\setup-myapp-1.0.exe
 ```
@@ -28,8 +34,8 @@ file per language with `--license-lang <lang>=<path>` (repeatable), or a
 `licenses` table in the config file:
 
 ```toml
-license  = "legal/EULA-en.txt"          # fallback for every other language
-licenses = { fr = "legal/EULA-fr.txt", de = "legal/EULA-de.txt" }
+license  = "legal/EULA-en.md"          # fallback for every other language
+licenses = { fr = "legal/EULA-fr.md", de = "legal/EULA-de.md" }
 ```
 
 The installer shows the file for its UI language, falling back to `license`
@@ -124,6 +130,9 @@ $env:INSTALLWAY_PREVIEW_BANNER = ".\branding\header-1400x144.png"
 $env:INSTALLWAY_PREVIEW_BANNER_DARK = ".\branding\header-dark-1400x144.png"
 .\target\debug\installer.exe --preview license
 ```
+
+On a machine with WinUI available, append `-win32` to compare the fallback
+renderer with the same sample: `--preview license-win32`.
 
 Switch Windows between light and dark mode (Settings > Personalization >
 Colors) to check both.

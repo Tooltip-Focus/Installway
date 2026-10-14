@@ -29,6 +29,7 @@ mslnk = "0.1"
 fs4 = "1"
 memmap2 = "0.9"
 rayon = "1.12"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
@@ -37,6 +38,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Com",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Controls",
+    "Win32_UI_Controls_RichEdit",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",

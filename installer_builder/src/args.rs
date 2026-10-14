@@ -86,12 +86,12 @@ pub struct PackCli {
     #[arg(short, long)]
     pub exe: Option<String>,
 
-    /// Optional path to a  license text file shown on the License page.
+    /// Optional path to a UTF-8 plain-text or CommonMark license file.
     #[arg(long)]
     pub license: Option<PathBuf>,
 
     /// License translation for one UI language, format `LANG=FILE` (e.g.
-    /// `fr=EULA-fr.txt`). Repeatable. Shown instead of `--license` when the
+    /// `fr=EULA-fr.md`). Repeatable. Shown instead of `--license` when the
     /// installer runs in that language. Overrides the same language from the
     /// config file's `licenses` table.
     #[arg(long = "license-lang", value_name = "LANG=FILE")]
