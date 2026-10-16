@@ -140,6 +140,7 @@ impl Component for Uninstaller {
     fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
         if !self.attached && MAIN_HWND.active() != 0 {
             attach_window();
+            MAIN_HWND.center_once();
             self.attached = true;
         }
         match message {

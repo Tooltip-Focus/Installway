@@ -13,6 +13,7 @@ mod worker;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use common::window_placement::{LaunchMonitor, remember_launch_monitor};
 use std::path::{Path, PathBuf};
 
 /// Uninstaller - invoked by Windows' "Add or remove programs".
@@ -36,6 +37,10 @@ struct Cli {
     /// Override the UI language (2-letter ISO code, e.g. `fr`).
     #[arg(long)]
     lang: Option<String>,
+
+    /// Internal: preserve the original monitor across Explorer/finalize relaunches.
+    #[arg(long, hide = true, global = true)]
+    launch_monitor: Option<LaunchMonitor>,
 
     /// Internal: run as the elevated worker, streaming events back over the
     /// named pipe whose name is given here. Spawned via UAC by the main process.
@@ -82,7 +87,8 @@ enum Cmd {
 }
 
 fn main() {
-    if let Err(e) = run() {
+    let launch_monitor = LaunchMonitor::capture();
+    if let Err(e) = run(launch_monitor) {
         #[cfg(feature = "hintway")]
         {
             analytics::error_from(&e);
@@ -95,8 +101,9 @@ fn main() {
     analytics::shutdown();
 }
 
-fn run() -> Result<()> {
+fn run(launch_monitor: LaunchMonitor) -> Result<()> {
     let cli = Cli::parse();
+    remember_launch_monitor(cli.launch_monitor.unwrap_or(launch_monitor));
 
     let translator = common::i18n::Translator::detect(cli.lang.as_deref());
     translator.set_global();
@@ -141,5 +148,38 @@ fn run() -> Result<()> {
             analytics::init_for_run(cli.silent);
             stages::uninstall::run(cli.silent)
         }
+    }
+}
+
+#[cfg(test)]
+mod placement_cli_tests {
+    use super::*;
+
+    #[test]
+    fn relaunch_argument_matches_the_cli_protocol() {
+        let arg = crate::relaunch::launch_monitor_arg();
+        let cli = Cli::try_parse_from(["uninstall", &arg]).unwrap();
+        assert_eq!(
+            cli.launch_monitor,
+            Some(common::window_placement::launch_monitor())
+        );
+    }
+
+    #[test]
+    fn preserves_negative_launch_coordinates_for_both_uninstall_stages() {
+        let expected = "-960,-540".parse::<LaunchMonitor>().unwrap();
+        let normal = Cli::try_parse_from(["uninstall", "--launch-monitor=-960,-540"]).unwrap();
+        assert_eq!(normal.launch_monitor, Some(expected));
+        let finalize = Cli::try_parse_from([
+            "uninstall",
+            "finalize",
+            "--data-dir",
+            r"C:\Data\App",
+            "--product",
+            "App",
+            "--launch-monitor=-960,-540",
+        ])
+        .unwrap();
+        assert_eq!(finalize.launch_monitor, Some(expected));
     }
 }

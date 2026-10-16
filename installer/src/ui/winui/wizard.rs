@@ -110,6 +110,7 @@ impl Component for WizardApp {
             Message::Poll => {
                 if !self.attached && super::active_hwnd() != 0 {
                     super::attach_window(self.feed.signal.clone());
+                    super::MAIN_HWND.center_once();
                     self.attached = true;
                 }
                 self.model.progress = self.feed.progress.get();

@@ -58,6 +58,7 @@ pub fn run(
     translator: common::i18n::Translator,
     ui_plugins: Option<crate::extract::UiPlugins>,
 ) -> Result<bool> {
+    MAIN_HWND.reset();
     // An existing install fixes the target folder: a patch must land there and a
     // reinstall must not make a second copy. So Choose is always skipped then.
     let skip_license = loaded.payload.skip_license;
@@ -105,6 +106,7 @@ pub fn run_minimal(
     launch: bool,
     translator: common::i18n::Translator,
 ) -> Result<bool> {
+    MAIN_HWND.reset();
     let title = translator.get("install.minimal_title");
     seed_config(&loaded, &install_dir, launch, true, true, translator);
     stage_product_icon();

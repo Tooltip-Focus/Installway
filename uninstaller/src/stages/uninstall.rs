@@ -320,6 +320,7 @@ pub(crate) fn spawn_finalize(
         .with_context(|| format!("copy finalize step to {}", dest.display()))?;
 
     Command::new(&dest)
+        .arg(crate::relaunch::launch_monitor_arg())
         .args(finalize_args(
             data_dir,
             &data_dir_key(data_dir),

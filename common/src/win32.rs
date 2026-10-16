@@ -8,6 +8,7 @@
 //! controls and again on `WM_DPICHANGED`.
 
 use crate::utils::wide;
+use crate::window_placement::center;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DEFAULT_PITCH,
@@ -20,12 +21,11 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows::Win32::UI::Shell::ExtractIconW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DispatchMessageW, GetDlgItem, GetMessageW, GetSystemMetrics,
-    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HICON, HMENU, IDC_ARROW, LoadCursorW, MSG,
-    MoveWindow, PostMessageW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowTextW,
-    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT, WM_SETICON, WNDCLASSEXW, WNDPROC,
-    WS_CHILD, WS_TABSTOP,
+    CW_USEDEFAULT, CreateWindowExW, DispatchMessageW, GetDlgItem, GetMessageW,
+    GetWindowTextLengthW, GetWindowTextW, HICON, HMENU, IDC_ARROW, LoadCursorW, MSG, MoveWindow,
+    PostMessageW, RegisterClassExW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SendMessageW,
+    SetWindowPos, SetWindowTextW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT,
+    WM_SETICON, WNDCLASSEXW, WNDPROC, WS_CHILD, WS_TABSTOP,
 };
 use windows::core::PCWSTR;
 
@@ -113,6 +113,8 @@ pub unsafe fn create_main_window(
 /// `client_w` × `client_h` in 96-dpi units, and center it. Returns that DPI.
 pub fn fit_to_monitor(hwnd: HWND, client_w: i32, client_h: i32, style: WINDOW_STYLE) -> i32 {
     unsafe {
+        // Move to the launch monitor before querying its DPI.
+        center(hwnd);
         let dpi = dpi_for(hwnd);
         let (w, h) = window_size_for_client(
             scale(client_w, dpi),
@@ -299,29 +301,6 @@ fn window_size_for_client(
     };
     let _ = unsafe { AdjustWindowRectExForDpi(&mut r, style, false, ex, dpi as u32) };
     (r.right - r.left, r.bottom - r.top)
-}
-
-/// Center a top-level window on the primary monitor.
-fn center(hwnd: HWND) {
-    let mut rect = RECT::default();
-    unsafe {
-        let _ = GetWindowRect(hwnd, &mut rect);
-    };
-    let w = rect.right - rect.left;
-    let h = rect.bottom - rect.top;
-    let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-    let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-    unsafe {
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            (sw - w) / 2,
-            (sh - h) / 2,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER,
-        );
-    }
 }
 
 /// Set the font of a child control by dialog id.
