@@ -114,17 +114,30 @@ fn centers_a_real_hidden_window_without_resizing_or_activating_it() {
 
 #[test]
 fn recenters_after_a_synchronous_dpi_resize_during_the_first_move() {
+    const REQUESTED_SIZE: (i32, i32) = (1050, 810);
+    const MAX_TRACK_SIZE: (i32, i32) = (1044, 788);
+
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetWindowLongPtrW, RegisterClassW,
-        SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DPICHANGED, WM_WINDOWPOSCHANGED,
-        WNDCLASSW, WS_OVERLAPPEDWINDOW,
+        CreateWindowExW, DefWindowProcW, GWLP_USERDATA, GetWindowLongPtrW, MINMAXINFO,
+        RegisterClassW, SendMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WM_DPICHANGED,
+        WM_GETMINMAXINFO, WM_WINDOWPOSCHANGED, WNDCLASSW, WS_OVERLAPPEDWINDOW,
     };
     use windows::core::{PCWSTR, w};
 
     unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
         unsafe {
+            if msg == WM_GETMINMAXINFO {
+                let result = DefWindowProcW(hwnd, msg, w, l);
+                // Make the desktop's tracking limit deterministic, including on CI.
+                let limits = &mut *(l.0 as *mut MINMAXINFO);
+                limits.ptMaxTrackSize = POINT {
+                    x: MAX_TRACK_SIZE.0,
+                    y: MAX_TRACK_SIZE.1,
+                };
+                return result;
+            }
             if msg == WM_DPICHANGED {
                 crate::win32::follow_dpi_change(hwnd, w, l);
                 return LRESULT(0);
@@ -133,8 +146,8 @@ fn recenters_after_a_synchronous_dpi_resize_during_the_first_move() {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 let mut rect = RECT::default();
                 let _ = GetWindowRect(hwnd, &mut rect);
-                rect.right = rect.left + 1050;
-                rect.bottom = rect.top + 810;
+                rect.right = rect.left + REQUESTED_SIZE.0;
+                rect.bottom = rect.top + REQUESTED_SIZE.1;
                 SendMessageW(
                     hwnd,
                     WM_DPICHANGED,
@@ -200,11 +213,12 @@ fn recenters_after_a_synchronous_dpi_resize_during_the_first_move() {
         GetWindowRect(hwnd, &mut rect).unwrap();
         assert_eq!(
             (rect.right - rect.left, rect.bottom - rect.top),
-            (1050, 810)
+            MAX_TRACK_SIZE
         );
+        // Center the size Windows actually accepted, not the requested DPI size.
         assert_eq!(
             (rect.left, rect.top),
-            centered_origin(info.rcWork, 1050, 810)
+            centered_origin(info.rcWork, MAX_TRACK_SIZE.0, MAX_TRACK_SIZE.1)
         );
     }
 }
