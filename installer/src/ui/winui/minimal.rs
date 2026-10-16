@@ -86,6 +86,7 @@ impl Component for Minimal {
                 _ = context.window().request_close();
             }
             Message::Poll => {
+                super::MAIN_HWND.center_once();
                 self.progress = self.progress_sink.get();
                 let signal = self.signal_sink.take();
                 if signal != Signal::None {

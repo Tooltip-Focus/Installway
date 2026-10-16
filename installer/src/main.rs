@@ -94,6 +94,7 @@ struct Cli {
 }
 
 fn main() {
+    common::window_placement::capture_launch_monitor();
     let cli = Cli::parse();
 
     // Diagnostic / headless modes report errors as text on the parent console
